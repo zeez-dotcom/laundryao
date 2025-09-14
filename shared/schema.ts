@@ -837,6 +837,24 @@ export type PackageWithItems = Package & { packageItems: PackageItem[] };
 export type CustomerPackage = typeof customerPackages.$inferSelect;
 export type InsertCustomerPackage = z.infer<typeof insertCustomerPackageSchema>;
 export type CustomerPackageItem = typeof customerPackageItems.$inferSelect;
+export interface CustomerPackageWithUsage {
+  id: string;
+  packageId: string;
+  nameEn: string;
+  nameAr: string | null;
+  balance: number;
+  totalCredits: number;
+  items?: {
+    serviceId: string;
+    serviceName?: string;
+    clothingItemId: string;
+    clothingItemName?: string;
+    balance: number;
+    totalCredits: number;
+  }[];
+  startsAt: Date;
+  expiresAt: Date | null;
+}
 export type PackageUsage = z.infer<typeof packageUsageSchema>;
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = z.infer<typeof insertOrderSchema>;

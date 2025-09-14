@@ -15,6 +15,7 @@ import {
   type PackageItem,
   type PackageWithItems,
   type CustomerPackage,
+  type CustomerPackageWithUsage,
   type LoyaltyHistory, type InsertLoyaltyHistory,
   type Notification, type InsertNotification,
   type SecuritySettings, type InsertSecuritySettings,
@@ -253,28 +254,7 @@ export interface IStorage {
     branchId: string,
   ): Promise<PackageWithItems | undefined>;
   deletePackage(id: string, branchId: string): Promise<boolean>;
-  getCustomerPackagesWithUsage(
-    customerId: string,
-  ): Promise<
-    {
-      id: string;
-      packageId: string;
-      nameEn: string;
-      nameAr: string | null;
-      balance: number;
-      totalCredits: number;
-      items?: {
-        serviceId: string;
-        serviceName?: string;
-        clothingItemId: string;
-        clothingItemName?: string;
-        balance: number;
-        totalCredits: number;
-      }[];
-      startsAt: Date;
-      expiresAt: Date | null;
-    }[]
-  >;
+  getCustomerPackagesWithUsage(customerId: string): Promise<CustomerPackageWithUsage[]>;
   assignPackageToCustomer(
     packageId: string,
     customerId: string,
@@ -1160,7 +1140,7 @@ export class MemStorage {
     return cp;
   }
 
-  async getCustomerPackagesWithUsage(customerId: string) {
+  async getCustomerPackagesWithUsage(customerId: string): Promise<CustomerPackageWithUsage[]> {
     const result: {
       id: string;
       packageId: string;
@@ -2581,7 +2561,7 @@ export class DatabaseStorage implements IStorage {
     return !!deleted;
   }
 
-  async getCustomerPackagesWithUsage(customerId: string) {
+  async getCustomerPackagesWithUsage(customerId: string): Promise<CustomerPackageWithUsage[]> {
     const { rows }: any = await db.execute(sql`
       SELECT cp.id, cp.package_id, cp.balance, cp.starts_at, cp.expires_at, p.name_en, p.name_ar,
              cpi.service_id, cpi.clothing_item_id, cpi.balance AS item_balance, cpi.total_credits,

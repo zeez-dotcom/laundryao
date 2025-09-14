@@ -4,6 +4,16 @@ The server seeds a set of default packages and subscription tiers when it starts
 
 Packages can be managed in the POS through the **Settings → Packages** tab, which is available to all roles.
 
+## Customer Packages API
+
+`GET /customer/packages`
+
+Returns the packages for the customer associated with the current session. A
+request may be made either by a logged-in customer or by an authenticated admin
+acting on behalf of a customer. The server derives the `customerId` from the
+session and never from URL parameters to prevent data leakage. Requests without
+a valid session or admin credentials receive `401 Login required`.
+
 ## Default Packages
 
 | Name | Max Items | Price |

@@ -202,3 +202,13 @@ export const requireAdminOrSuperAdmin: RequestHandler = (req, res, next) => {
   res.status(403).json({ message: "Admin access required" });
 };
 
+export const requireCustomerOrAdmin: RequestHandler = (req, res, next) => {
+  const customerId = (req.session as any)?.customerId as string | undefined;
+  const user = req.user as User;
+  const isAdmin = req.isAuthenticated() && (user?.role === 'admin' || user?.role === 'super_admin');
+  if (customerId || isAdmin) {
+    return next();
+  }
+  res.status(401).json({ message: "Login required" });
+};
+
