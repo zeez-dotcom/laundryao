@@ -57,6 +57,23 @@ export function ReportsDashboard() {
     return acc;
   }, {} as Record<string, { count: number; revenue: number }>);
 
+  // Clothing item breakdown
+  const clothingBreakdown = filteredTransactions.reduce((acc, transaction) => {
+    const items = transaction.items as any[];
+    items.forEach(item => {
+      const clothingName =
+        typeof item.clothingItem === "string"
+          ? item.clothingItem
+          : item.clothingItem?.name || "Unknown Item";
+      if (!acc[clothingName]) {
+        acc[clothingName] = { count: 0, revenue: 0 };
+      }
+      acc[clothingName].count += item.quantity || 1;
+      acc[clothingName].revenue += item.total || 0;
+    });
+    return acc;
+  }, {} as Record<string, { count: number; revenue: number }>);
+
   // Daily revenue data
   const dailyRevenue = filteredTransactions.reduce((acc, transaction) => {
     const date = format(new Date(transaction.createdAt), 'yyyy-MM-dd');
@@ -164,10 +181,14 @@ export function ReportsDashboard() {
         </div>
 
         <Tabs defaultValue="services" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1">
           <TabsTrigger value="services" className="text-xs sm:text-sm">
             <span className="hidden sm:inline">Services</span>
             <span className="sm:hidden">Svc</span>
+          </TabsTrigger>
+          <TabsTrigger value="items" className="text-xs sm:text-sm">
+            <span className="hidden sm:inline">Clothing Items</span>
+            <span className="sm:hidden">Items</span>
           </TabsTrigger>
           <TabsTrigger value="daily" className="text-xs sm:text-sm">
             <span className="hidden sm:inline">Daily Revenue</span>
@@ -210,6 +231,31 @@ export function ReportsDashboard() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="items" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Clothing Item Performance</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {Object.entries(clothingBreakdown)
+                    .sort(([,a], [,b]) => b.revenue - a.revenue)
+                    .map(([item, data]) => (
+                      <div key={item} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <h3 className="font-medium">{item}</h3>
+                          <p className="text-sm text-gray-600">{data.count} items processed</p>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-lg">${data.revenue.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    ))}
                 </div>
               </CardContent>
             </Card>
