@@ -14,7 +14,7 @@ import { useAuthContext } from "@/context/AuthContext";
 import { useCurrency } from "@/lib/currency";
 import { apiRequest } from "@/lib/queryClient";
 import { OrderStatus, DeliveryStatus, DeliveryMode, Order, DeliveryOrder } from "@shared/schema";
-import { 
+import {
   Package,
   Clock,
   CheckCircle,
@@ -31,7 +31,10 @@ import {
   Search,
   Home,
   Car,
-  ShoppingCart
+  ShoppingCart,
+  UserCheck,
+  PackageCheck,
+  XCircle
 } from "lucide-react";
 
 // Types are imported from @shared/schema.ts above
@@ -80,36 +83,54 @@ const deliveryStatusConfig = {
     label: "Pending",
     color: "bg-yellow-100 text-yellow-800",
     icon: Clock,
-    description: "Awaiting driver assignment"
+    description: "Awaiting acceptance"
   },
-  assigned: {
-    label: "Assigned",
+  accepted: {
+    label: "Accepted",
     color: "bg-blue-100 text-blue-800",
-    icon: User,
-    description: "Driver assigned"
+    icon: UserCheck,
+    description: "Delivery request accepted"
+  },
+  driver_enroute: {
+    label: "Driver En Route",
+    color: "bg-indigo-100 text-indigo-800",
+    icon: Car,
+    description: "Driver heading to customer"
   },
   picked_up: {
     label: "Picked Up",
-    color: "bg-indigo-100 text-indigo-800",
+    color: "bg-purple-100 text-purple-800",
     icon: Package,
     description: "Items picked up from customer"
   },
-  in_transit: {
-    label: "In Transit",
-    color: "bg-purple-100 text-purple-800",
-    icon: Truck,
-    description: "Items being delivered"
+  processing_started: {
+    label: "Processing Started",
+    color: "bg-orange-100 text-orange-800",
+    icon: RefreshCw,
+    description: "Items are being processed"
   },
-  delivered: {
-    label: "Delivered",
+  ready: {
+    label: "Ready",
+    color: "bg-teal-100 text-teal-800",
+    icon: PackageCheck,
+    description: "Items ready for delivery"
+  },
+  out_for_delivery: {
+    label: "Out for Delivery",
+    color: "bg-blue-100 text-blue-800",
+    icon: Truck,
+    description: "Driver is delivering items"
+  },
+  completed: {
+    label: "Completed",
     color: "bg-green-100 text-green-800",
     icon: CheckCircle,
-    description: "Items delivered to customer"
+    description: "Delivery completed"
   },
   cancelled: {
     label: "Cancelled",
     color: "bg-red-100 text-red-800",
-    icon: ArrowRight,
+    icon: XCircle,
     description: "Delivery cancelled"
   },
 };
@@ -124,11 +145,14 @@ const nextStatusMap: Record<OrderStatus, OrderStatus | null> = {
 };
 
 const nextDeliveryStatusMap: Record<DeliveryStatus, DeliveryStatus | null> = {
-  pending: "assigned",
-  assigned: "picked_up",
-  picked_up: "in_transit",
-  in_transit: "delivered",
-  delivered: null,
+  pending: "accepted",
+  accepted: "driver_enroute",
+  driver_enroute: "picked_up",
+  picked_up: "processing_started",
+  processing_started: "ready",
+  ready: "out_for_delivery",
+  out_for_delivery: "completed",
+  completed: null,
   cancelled: null,
 };
 
