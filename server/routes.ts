@@ -3982,6 +3982,22 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/reports/clothing-items", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "daily";
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const user = req.user as UserWithBranch;
+      const items = await storage.getClothingItemStats(
+        range,
+        user.branchId || undefined,
+        limit,
+      );
+      res.json({ items });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch clothing item stats" });
+    }
+  });
+
   app.get("/api/order-logs", requireAdminOrSuperAdmin, async (req, res) => {
     try {
       const status = req.query.status as string | undefined;
