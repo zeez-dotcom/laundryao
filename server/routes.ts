@@ -687,6 +687,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/customer/packages", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const packages = await storage.getCustomerPackagesWithUsage(customerId);
+      res.json(packages);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch packages" });
+    }
+  });
+
   // Customer addresses for ordering interface
   app.get("/api/customers/:customerId/addresses", async (req, res) => {
     const sessionCustomerId = (req.session as any).customerId as string | undefined;
