@@ -1057,9 +1057,6 @@ export async function registerRoutes(
   app.patch("/api/delivery-orders/:id/status", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      if (user.role !== "admin" && user.role !== "super_admin") {
-        return res.status(403).json({ message: "Access denied" });
-      }
 
       const { status } = req.body as { status?: DeliveryStatus };
       if (!status) {
