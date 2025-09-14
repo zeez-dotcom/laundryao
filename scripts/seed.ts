@@ -2,9 +2,11 @@ import seedBranches from "../server/seed-branches";
 import { seedSuperAdmin } from "../server/seed-superadmin";
 import seedPackages from "../server/seed-packages";
 import { seedProducts } from "../server/seed-products";
+import { seedCities } from "../server/seed-cities";
 
 async function run() {
   const seeds = [
+    { name: "cities", fn: seedCities },
     { name: "branches", fn: seedBranches },
     { name: "super admin", fn: seedSuperAdmin },
     { name: "packages", fn: seedPackages },
