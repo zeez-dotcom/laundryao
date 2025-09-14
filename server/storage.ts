@@ -378,6 +378,11 @@ export interface IStorage {
   getOrderStats(range: string, branchId?: string): Promise<{ period: string; count: number; revenue: number }[]>;
   getTopServices(range: string, branchId?: string): Promise<{ service: string; count: number; revenue: number }[]>;
   getTopProducts(range: string, branchId?: string): Promise<{ product: string; count: number; revenue: number }[]>;
+  getClothingItemStats(
+    range: string,
+    branchId?: string,
+    limit?: number,
+  ): Promise<{ item: string; count: number; revenue: number }[]>;
   getSalesSummary(range: string, branchId?: string): Promise<{
     totalOrders: number;
     totalRevenue: number;
@@ -3366,6 +3371,68 @@ export class DatabaseStorage implements IStorage {
 
     return rows.map((r: any) => ({
       product: r.product,
+      count: Number(r.count),
+      revenue: Number(r.revenue),
+    }));
+  }
+
+  async getClothingItemStats(
+    range: string,
+    branchId?: string,
+    limit = 10,
+  ): Promise<{ item: string; count: number; revenue: number }[]> {
+    const intervalMap: Record<string, string> = {
+      daily: "1 DAY",
+      weekly: "7 DAY",
+      monthly: "1 MONTH",
+      yearly: "1 YEAR",
+    };
+    const interval = intervalMap[range] ?? "1 DAY";
+
+    const branchFilter = branchId ? `AND o.branch_id = '${branchId}'` : "";
+    const { rows } = await db.execute<any>(sql.raw(`
+      SELECT item,
+             SUM(count) AS count,
+             SUM(revenue) AS revenue
+      FROM (
+        SELECT
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity AS count,
+          jt.total AS revenue
+        FROM orders o
+        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
+          clothingItem VARCHAR(255) PATH '$.clothingItem',
+          service VARCHAR(255) PATH '$.service',
+          quantity INT PATH '$.quantity',
+          total DECIMAL(10,2) PATH '$.total'
+        )) AS jt
+        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
+          AND o.payment_method <> 'pay_later'
+
+        UNION ALL
+
+        SELECT
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity AS count,
+          jt.total AS revenue
+        FROM orders o
+        JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
+        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
+          clothingItem VARCHAR(255) PATH '$.clothingItem',
+          service VARCHAR(255) PATH '$.service',
+          quantity INT PATH '$.quantity',
+          total DECIMAL(10,2) PATH '$.total'
+        )) AS jt
+        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
+          AND o.payment_method = 'pay_later'
+      ) s
+      GROUP BY item
+      ORDER BY revenue DESC
+      LIMIT ${limit};
+    `));
+
+    return rows.map((r: any) => ({
+      item: r.item,
       count: Number(r.count),
       revenue: Number(r.revenue),
     }));
