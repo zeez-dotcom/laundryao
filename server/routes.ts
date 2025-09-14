@@ -1038,7 +1038,7 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const { status, driverId, branchId } = req.query as Record<string, string>;
+      const { status, branchId } = req.query as Record<string, string>;
       let targetBranchId = branchId;
       if (user.role !== "super_admin") {
         if (branchId && branchId !== user.branchId) {
@@ -1047,53 +1047,10 @@ export async function registerRoutes(
         targetBranchId = user.branchId || undefined;
       }
 
-      let orders;
-      if (status) {
-        orders = await storage.getDeliveryOrdersByStatus(status, targetBranchId);
-      } else if (driverId) {
-        orders = await storage.getDeliveryOrdersByDriver(driverId, targetBranchId);
-      } else {
-        orders = await storage.getDeliveryOrders(targetBranchId);
-      }
-
+      const orders = await storage.getDeliveryOrders(targetBranchId, status as DeliveryStatus | undefined);
       res.json(orders);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch delivery orders" });
-    }
-  });
-
-  app.patch("/api/delivery-orders/:id/assign", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      if (user.role !== "admin" && user.role !== "super_admin") {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const { driverId } = req.body as { driverId?: string };
-      if (!driverId) {
-        return res.status(400).json({ message: "driverId required" });
-      }
-
-      const order = await storage.getOrder(req.params.id);
-      if (!order) {
-        return res.status(404).json({ message: "Order not found" });
-      }
-      if (user.role !== "super_admin" && order.branchId !== user.branchId) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const updated = await storage.assignDeliveryOrder(req.params.id, driverId);
-      if (!updated) {
-        return res.status(404).json({ message: "Delivery order not found" });
-      }
-      res.json(updated);
-      broadcastDeliveryUpdate({
-        orderId: updated.orderId,
-        deliveryStatus: updated.deliveryStatus,
-        driverId: updated.driverId || null,
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to assign driver" });
     }
   });
 
@@ -1129,7 +1086,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid status transition" });
       }
 
-      const updated = await storage.updateDeliveryStatus(req.params.id, { deliveryStatus: status });
+      const updated = await storage.updateDeliveryStatus(req.params.id, status);
       if (!updated) {
         return res.status(404).json({ message: "Delivery order not found" });
       }
