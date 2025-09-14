@@ -895,7 +895,8 @@ export async function registerRoutes(
         status: "received" as const,
         sellerName: "Online Order",
         promisedReadyDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0], // Tomorrow
-        promisedReadyOption: "tomorrow" as const
+        promisedReadyOption: "tomorrow" as const,
+        isDeliveryRequest: true
       };
       
       // Create the order
@@ -924,6 +925,36 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error creating delivery order:", error as any);
       res.status(500).json({ message: "Failed to create order" });
+    }
+  });
+
+  app.get("/api/delivery-order-requests", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { branchId } = req.query as Record<string, string>;
+      const targetBranchId =
+        branchId && user.role === "super_admin" ? branchId : user.branchId || undefined;
+      const orders = await storage.getDeliveryOrderRequests(targetBranchId);
+      res.json(orders);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch delivery order requests" });
+    }
+  });
+
+  app.patch("/api/delivery-order-requests/:id/accept", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const order = await storage.getOrder(req.params.id);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+      if (user.role !== "super_admin" && user.branchId !== order.branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const updated = await storage.acceptDeliveryOrderRequest(req.params.id);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to accept delivery order request" });
     }
   });
 

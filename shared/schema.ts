@@ -301,6 +301,7 @@ export const orders = pgTable("orders", {
   notes: text("notes"),
   sellerName: varchar("seller_name", { length: 255 }).notNull(),
   branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  isDeliveryRequest: boolean("is_delivery_request").default(false).notNull(),
   packageUsages: jsonb("package_usages"), // Store per-transaction multi-package usage for accurate receipt display
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -667,6 +668,7 @@ export const insertOrderSchema = createInsertSchema(orders)
     promisedReadyOption: z
       .enum(["today", "tomorrow", "day_after_tomorrow"])
       .default("tomorrow"),
+    isDeliveryRequest: z.boolean().optional().default(false),
   });
 
 export const guestOrderSchema = z.object({
