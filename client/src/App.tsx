@@ -16,6 +16,7 @@ import PackagesPage from "@/pages/packages";
 import CustomerOrderPage from "@/pages/customer-order";
 import CustomerAuthPage from "@/pages/customer-auth";
 import CustomerOrderingPage from "@/pages/customer-ordering";
+import CustomerDashboardPage from "@/pages/customer-dashboard";
 import LoadingScreen from "@/components/common/LoadingScreen";
 
 function Router() {
@@ -32,6 +33,7 @@ function Router() {
     <Switch>
       <Route path="/order" component={CustomerOrderPage} />
       <Route path="/customer-auth" component={CustomerAuthPage} />
+      <Route path="/customer-dashboard" component={CustomerDashboardPage} />
       <Route path="/customer-ordering" component={CustomerOrderingPage} />
       <Route path="/forgot-password" component={ForgotPasswordPage} />
       <Route path="/reset-password/:token" component={ResetPasswordPage} />

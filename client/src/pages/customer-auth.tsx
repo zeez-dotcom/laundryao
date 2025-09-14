@@ -57,23 +57,23 @@ function CustomerAuthContent() {
     retry: 1,
   });
 
-  // Redirect to ordering if already authenticated
+  // Redirect to dashboard if already authenticated
   useEffect(() => {
     if (isAuthenticated && customer && qrData?.branch) {
-      // Redirect to customer ordering interface
-      setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      // Redirect to customer dashboard
+      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
     }
   }, [isAuthenticated, customer, qrData, setLocation]);
 
   const handleLoginSuccess = (customer: any) => {
     if (qrData?.branch) {
-      setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
     }
   };
 
   const handleRegistrationSuccess = (customer: any) => {
     if (qrData?.branch) {
-      setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
     }
   };
 
