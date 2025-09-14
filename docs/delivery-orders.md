@@ -42,3 +42,69 @@ Returns `201` on success:
 ```json
 { "orderId": "o1", "orderNumber": "ABC-0001" }
 ```
+
+## GET /api/delivery-orders
+
+Fetch delivery orders. Results are limited to the requester's branch unless the
+user is a super admin. Query parameters:
+
+- `status` – filter by delivery status
+- `driverId` – filter by assigned driver
+- `branchId` – specify branch (super admin only)
+
+```
+GET /api/delivery-orders?status=pending
+```
+
+```json
+[
+  {
+    "id": "do1",
+    "orderId": "o1",
+    "deliveryStatus": "pending",
+    "order": { "id": "o1", "orderNumber": "ABC-0001" }
+  }
+]
+```
+
+## PATCH /api/delivery-orders/:id/assign
+
+Assign a driver to an existing delivery order. Only branch staff and super
+admins may assign drivers.
+
+```
+PATCH /api/delivery-orders/o1/assign
+{
+  "driverId": "user123"
+}
+```
+
+```json
+{
+  "id": "do1",
+  "orderId": "o1",
+  "driverId": "user123",
+  "order": { "id": "o1", "orderNumber": "ABC-0001" }
+}
+```
+
+## PATCH /api/delivery-orders/:id/status
+
+Update the delivery status (`pending`, `assigned`, `picked_up`, `in_transit`,
+`delivered`, `cancelled`). Invalid transitions return `400`.
+
+```
+PATCH /api/delivery-orders/o1/status
+{
+  "status": "in_transit"
+}
+```
+
+```json
+{
+  "id": "do1",
+  "orderId": "o1",
+  "deliveryStatus": "in_transit",
+  "order": { "id": "o1", "orderNumber": "ABC-0001" }
+}
+```
