@@ -43,10 +43,13 @@ export const itemTypeEnum = ["everyday", "premium"] as const;
 export const deliveryModeEnum = ["driver_pickup", "customer_cart"] as const;
 export const deliveryStatusEnum = [
   "pending",
-  "assigned", 
+  "accepted",
+  "driver_enroute",
   "picked_up",
-  "in_transit", 
-  "delivered",
+  "processing_started",
+  "ready",
+  "out_for_delivery",
+  "completed",
   "cancelled",
 ] as const;
 export const cityTypeEnum = ["governorate", "area"] as const;
