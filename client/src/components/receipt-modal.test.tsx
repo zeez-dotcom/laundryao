@@ -154,4 +154,63 @@ describe("ReceiptModal", () => {
     const remainingRows = await screen.findAllByText(/Remaining: 3\/5/);
     expect(remainingRows.length).toBeGreaterThan(0);
   });
+
+  it("applies package credits to totals", async () => {
+    localStorage.clear();
+    localStorage.setItem("taxRate", "0");
+
+    const transactionWithCredits: any = {
+      id: "trx3",
+      items: [
+        {
+          service: { id: "svc1", name: "Wash" },
+          clothingItem: { id: "item1", name: "Shirt" },
+          quantity: 2,
+          total: 4,
+        },
+      ],
+      createdAt: new Date().toISOString(),
+      paymentMethod: "cash",
+      subtotal: 4,
+      tax: 0,
+      total: 2,
+      packages: [
+        {
+          id: "pkg1",
+          nameEn: "Wash Pack",
+          nameAr: "حزمة الغسيل",
+          balance: 4,
+          totalCredits: 5,
+          items: [
+            {
+              serviceId: "svc1",
+              serviceName: "Wash",
+              clothingItemId: "item1",
+              balance: 4,
+              totalCredits: 5,
+              used: 1,
+            },
+          ],
+        },
+      ],
+    };
+
+    render(
+      <AuthContext.Provider value={authValue}>
+        <TranslationProvider>
+          <ReceiptModal
+            transaction={transactionWithCredits}
+            isOpen={true}
+            onClose={() => {}}
+          />
+        </TranslationProvider>
+      </AuthContext.Provider>
+    );
+
+    expect(await screen.findByText("Subtotal: 4.000 KD")).toBeTruthy();
+    expect(
+      await screen.findByText("Package Credits: -2.000 KD")
+    ).toBeTruthy();
+    expect(await screen.findByText("Total: 2.000 KD")).toBeTruthy();
+  });
 });
