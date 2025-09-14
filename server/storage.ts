@@ -3295,6 +3295,7 @@ export class DatabaseStorage implements IStorage {
         FROM orders o
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method <> 'pay_later'
+          AND o.is_delivery_request = false
 
         UNION ALL
 
@@ -3306,6 +3307,7 @@ export class DatabaseStorage implements IStorage {
         JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       ) s
       GROUP BY period
       ORDER BY period;
@@ -3345,6 +3347,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method <> 'pay_later'
+          AND o.is_delivery_request = false
 
         UNION ALL
 
@@ -3361,6 +3364,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       ) s
       GROUP BY service
       ORDER BY revenue DESC
@@ -3401,6 +3405,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method <> 'pay_later'
+          AND o.is_delivery_request = false
 
         UNION ALL
 
@@ -3417,6 +3422,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       ) s
       GROUP BY product
       ORDER BY count DESC
@@ -3462,6 +3468,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method <> 'pay_later'
+          AND o.is_delivery_request = false
 
         UNION ALL
 
@@ -3479,6 +3486,7 @@ export class DatabaseStorage implements IStorage {
         )) AS jt
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       ) s
       GROUP BY item
       ORDER BY revenue DESC
