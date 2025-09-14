@@ -2076,7 +2076,9 @@ export async function registerRoutes(
       res.json(qrCodes);
     } catch (error) {
       logger.error("Error fetching branch QR codes:", error as any);
-      res.status(500).json({ message: "Failed to fetch QR codes" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to fetch QR codes") });
     }
   });
 
@@ -2096,7 +2098,9 @@ export async function registerRoutes(
       res.json(activeQrCode);
     } catch (error) {
       logger.error("Error fetching active QR code:", error as any);
-      res.status(500).json({ message: "Failed to fetch active QR code" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to fetch active QR code") });
     }
   });
 
@@ -2122,7 +2126,9 @@ export async function registerRoutes(
       res.status(201).json(newQrCode);
     } catch (error) {
       logger.error("Error creating QR code:", error as any);
-      res.status(500).json({ message: "Failed to create QR code" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to create QR code") });
     }
   });
 
@@ -2143,7 +2149,9 @@ export async function registerRoutes(
       res.json(deactivatedQrCode);
     } catch (error) {
       logger.error("Error deactivating QR code:", error as any);
-      res.status(500).json({ message: "Failed to deactivate QR code" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to deactivate QR code") });
     }
   });
 
@@ -2160,7 +2168,9 @@ export async function registerRoutes(
       res.json(newQrCode);
     } catch (error) {
       logger.error("Error regenerating QR code:", error as any);
-      res.status(500).json({ message: "Failed to regenerate QR code" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to regenerate QR code") });
     }
   });
 
@@ -2191,7 +2201,9 @@ export async function registerRoutes(
       });
     } catch (error) {
       logger.error("Error looking up QR code:", error as any);
-      res.status(500).json({ message: "Failed to lookup QR code" });
+      res
+        .status(500)
+        .json({ message: (error instanceof Error ? error.message : "Failed to lookup QR code") });
     }
   });
 

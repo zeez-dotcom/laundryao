@@ -3714,6 +3714,77 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(couponServices).where(eq(couponServices.couponId, couponId));
   }
 
+  // Branch QR Code methods
+  async getBranchQRCodes(branchId: string): Promise<BranchQRCode[]> {
+    return await db
+      .select()
+      .from(branchQRCodes)
+      .where(eq(branchQRCodes.branchId, branchId))
+      .orderBy(desc(branchQRCodes.createdAt));
+  }
+
+  async getActiveBranchQRCode(branchId: string): Promise<BranchQRCode | undefined> {
+    const [qr] = await db
+      .select()
+      .from(branchQRCodes)
+      .where(and(eq(branchQRCodes.branchId, branchId), eq(branchQRCodes.isActive, true)))
+      .orderBy(desc(branchQRCodes.createdAt))
+      .limit(1);
+    return qr;
+  }
+
+  async getBranchQRCodeByCode(qrCode: string): Promise<BranchQRCode | undefined> {
+    const [qr] = await db
+      .select()
+      .from(branchQRCodes)
+      .where(eq(branchQRCodes.qrCode, qrCode))
+      .limit(1);
+    return qr;
+  }
+
+  async createBranchQRCode(qr: InsertBranchQRCode): Promise<BranchQRCode> {
+    const [created] = await db.insert(branchQRCodes).values(qr).returning();
+    return created;
+  }
+
+  async deactivateBranchQRCode(id: string, deactivatedBy: string): Promise<BranchQRCode | undefined> {
+    const [updated] = await db
+      .update(branchQRCodes)
+      .set({
+        isActive: false,
+        deactivatedAt: sql`CURRENT_TIMESTAMP`,
+        deactivatedBy,
+      })
+      .where(eq(branchQRCodes.id, id))
+      .returning();
+    return updated ?? undefined;
+  }
+
+  async regenerateBranchQRCode(branchId: string, createdBy: string): Promise<BranchQRCode> {
+    return await db.transaction(async (tx) => {
+      await tx
+        .update(branchQRCodes)
+        .set({
+          isActive: false,
+          deactivatedAt: sql`CURRENT_TIMESTAMP`,
+          deactivatedBy: createdBy,
+        })
+        .where(and(eq(branchQRCodes.branchId, branchId), eq(branchQRCodes.isActive, true)));
+
+      const [created] = await tx
+        .insert(branchQRCodes)
+        .values({
+          branchId,
+          qrCode: randomUUID().replace(/-/g, ""),
+          isActive: true,
+          createdBy,
+        })
+        .returning();
+
+      return created;
+    });
+  }
+
   // Branch customization methods
   async getBranchCustomization(branchId: string): Promise<BranchCustomization | null> {
     const [result] = await db
