@@ -54,11 +54,18 @@ const transaction: any = {
   ],
 };
 
+const customer = { id: "cust1", name: "John Doe" } as any;
+
 function renderReceipt() {
   render(
     <AuthContext.Provider value={authValue}>
       <TranslationProvider>
-        <ReceiptModal transaction={transaction} isOpen={true} onClose={() => {}} />
+        <ReceiptModal
+          transaction={transaction}
+          customer={customer}
+          isOpen={true}
+          onClose={() => {}}
+        />
       </TranslationProvider>
     </AuthContext.Provider>
   );
@@ -153,10 +160,11 @@ describe("ReceiptModal", () => {
     renderReceipt();
     expect(await screen.findByText(/Wash Pack/)).toBeTruthy();
     expect((await screen.findAllByText(/Wash – Shirt/)).length).toBeGreaterThan(0);
-    const usedRows = await screen.findAllByText(/Used: 0/);
-    expect(usedRows.length).toBeGreaterThan(0);
     const remainingRows = await screen.findAllByText(/Remaining: 3\/5/);
     expect(remainingRows.length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(/Credits remaining: 3\/5/)
+    ).toBeTruthy();
     expect(await screen.findByText(/Purchased on/)).toBeTruthy();
     expect(await screen.findByText(/Expires on/)).toBeTruthy();
   });
