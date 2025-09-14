@@ -115,3 +115,20 @@ test('GET /customer/orders/:id/receipt enforces ownership and auth', async () =>
     storage.getCustomerPackagesWithUsage = origGetPackages;
   }
 });
+
+test('GET /customer/orders filters delivery requests', async () => {
+  const orders = [
+    { id: 'o1', orderNumber: 'A1', createdAt: '2024-01-01', subtotal: '5', paid: '0', remaining: '5', isDeliveryRequest: false },
+    { id: 'o2', orderNumber: 'B1', createdAt: '2024-01-02', subtotal: '10', paid: '10', remaining: '0', isDeliveryRequest: true },
+  ];
+  const original = storage.getOrdersByCustomer;
+  storage.getOrdersByCustomer = async () => orders;
+  try {
+    const app = createApp();
+    const res = await request(app).get('/customer/orders').set('X-Customer-Id', 'cust1');
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, [orders[0]]);
+  } finally {
+    storage.getOrdersByCustomer = original;
+  }
+});
