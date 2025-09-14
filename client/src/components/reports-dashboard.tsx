@@ -117,7 +117,7 @@ export function ReportsDashboard() {
   }, {} as Record<string, { count: number; amount: number }>);
 
   const exportReport = () => {
-    const csvContent = [
+    const rows = [
       ["Date", "Order ID", "Items", "Subtotal", "Tax", "Total", "Payment Method"],
       ...filteredTransactions.map(t => [
         format(new Date(t.createdAt), 'yyyy-MM-dd HH:mm'),
@@ -127,8 +127,17 @@ export function ReportsDashboard() {
         t.tax,
         t.total,
         t.paymentMethod
+      ]),
+      [],
+      ["Item", "Quantity", "Revenue"],
+      ...Object.entries(clothingBreakdown).map(([item, data]) => [
+        item,
+        String(data.count),
+        data.revenue.toFixed(2)
       ])
-    ].map(row => row.join(",")).join("\n");
+    ];
+
+    const csvContent = rows.map(row => row.join(",")).join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
