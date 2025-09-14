@@ -37,6 +37,8 @@
     "viewDetails": "View Details",
     "actions": "Actions",
     "laundryServices": "Laundry Services",
+    "clothingItems": "Clothing Items",
+    "clothingItemPerformance": "Clothing Item Performance",
     "selectService": "Select Service",
     "addToCart": "Add to Cart",
     "cart": "Cart",

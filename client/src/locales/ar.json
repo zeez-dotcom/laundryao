@@ -37,6 +37,8 @@
     "viewDetails": "عرض التفاصيل",
     "actions": "إجراءات",
     "laundryServices": "خدمات الغسيل",
+    "clothingItems": "عناصر الملابس",
+    "clothingItemPerformance": "أداء عناصر الملابس",
     "selectService": "اختيار الخدمة",
     "addToCart": "إضافة للسلة",
     "cart": "السلة",
