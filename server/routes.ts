@@ -1,10 +1,12 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { WebSocketServer } from "ws";
 import {
   storage,
   type ParsedRow,
   generateCustomerPasswordOtp,
   verifyCustomerPasswordOtp,
+  updateDriverLocation,
 } from "./storage";
 import { db } from "./db";
 import {
@@ -315,6 +317,54 @@ export async function registerRoutes(
   await seedPackages();
 
   registerHealthRoutes(app);
+
+  const deliveryOrdersWss = new WebSocketServer({ noServer: true });
+  const driverLocationWss = new WebSocketServer({ noServer: true });
+
+  function broadcastDeliveryUpdate(update: {
+    orderId: string;
+    deliveryStatus: string;
+    driverId?: string;
+  }) {
+    const message = JSON.stringify(update);
+    for (const client of deliveryOrdersWss.clients) {
+      if (client.readyState === 1) {
+        client.send(message);
+      }
+    }
+  }
+
+  driverLocationWss.on("connection", async (ws) => {
+    try {
+      const locations = await storage.getLatestDriverLocations();
+      ws.send(JSON.stringify({ locations }));
+    } catch {}
+
+    ws.on("message", (raw) => {
+      try {
+        const data = JSON.parse(raw.toString());
+        if (
+          typeof data.driverId === "string" &&
+          typeof data.lat === "number" &&
+          typeof data.lng === "number"
+        ) {
+          updateDriverLocation(data.driverId, data.lat, data.lng);
+          const out = JSON.stringify({
+            driverId: data.driverId,
+            lat: data.lat,
+            lng: data.lng,
+          });
+          for (const client of driverLocationWss.clients) {
+            if (client.readyState === 1) {
+              client.send(out);
+            }
+          }
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    });
+  });
 
   // Authentication routes
   app.post("/api/login", (req, res, next) => {
@@ -926,6 +976,101 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error creating delivery order:", error as any);
       res.status(500).json({ message: "Failed to create order" });
+    }
+  });
+
+  app.get("/api/drivers", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? ((req.query as any).branchId as string | undefined)
+          : user.branchId;
+      const usersList = await storage.getUsers();
+      const drivers = usersList
+        .filter(
+          (u) =>
+            u.role === "driver" && (!branchId || u.branchId === branchId),
+        )
+        .map((u) => ({
+          id: u.id,
+          name: `${u.firstName} ${u.lastName}`.trim() || u.username,
+        }));
+      res.json(drivers);
+    } catch (error) {
+      logger.error("Error fetching drivers:", error as any);
+      res.status(500).json({ message: "Failed to fetch drivers" });
+    }
+  });
+
+  app.get("/api/delivery-orders", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? ((req.query as any).branchId as string | undefined)
+          : user.branchId;
+      const { status, driverId } = req.query as Record<string, string>;
+      const orders = await storage.getDeliveryOrders(branchId);
+      let filtered = orders;
+      if (status) filtered = filtered.filter((o) => o.delivery.deliveryStatus === status);
+      if (driverId) filtered = filtered.filter((o) => o.delivery.driverId === driverId);
+      const result = filtered.map(({ order, delivery, driver, address }) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone || undefined,
+        deliveryAddress: address?.address || "",
+        total: Number(order.total),
+        status: delivery.deliveryStatus,
+        driverId: delivery.driverId || undefined,
+        driverName: driver
+          ? `${driver.firstName} ${driver.lastName}`.trim() || driver.username
+          : undefined,
+      }));
+      res.json(result);
+    } catch (error) {
+      logger.error("Error fetching delivery orders:", error as any);
+      res.status(500).json({ message: "Failed to fetch delivery orders" });
+    }
+  });
+
+  app.patch("/api/delivery-orders/:id/driver", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { driverId } = z.object({ driverId: z.string() }).parse(req.body);
+      const updated = await storage.assignDeliveryOrder(id, driverId);
+      broadcastDeliveryUpdate({
+        orderId: id,
+        deliveryStatus: updated.deliveryStatus,
+        driverId,
+      });
+      res.json(updated);
+    } catch (error) {
+      logger.error("Error assigning driver:", error as any);
+      res.status(500).json({ message: "Failed to assign driver" });
+    }
+  });
+
+  app.patch("/api/delivery-orders/:id/status", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = z.object({ status: z.string() }).parse(req.body);
+      const updated = await storage.updateDeliveryStatus(id, {
+        deliveryStatus: status as any,
+      });
+      if (!updated) {
+        return res.status(404).json({ message: "Delivery order not found" });
+      }
+      broadcastDeliveryUpdate({
+        orderId: id,
+        deliveryStatus: updated.deliveryStatus,
+        driverId: updated.driverId || undefined,
+      });
+      res.json(updated);
+    } catch (error) {
+      logger.error("Error updating delivery status:", error as any);
+      res.status(500).json({ message: "Failed to update status" });
     }
   });
 
@@ -4032,6 +4177,19 @@ export async function registerRoutes(
 
   const httpServer = createServer(app);
 
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (req.url === "/ws/delivery-orders") {
+      deliveryOrdersWss.handleUpgrade(req, socket, head, (ws) => {
+        deliveryOrdersWss.emit("connection", ws, req);
+      });
+    } else if (req.url === "/ws/driver-location") {
+      driverLocationWss.handleUpgrade(req, socket, head, (ws) => {
+        driverLocationWss.emit("connection", ws, req);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
 
   return httpServer;
 }

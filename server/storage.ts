@@ -109,6 +109,19 @@ export function verifyCustomerPasswordOtp(phoneNumber: string, otp: string) {
   return true;
 }
 
+const driverLocations = new Map<
+  string,
+  { driverId: string; lat: number; lng: number; timestamp: Date }
+>();
+
+export function updateDriverLocation(
+  driverId: string,
+  lat: number,
+  lng: number,
+) {
+  driverLocations.set(driverId, { driverId, lat, lng, timestamp: new Date() });
+}
+
 export interface ParsedRow {
   itemEn: string;
   itemAr?: string;
@@ -341,7 +354,9 @@ export interface IStorage {
   acceptDeliveryOrderRequest(id: string): Promise<Order | undefined>;
 
   // Delivery orders
-    getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+    getDeliveryOrders(branchId?: string): Promise<
+      { order: Order; delivery: DeliveryOrder; driver?: User; address?: CustomerAddress }[]
+    >;
     getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
     assignDeliveryOrder(orderId: string, driverId: string): Promise<DeliveryOrder>;
     updateDeliveryStatus(orderId: string, update: Partial<DeliveryOrder>): Promise<DeliveryOrder | undefined>;
@@ -3671,6 +3686,81 @@ export class DatabaseStorage implements IStorage {
       .where(eq(orders.id, id))
       .returning();
     return updated || undefined;
+  }
+
+  async getDeliveryOrders(
+    branchId?: string,
+  ): Promise<
+    { order: Order; delivery: DeliveryOrder; driver?: User; address?: CustomerAddress }[]
+  > {
+    const conditions: any[] = [];
+    if (branchId) {
+      conditions.push(eq(orders.branchId, branchId));
+    }
+
+    const results = await db
+      .select({
+        order: orders,
+        delivery: deliveryOrders,
+        driver: users,
+        address: customerAddresses,
+      })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .leftJoin(users, eq(deliveryOrders.driverId, users.id))
+      .leftJoin(
+        customerAddresses,
+        eq(deliveryOrders.deliveryAddressId, customerAddresses.id),
+      )
+      .where(conditions.length ? and(...conditions) : undefined);
+
+    return results as any;
+  }
+
+  async getDeliveryOrdersByDriver(
+    driverId: string,
+    branchId?: string,
+  ): Promise<(DeliveryOrder & { order: Order })[]> {
+    const conditions = [eq(deliveryOrders.driverId, driverId)] as any[];
+    if (branchId) conditions.push(eq(orders.branchId, branchId));
+
+    const results = await db
+      .select({ delivery: deliveryOrders, order: orders })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .where(and(...conditions));
+
+    return results.map(({ delivery, order }) => ({ ...delivery, order }));
+  }
+
+  async assignDeliveryOrder(
+    orderId: string,
+    driverId: string,
+  ): Promise<DeliveryOrder> {
+    const [updated] = await db
+      .update(deliveryOrders)
+      .set({ driverId, updatedAt: new Date() })
+      .where(eq(deliveryOrders.orderId, orderId))
+      .returning();
+    return updated;
+  }
+
+  async updateDeliveryStatus(
+    orderId: string,
+    update: Partial<DeliveryOrder>,
+  ): Promise<DeliveryOrder | undefined> {
+    const [updated] = await db
+      .update(deliveryOrders)
+      .set({ ...update, updatedAt: new Date() })
+      .where(eq(deliveryOrders.orderId, orderId))
+      .returning();
+    return updated || undefined;
+  }
+
+  async getLatestDriverLocations(): Promise<
+    { driverId: string; lat: number; lng: number; timestamp: Date }[]
+  > {
+    return Array.from(driverLocations.values());
   }
 
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {

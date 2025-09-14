@@ -9,6 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useCurrency } from "@/lib/currency";
 import { ReceiptModal } from "@/components/receipt-modal";
 import { useToast } from "@/hooks/use-toast";
+import { MapPin } from "lucide-react";
 
 interface Driver {
   id: string;
@@ -44,6 +45,9 @@ export function DeliveryOrders() {
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [assignOrder, setAssignOrder] = useState<DeliveryOrder | null>(null);
   const [selectedDriver, setSelectedDriver] = useState("");
+  const [driverLocations, setDriverLocations] = useState<
+    Record<string, { lat: number; lng: number }>
+  >({});
 
   const { data: drivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
@@ -69,10 +73,52 @@ export function DeliveryOrders() {
 
   useEffect(() => {
     const ws = new WebSocket(`ws://${window.location.host}/ws/delivery-orders`);
-    ws.onmessage = () =>
-      queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        queryClient.setQueriesData<DeliveryOrder[]>({
+          queryKey: ["/api/delivery-orders"],
+        }, (old) =>
+          old?.map((o) =>
+            o.id === data.orderId
+              ? {
+                  ...o,
+                  status: data.deliveryStatus,
+                  driverId: data.driverId ?? o.driverId,
+                }
+              : o,
+          ) || old,
+        );
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
+      }
+    };
     return () => ws.close();
   }, [queryClient]);
+
+  useEffect(() => {
+    const ws = new WebSocket(`ws://${window.location.host}/ws/driver-location`);
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (Array.isArray(data.locations)) {
+          const map: Record<string, { lat: number; lng: number }> = {};
+          data.locations.forEach(
+            (l: any) => (map[l.driverId] = { lat: l.lat, lng: l.lng }),
+          );
+          setDriverLocations(map);
+        } else if (data.driverId) {
+          setDriverLocations((prev) => ({
+            ...prev,
+            [data.driverId]: { lat: data.lat, lng: data.lng },
+          }));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => ws.close();
+  }, []);
 
   const assignDriverMutation = useMutation({
     mutationFn: async ({ orderId, driverId }: { orderId: string; driverId: string }) => {
@@ -180,7 +226,16 @@ export function DeliveryOrders() {
                 <TableCell>
                   {statusOptions.find((s) => s.value === order.status)?.label}
                 </TableCell>
-                <TableCell>{order.driverName || "-"}</TableCell>
+                <TableCell>
+                  {order.driverName || "-"}
+                  {order.driverId && driverLocations[order.driverId] && (
+                    <div className="text-xs text-gray-500 flex items-center">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      {driverLocations[order.driverId].lat.toFixed(5)},
+                      {driverLocations[order.driverId].lng.toFixed(5)}
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell className="space-x-2">
                   <Button
                     size="sm"
