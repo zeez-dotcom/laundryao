@@ -5,7 +5,7 @@ process.env.DATABASE_URL = 'postgres://user:pass@localhost/db';
 
 const { DatabaseStorage, MemStorage } = await import('./storage');
 const { db } = await import('./db');
-const { users, clothingItems, laundryServices, itemServicePrices } = await import('@shared/schema');
+const { users, clothingItems, laundryServices, itemServicePrices, orders, deliveryOrders } = await import('@shared/schema');
 
 const baseUser = {
   id: '1',
@@ -344,4 +344,42 @@ test('bulkUpsertUserCatalog throws when user lacks branch', async () => {
   );
 
   (db as any).transaction = originalTransaction;
+});
+
+test('acceptDeliveryOrderRequest updates order and delivery status', async () => {
+  const storage = new DatabaseStorage();
+  const originalTransaction = db.transaction;
+  const orderId = 'order1';
+  let orderUpdate: any = null;
+  let deliveryUpdate: any = null;
+
+  (db as any).transaction = async (fn: any) => {
+    return await fn({
+      update: (table: any) => ({
+        set: (data: any) => ({
+          where: () => ({
+            returning: () => {
+              if (table === orders) {
+                orderUpdate = data;
+                return [{ id: orderId }];
+              }
+              if (table === deliveryOrders) {
+                deliveryUpdate = data;
+                return [{}];
+              }
+              return [];
+            },
+          }),
+        }),
+      }),
+    });
+  };
+
+  const result = await storage.acceptDeliveryOrderRequest(orderId);
+
+  (db as any).transaction = originalTransaction;
+
+  assert.strictEqual(result?.id, orderId);
+  assert.strictEqual(orderUpdate.isDeliveryRequest, false);
+  assert.strictEqual(deliveryUpdate.deliveryStatus, 'accepted');
 });

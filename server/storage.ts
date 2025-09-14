@@ -3667,12 +3667,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async acceptDeliveryOrderRequest(id: string): Promise<Order | undefined> {
-    const [updated] = await db
-      .update(orders)
-      .set({ isDeliveryRequest: false, updatedAt: new Date() })
-      .where(eq(orders.id, id))
-      .returning();
-    return updated || undefined;
+    return await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(orders)
+        .set({ isDeliveryRequest: false, updatedAt: new Date() })
+        .where(eq(orders.id, id))
+        .returning();
+
+      if (!updated) return undefined;
+
+      await tx
+        .update(deliveryOrders)
+        .set({ deliveryStatus: "accepted", updatedAt: sql`CURRENT_TIMESTAMP` })
+        .where(eq(deliveryOrders.orderId, id))
+        .returning();
+
+      return updated;
+    });
   }
 
   async getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]> {
