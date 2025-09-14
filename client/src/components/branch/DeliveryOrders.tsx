@@ -44,6 +44,7 @@ export function DeliveryOrders() {
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [assignOrder, setAssignOrder] = useState<DeliveryOrder | null>(null);
   const [selectedDriver, setSelectedDriver] = useState("");
+  const [driverLocations, setDriverLocations] = useState<Record<string, { lat: number; lng: number }>>({});
 
   const { data: drivers = [] } = useQuery<Driver[]>({
     queryKey: ["/api/drivers"],
@@ -69,10 +70,46 @@ export function DeliveryOrders() {
 
   useEffect(() => {
     const ws = new WebSocket(`ws://${window.location.host}/ws/delivery-orders`);
-    ws.onmessage = () =>
-      queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        queryClient.setQueryData<DeliveryOrder[]>(
+          ["/api/delivery-orders", statusFilter, driverFilter],
+          (old) => {
+            if (!old) return old;
+            return old.map((o) =>
+              o.id === data.orderId
+                ? {
+                    ...o,
+                    status: data.deliveryStatus ?? o.status,
+                    driverId: data.driverId ?? o.driverId,
+                  }
+                : o,
+            );
+          },
+        );
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
+      }
+    };
     return () => ws.close();
-  }, [queryClient]);
+  }, [queryClient, statusFilter, driverFilter]);
+
+  useEffect(() => {
+    const ws = new WebSocket(`ws://${window.location.host}/ws/driver-location`);
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        setDriverLocations((prev) => ({
+          ...prev,
+          [data.driverId]: { lat: data.lat, lng: data.lng },
+        }));
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => ws.close();
+  }, []);
 
   const assignDriverMutation = useMutation({
     mutationFn: async ({ orderId, driverId }: { orderId: string; driverId: string }) => {
@@ -160,6 +197,7 @@ export function DeliveryOrders() {
               <TableHead>{t.total}</TableHead>
               <TableHead>{t.status}</TableHead>
               <TableHead>{t.driver}</TableHead>
+              <TableHead>{t.locationLabel}</TableHead>
               <TableHead>{t.actions}</TableHead>
             </TableRow>
           </TableHeader>
@@ -181,6 +219,12 @@ export function DeliveryOrders() {
                   {statusOptions.find((s) => s.value === order.status)?.label}
                 </TableCell>
                 <TableCell>{order.driverName || "-"}</TableCell>
+                <TableCell>
+                  {order.driverId && driverLocations[order.driverId] &&
+                  order.status !== "delivered"
+                    ? `${driverLocations[order.driverId].lat.toFixed(5)}, ${driverLocations[order.driverId].lng.toFixed(5)}`
+                    : "-"}
+                </TableCell>
                 <TableCell className="space-x-2">
                   <Button
                     size="sm"

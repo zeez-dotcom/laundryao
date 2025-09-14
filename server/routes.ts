@@ -74,6 +74,7 @@ import { randomUUID } from "crypto";
 import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
+import { WebSocketServer } from "ws";
 
 const upload = multer();
 const uploadDir = path.resolve(import.meta.dirname, "uploads");
@@ -320,6 +321,65 @@ export async function registerRoutes(
   app: Express,
   notificationService: NotificationService,
 ): Promise<Server> {
+  const httpServer = createServer(app);
+  const deliveryOrderWss = new WebSocketServer({ noServer: true });
+  const driverLocationWss = new WebSocketServer({ noServer: true });
+
+  const broadcastDeliveryUpdate = (data: {
+    orderId: string;
+    deliveryStatus: string | null;
+    driverId: string | null;
+  }) => {
+    const msg = JSON.stringify(data);
+    for (const client of deliveryOrderWss.clients) {
+      if (client.readyState === client.OPEN) {
+        client.send(msg);
+      }
+    }
+  };
+
+  driverLocationWss.on("connection", (ws) => {
+    storage.getLatestDriverLocations().then((locs) => {
+      for (const loc of locs) {
+        ws.send(JSON.stringify({
+          driverId: loc.driverId,
+          lat: loc.lat,
+          lng: loc.lng,
+        }));
+      }
+    });
+
+    ws.on("message", async (msg) => {
+      try {
+        const { driverId, lat, lng } = JSON.parse(msg.toString());
+        await storage.updateDriverLocation(driverId, lat, lng);
+        const payload = JSON.stringify({ driverId, lat, lng });
+        for (const client of driverLocationWss.clients) {
+          if (client.readyState === client.OPEN) {
+            client.send(payload);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+  });
+
+  httpServer.on("upgrade", (req, socket, head) => {
+    const { pathname } = new URL(req.url || "", "http://localhost");
+    if (pathname === "/ws/delivery-orders") {
+      deliveryOrderWss.handleUpgrade(req, socket, head, (ws) => {
+        deliveryOrderWss.emit("connection", ws, req);
+      });
+    } else if (pathname === "/ws/driver-location") {
+      driverLocationWss.handleUpgrade(req, socket, head, (ws) => {
+        driverLocationWss.emit("connection", ws, req);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
   // Setup authentication
   await setupAuth(app);
   await seedSuperAdmin();
@@ -1027,6 +1087,11 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Delivery order not found" });
       }
       res.json(updated);
+      broadcastDeliveryUpdate({
+        orderId: updated.orderId,
+        deliveryStatus: updated.deliveryStatus,
+        driverId: updated.driverId || null,
+      });
     } catch (error) {
       res.status(500).json({ message: "Failed to assign driver" });
     }
@@ -1070,6 +1135,11 @@ export async function registerRoutes(
       }
 
       res.json(updated);
+      broadcastDeliveryUpdate({
+        orderId: updated.orderId,
+        deliveryStatus: updated.deliveryStatus,
+        driverId: updated.driverId || null,
+      });
     } catch (error) {
       res.status(500).json({ message: "Failed to update delivery status" });
     }
@@ -4145,9 +4215,6 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to update payment method" });
     }
   });
-
-  const httpServer = createServer(app);
-
 
   return httpServer;
 }
