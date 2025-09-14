@@ -347,6 +347,7 @@ export interface IStorage {
     getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
     updateDeliveryStatus(orderId: string, update: Partial<DeliveryOrder>): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
+    updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void>;
     getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]>;
 
     // Order print history
@@ -1290,6 +1291,7 @@ export class MemStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private driverLocations = new Map<string, { lat: number; lng: number; timestamp: Date }>();
   // User methods
   async getUser(id: string): Promise<UserWithBranch | undefined> {
     const [result] = await db
@@ -3776,6 +3778,17 @@ export class DatabaseStorage implements IStorage {
 
       return { ...updated, order: existing.order };
     });
+  }
+
+  async updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void> {
+    this.driverLocations.set(driverId, { lat, lng, timestamp: new Date() });
+  }
+
+  async getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]> {
+    return Array.from(this.driverLocations.entries()).map(([driverId, loc]) => ({
+      driverId,
+      ...loc,
+    }));
   }
 
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {

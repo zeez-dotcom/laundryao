@@ -17,6 +17,7 @@ import CustomerOrderPage from "@/pages/customer-order";
 import CustomerAuthPage from "@/pages/customer-auth";
 import CustomerOrderingPage from "@/pages/customer-ordering";
 import CustomerDashboardPage from "@/pages/customer-dashboard";
+import DriverDashboard from "@/pages/driver";
 import LoadingScreen from "@/components/common/LoadingScreen";
 
 function Router() {
@@ -41,6 +42,7 @@ function Router() {
       {isAuthenticated && <Route path="/" component={POS} />}
       {isAuthenticated && <Route path="/admin" component={AdminDashboard} />}
       {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
+      {isAuthenticated && <Route path="/driver" component={DriverDashboard} />}
       <Route component={NotFound} />
     </Switch>
   );
