@@ -129,7 +129,8 @@ export function OrderTracking() {
       if (!res.ok) {
         throw new Error(t.failedToFetchOrders);
       }
-      return res.json();
+      const data: OrderWithExtras[] = await res.json();
+      return data.filter((o) => !o.isDeliveryRequest);
     },
   });
 

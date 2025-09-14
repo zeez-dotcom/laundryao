@@ -152,9 +152,10 @@ export function OrderManagementDashboard() {
       if (branch?.id) params.append("branchId", branch.id);
       if (statusFilter !== "all") params.append("status", statusFilter);
       if (orderTypeFilter !== "all") params.append("includeDelivery", "true");
-      
+
       const response = await apiRequest("GET", `/api/orders?${params.toString()}`);
-      return response.json();
+      const data: Order[] = await response.json();
+      return data.filter((o) => !o.isDeliveryRequest);
     },
   });
 

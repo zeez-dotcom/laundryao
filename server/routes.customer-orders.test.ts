@@ -24,6 +24,7 @@ function createApp() {
     try {
       let orders = await storage.getOrdersByCustomer(customerId);
       orders = orders
+        .filter((o: any) => !o.isDeliveryRequest)
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(0, 10);
       const mapped = orders.map((o: any) => ({
