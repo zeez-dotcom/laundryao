@@ -47,7 +47,7 @@ import {
   type BranchDeliveryPackage, type InsertBranchDeliveryPackage,
   type BranchPaymentMethod, type InsertBranchPaymentMethod,
   type BranchQRCode, type InsertBranchQRCode,
-  type DeliveryOrder, type InsertDeliveryOrder,
+  type DeliveryOrder, type InsertDeliveryOrder, type DeliveryStatus,
   type CityType, type DeliveryMode, type PaymentMethodType,
   customerSessions, branchDeliverySettings, branchDeliveryItems, branchDeliveryPackages, branchPaymentMethods, branchQRCodes, deliveryOrders,
 } from "@shared/schema";
@@ -341,14 +341,14 @@ export interface IStorage {
   acceptDeliveryOrderRequest(id: string): Promise<Order | undefined>;
 
   // Delivery orders
-    getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
-    getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
-    assignDeliveryOrder(orderId: string, driverId: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
-    getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
-    updateDeliveryStatus(orderId: string, update: Partial<DeliveryOrder>): Promise<(DeliveryOrder & { order: Order }) | undefined>;
+  getDeliveryOrders(branchId?: string, status?: DeliveryStatus): Promise<(DeliveryOrder & { order: Order })[]>;
+  getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+  assignDeliveryOrder(orderId: string, driverId: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
+  getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+  updateDeliveryStatus(orderId: string, status: DeliveryStatus): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
-    updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void>;
-    getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]>;
+  updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void>;
+  getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]>;
 
     // Order print history
     recordOrderPrint(orderId: string, printedBy: string): Promise<OrderPrint>;
@@ -3686,9 +3686,13 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]> {
+  async getDeliveryOrders(
+    branchId?: string,
+    status?: DeliveryStatus,
+  ): Promise<(DeliveryOrder & { order: Order })[]> {
     const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
     if (branchId) conditions.push(eq(orders.branchId, branchId));
+    if (status) conditions.push(eq(deliveryOrders.deliveryStatus, status));
 
     const results = await db
       .select({ order: orders, delivery: deliveryOrders })
@@ -3766,7 +3770,7 @@ export class DatabaseStorage implements IStorage {
 
   async updateDeliveryStatus(
     orderId: string,
-    update: Partial<DeliveryOrder>,
+    status: DeliveryStatus,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
       const [existing] = await tx
@@ -3783,7 +3787,7 @@ export class DatabaseStorage implements IStorage {
 
       const [updated] = await tx
         .update(deliveryOrders)
-        .set({ ...update, updatedAt: sql`CURRENT_TIMESTAMP` })
+        .set({ deliveryStatus: status, updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(deliveryOrders.id, existing.delivery.id))
         .returning();
 
