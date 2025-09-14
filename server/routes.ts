@@ -753,6 +753,43 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/chatbot", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    const message = String(req.body?.message || "").toLowerCase();
+
+    try {
+      if (message.includes("package")) {
+        const packages = await storage.getCustomerPackagesWithUsage(customerId);
+        return res.json({ reply: "Here are your packages", packages });
+      }
+
+      if (message.includes("order")) {
+        let orders = await storage.getOrdersByCustomer(customerId);
+        orders = orders
+          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, 10)
+          .map((o: any) => ({
+            id: o.id,
+            orderNumber: o.orderNumber,
+            createdAt: o.createdAt,
+            itemCount: Array.isArray(o.items)
+              ? o.items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0)
+              : 0,
+            subtotal: o.subtotal,
+            paid: o.paid,
+            remaining: o.remaining,
+          }));
+        return res.json({ reply: "Here is your recent order history", orders });
+      }
+
+      return res.json({ reply: "I can help show your packages or order history." });
+    } catch (error) {
+      logger.error({ err: error, customerId }, "Chatbot handler failed");
+      res.status(500).json({ message: "Failed to process request" });
+    }
+  });
+
   // Customer addresses for ordering interface
   app.get("/api/customers/:customerId/addresses", async (req, res) => {
     const sessionCustomerId = (req.session as any).customerId as string | undefined;

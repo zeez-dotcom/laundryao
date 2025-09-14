@@ -3,12 +3,20 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, Send, User } from "lucide-react";
+import { EnhancedPackageDisplay } from "./EnhancedPackageDisplay";
 import { useToast } from "@/hooks/use-toast";
 import { useTranslation } from "@/lib/i18n";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
+  packages?: any[];
+  orders?: Array<{
+    id: string;
+    orderNumber: string;
+    createdAt: string;
+    itemCount: number;
+  }>;
 }
 
 interface CustomerChatbotProps {
@@ -49,8 +57,18 @@ export function CustomerChatbot({ branchCode, open, onClose }: CustomerChatbotPr
         body: JSON.stringify({ message: userMessage.content }),
       });
       const data = await res.json();
+      const newMessages: Message[] = [];
       if (typeof data.reply === "string") {
-        setMessages((msgs) => [...msgs, { role: "assistant", content: data.reply }]);
+        newMessages.push({ role: "assistant", content: data.reply });
+      }
+      if (data.packages) {
+        newMessages.push({ role: "assistant", content: "", packages: data.packages });
+      }
+      if (data.orders) {
+        newMessages.push({ role: "assistant", content: "", orders: data.orders });
+      }
+      if (newMessages.length) {
+        setMessages((msgs) => [...msgs, ...newMessages]);
       }
       if (data.order) {
         try {
@@ -116,11 +134,23 @@ export function CustomerChatbot({ branchCode, open, onClose }: CustomerChatbotPr
               </Avatar>
             )}
             <div
-              className={`rounded-lg px-3 py-2 text-sm ${
+              className={`rounded-lg px-3 py-2 text-sm space-y-2 ${
                 m.role === "user" ? "bg-muted" : "bg-primary/10"
               }`}
             >
-              {m.content}
+              {m.content && <div>{m.content}</div>}
+              {m.packages && (
+                <EnhancedPackageDisplay packages={m.packages} onUsePackage={() => {}} />
+              )}
+              {m.orders && (
+                <ul className="space-y-1">
+                  {m.orders.map((o) => (
+                    <li key={o.id} className="text-sm">
+                      #{o.orderNumber} • {o.itemCount} items • {new Date(o.createdAt).toLocaleDateString()}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             {m.role === "user" && (
               <Avatar className="h-6 w-6">
