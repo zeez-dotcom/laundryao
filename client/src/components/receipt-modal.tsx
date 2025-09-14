@@ -633,26 +633,32 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
             )}
           </div>
 
-          {receiptData.packages && receiptData.packages.length > 0 && (
+          {customer && receiptData.packages && receiptData.packages.length > 0 && (
             <div className="border-t border-gray-400 pt-3 space-y-1">
               {receiptData.packages.map((pkg: any) => (
                 <Fragment key={pkg.id}>
-                  {renderBilingualRow(
-                    pkg.nameEn,
-                    pkg.nameAr || pkg.nameEn,
-                    `Remaining: ${pkg.balance}/${pkg.totalCredits}`,
-                  )}
+                  <div className="flex font-semibold">
+                    <p className="flex-1">{pkg.nameEn}</p>
+                    <p className="flex-1 text-right" dir="rtl">
+                      {pkg.nameAr || pkg.nameEn}
+                    </p>
+                  </div>
                   {pkg.items && pkg.items.length > 0 && (
                     <div className="pl-2 space-y-1">
                       {pkg.items.map((item: any) => {
                         const label = item.clothingItemName
                           ? `${item.serviceName} – ${item.clothingItemName}`
                           : item.serviceName;
-                        return renderBilingualRow(
-                          label,
-                          label,
-                          `Used: ${item.used || 0}, Remaining: ${item.balance}/${item.totalCredits}`,
-                          "text-sm",
+                        const key = `${item.serviceId || item.serviceName}-${item.clothingItemId || item.clothingItemName}`;
+                        return (
+                          <Fragment key={key}>
+                            {renderBilingualRow(
+                              label,
+                              label,
+                              `Remaining: ${item.balance}/${item.totalCredits}`,
+                              "text-sm",
+                            )}
+                          </Fragment>
                         );
                       })}
                     </div>
@@ -669,6 +675,11 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                       "تاريخ الانتهاء",
                       format(new Date(pkg.expiresAt), "MMM dd, yyyy"),
                     )}
+                  {renderBilingualRow(
+                    "Credits remaining",
+                    "الرصيد المتبقي",
+                    `${pkg.balance}/${pkg.totalCredits}`,
+                  )}
                 </Fragment>
               ))}
             </div>
