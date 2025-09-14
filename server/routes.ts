@@ -3134,7 +3134,14 @@ export async function registerRoutes(
   app.get("/api/transactions", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      const transactions = await storage.getTransactions(user.branchId || undefined);
+      const { start, end, limit, offset } = req.query as Record<string, string | undefined>;
+      const transactions = await storage.getTransactions(
+        user.branchId || undefined,
+        start ? new Date(start) : undefined,
+        end ? new Date(end) : undefined,
+        limit ? parseInt(limit) : undefined,
+        offset ? parseInt(offset) : undefined
+      );
       res.json(transactions);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch transactions" });

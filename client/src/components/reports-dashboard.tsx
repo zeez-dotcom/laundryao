@@ -18,13 +18,34 @@ export function ReportsDashboard() {
   });
   const [serviceFilter, setServiceFilter] = useState("all");
 
-  // Fetch transactions
+  // Fetch transactions with pagination based on date range
   const { data: transactions = [] } = useQuery({
-    queryKey: ["/api/transactions"],
+    queryKey: [
+      "/api/transactions",
+      dateRange?.from?.toISOString(),
+      dateRange?.to?.toISOString(),
+    ],
     queryFn: async () => {
-      const response = await fetch("/api/transactions");
-      return response.json();
-    }
+      const limit = 100;
+      const params = new URLSearchParams();
+      if (dateRange?.from)
+        params.set("start", startOfDay(dateRange.from).toISOString());
+      if (dateRange?.to)
+        params.set("end", endOfDay(dateRange.to).toISOString());
+      let all: Transaction[] = [];
+      let offset = 0;
+      while (true) {
+        const search = new URLSearchParams(params);
+        search.set("limit", String(limit));
+        search.set("offset", String(offset));
+        const response = await fetch(`/api/transactions?${search.toString()}`);
+        const batch: Transaction[] = await response.json();
+        all = all.concat(batch);
+        if (batch.length < limit) break;
+        offset += limit;
+      }
+      return all;
+    },
   }) as { data: Transaction[] };
 
   // Filter transactions by date range
