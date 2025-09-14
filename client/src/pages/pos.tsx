@@ -12,6 +12,7 @@ import { SettingsPanel } from "@/components/settings-panel";
 import { CustomerManagement } from "@/components/customer-management";
 import { OrderTracking } from "@/components/order-tracking";
 import { DeliveryOrderRequests } from "@/components/branch/DeliveryOrderRequests";
+import { DeliveryOrders } from "@/components/branch/DeliveryOrders";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { PackageList } from "@/components/package-list";
 import PackageChatbot from "@/components/PackageChatbot";
@@ -387,6 +388,8 @@ export default function POS() {
         return <ReportsDashboard />;
       case "delivery-order-requests":
         return <DeliveryOrderRequests />;
+      case "delivery-orders":
+        return <DeliveryOrders />;
       case "inventory":
         return <InventoryManagement />;
       case "settings":
