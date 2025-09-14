@@ -19,10 +19,10 @@ FlutterPos is a point-of-sale and management platform for laundry and product sa
 The system consists of a React front end, an Express-based REST API, and a PostgreSQL database accessed through Drizzle ORM. WebSocket channels provide real-time features such as delivery updates and driver location tracking.
 
 ### 2.2 User Classes and Characteristics
-- **Super Administrator** – full system access across branches.
-- **Branch Administrator** – manages data for a single branch.
-- **Staff** – handles day-to-day operations such as orders and payments.
-- **Delivery Driver** – receives assigned deliveries and streams location updates.
+- **Super Administrator** â full system access across branches.
+- **Branch Administrator** â manages data for a single branch.
+- **Staff** â handles day-to-day operations such as orders and payments.
+- **Delivery Driver** â receives assigned deliveries and streams location updates.
 
 ### 2.3 Operating Environment
 - Node.js runtime
@@ -41,7 +41,7 @@ The system consists of a React front end, an Express-based REST API, and a Postg
 
 ### 3.3 Catalog Management
 - Maintain categories, clothing items, products, and laundry services.
-- Configure item–service pricing.
+- Configure itemâservice pricing.
 
 ### 3.4 Customer Management
 - Register and update customers.
@@ -60,7 +60,7 @@ The system consists of a React front end, an Express-based REST API, and a Postg
 ### 3.7 Delivery Management
 - List and filter delivery orders by status, driver, or branch.
 - Assign drivers to delivery orders.
-- Update delivery order status with validated transitions.
+- Update delivery order status through the lifecycle: request → accepted → driver enroute → picked up → started processing → ready → out for delivery → completed. Transitions are validated.
 - WebSocket channel for broadcasting delivery order updates.
 - Driver location streaming via WebSocket.
 
