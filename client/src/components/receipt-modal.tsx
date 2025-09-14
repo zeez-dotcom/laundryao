@@ -644,31 +644,31 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                   )}
                   {pkg.items && pkg.items.length > 0 && (
                     <div className="pl-2 space-y-1">
-                      {pkg.items.map((item: any) =>
-                        renderBilingualRow(
-                          item.serviceName,
-                          item.serviceName,
+                      {pkg.items.map((item: any) => {
+                        const label = item.clothingItemName
+                          ? `${item.serviceName} – ${item.clothingItemName}`
+                          : item.serviceName;
+                        return renderBilingualRow(
+                          label,
+                          label,
                           `Used: ${item.used || 0}, Remaining: ${item.balance}/${item.totalCredits}`,
                           "text-sm",
-                        )
-                      )}
+                        );
+                      })}
                     </div>
                   )}
-                  {pkg.startsAt && pkg.expiresAt
-                    ? renderBilingualRow(
-                        "Valid",
-                        "صالح",
-                        `${format(new Date(pkg.startsAt), "MMM dd, yyyy")} - ${format(
-                          new Date(pkg.expiresAt),
-                          "MMM dd, yyyy",
-                        )}`,
-                      )
-                    : pkg.expiresAt &&
-                      renderBilingualRow(
-                        "Expires",
-                        "تنتهي",
-                        format(new Date(pkg.expiresAt), "MMM dd, yyyy"),
-                      )}
+                  {pkg.startsAt &&
+                    renderBilingualRow(
+                      "Purchased on",
+                      "تاريخ الشراء",
+                      format(new Date(pkg.startsAt), "MMM dd, yyyy"),
+                    )}
+                  {pkg.expiresAt &&
+                    renderBilingualRow(
+                      "Expires on",
+                      "تاريخ الانتهاء",
+                      format(new Date(pkg.expiresAt), "MMM dd, yyyy"),
+                    )}
                 </Fragment>
               ))}
             </div>

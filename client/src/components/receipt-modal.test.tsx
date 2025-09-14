@@ -38,10 +38,13 @@ const transaction: any = {
       nameAr: "حزمة الغسيل",
       balance: 3,
       totalCredits: 5,
+      startsAt: new Date("2024-01-01T00:00:00Z").toISOString(),
+      expiresAt: new Date("2024-12-31T00:00:00Z").toISOString(),
       items: [
         {
           serviceId: "svc1",
           serviceName: "Wash",
+          clothingItemName: "Shirt",
           balance: 3,
           totalCredits: 5,
           used: 0,
@@ -149,10 +152,13 @@ describe("ReceiptModal", () => {
     localStorage.clear();
     renderReceipt();
     expect(await screen.findByText(/Wash Pack/)).toBeTruthy();
+    expect((await screen.findAllByText(/Wash – Shirt/)).length).toBeGreaterThan(0);
     const usedRows = await screen.findAllByText(/Used: 0/);
     expect(usedRows.length).toBeGreaterThan(0);
     const remainingRows = await screen.findAllByText(/Remaining: 3\/5/);
     expect(remainingRows.length).toBeGreaterThan(0);
+    expect(await screen.findByText(/Purchased on/)).toBeTruthy();
+    expect(await screen.findByText(/Expires on/)).toBeTruthy();
   });
 
   it("applies package credits to totals", async () => {
