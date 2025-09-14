@@ -34,6 +34,9 @@ import {
   type User,
   type ItemType,
   type ClothingItem,
+  orders,
+  deliveryOrders,
+  type DeliveryStatus,
 } from "@shared/schema";
 import { loginSchema } from "@shared/schemas";
 import {
@@ -86,6 +89,15 @@ const uploadLogo = multer({
 });
 
 const passwordResetTokens = new Map<string, { userId: string; expires: Date }>();
+
+const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
+  pending: ["assigned", "cancelled"],
+  assigned: ["picked_up", "cancelled"],
+  picked_up: ["in_transit", "cancelled"],
+  in_transit: ["delivered", "cancelled"],
+  delivered: [],
+  cancelled: [],
+};
 
 // Enhanced security: Comprehensive rate limiting for all auth endpoints
 interface RateLimitRecord {
@@ -956,6 +968,110 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to accept delivery order request" });
+    }
+  });
+
+  app.get("/api/delivery-orders", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!["admin", "super_admin", "driver"].includes(user.role)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { status, driverId, branchId } = req.query as Record<string, string>;
+      let targetBranchId = branchId;
+      if (user.role !== "super_admin") {
+        if (branchId && branchId !== user.branchId) {
+          return res.status(403).json({ message: "Cannot access other branch delivery orders" });
+        }
+        targetBranchId = user.branchId || undefined;
+      }
+
+      let orders;
+      if (status) {
+        orders = await storage.getDeliveryOrdersByStatus(status, targetBranchId);
+      } else if (driverId) {
+        orders = await storage.getDeliveryOrdersByDriver(driverId, targetBranchId);
+      } else {
+        orders = await storage.getDeliveryOrders(targetBranchId);
+      }
+
+      res.json(orders);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch delivery orders" });
+    }
+  });
+
+  app.patch("/api/delivery-orders/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { driverId } = req.body as { driverId?: string };
+      if (!driverId) {
+        return res.status(400).json({ message: "driverId required" });
+      }
+
+      const order = await storage.getOrder(req.params.id);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+      if (user.role !== "super_admin" && order.branchId !== user.branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const updated = await storage.assignDeliveryOrder(req.params.id, driverId);
+      if (!updated) {
+        return res.status(404).json({ message: "Delivery order not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to assign driver" });
+    }
+  });
+
+  app.patch("/api/delivery-orders/:id/status", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { status } = req.body as { status?: DeliveryStatus };
+      if (!status) {
+        return res.status(400).json({ message: "Status required" });
+      }
+
+      const [current] = await db
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(and(eq(deliveryOrders.orderId, req.params.id), eq(orders.isDeliveryRequest, false)));
+
+      if (!current) {
+        return res.status(404).json({ message: "Delivery order not found" });
+      }
+
+      if (user.role !== "super_admin" && current.order.branchId !== user.branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const currentStatus = current.delivery.deliveryStatus as DeliveryStatus;
+      const allowed = DELIVERY_STATUS_TRANSITIONS[currentStatus] || [];
+      if (!allowed.includes(status)) {
+        return res.status(400).json({ message: "Invalid status transition" });
+      }
+
+      const updated = await storage.updateDeliveryStatus(req.params.id, { deliveryStatus: status });
+      if (!updated) {
+        return res.status(404).json({ message: "Delivery order not found" });
+      }
+
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update delivery status" });
     }
   });
 

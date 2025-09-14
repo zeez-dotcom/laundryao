@@ -58,7 +58,9 @@ The system consists of a React front end, an Express-based REST API, and a Postg
 - Email receipts to customers.
 
 ### 3.7 Delivery Management
+- List and filter delivery orders by status, driver, or branch.
 - Assign drivers to delivery orders.
+- Update delivery order status with validated transitions.
 - WebSocket channel for broadcasting delivery order updates.
 - Driver location streaming via WebSocket.
 

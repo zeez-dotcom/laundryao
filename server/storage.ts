@@ -343,8 +343,9 @@ export interface IStorage {
   // Delivery orders
     getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
     getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
-    assignDeliveryOrder(orderId: string, driverId: string): Promise<DeliveryOrder>;
-    updateDeliveryStatus(orderId: string, update: Partial<DeliveryOrder>): Promise<DeliveryOrder | undefined>;
+    assignDeliveryOrder(orderId: string, driverId: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
+    getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+    updateDeliveryStatus(orderId: string, update: Partial<DeliveryOrder>): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
     getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]>;
 
@@ -435,7 +436,6 @@ export interface IStorage {
   // Enhanced Delivery Orders (extending existing delivery order methods)
   createDeliveryOrder(deliveryOrder: InsertDeliveryOrder): Promise<DeliveryOrder>;
   updateDeliveryOrder(id: string, updates: Partial<InsertDeliveryOrder>): Promise<DeliveryOrder | undefined>;
-  getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
   getDeliveryOrdersByCustomer(customerId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
 }
 
@@ -3671,6 +3671,111 @@ export class DatabaseStorage implements IStorage {
       .where(eq(orders.id, id))
       .returning();
     return updated || undefined;
+  }
+
+  async getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]> {
+    const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
+    if (branchId) conditions.push(eq(orders.branchId, branchId));
+
+    const results = await db
+      .select({ order: orders, delivery: deliveryOrders })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .where(and(...conditions));
+
+    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+  }
+
+  async getDeliveryOrdersByStatus(
+    status: string,
+    branchId?: string,
+  ): Promise<(DeliveryOrder & { order: Order })[]> {
+    const conditions = [
+      eq(deliveryOrders.deliveryStatus, status as any),
+      eq(orders.isDeliveryRequest, false),
+    ] as any[];
+    if (branchId) conditions.push(eq(orders.branchId, branchId));
+
+    const results = await db
+      .select({ order: orders, delivery: deliveryOrders })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .where(and(...conditions));
+
+    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+  }
+
+  async getDeliveryOrdersByDriver(
+    driverId: string,
+    branchId?: string,
+  ): Promise<(DeliveryOrder & { order: Order })[]> {
+    const conditions = [
+      eq(deliveryOrders.driverId, driverId),
+      eq(orders.isDeliveryRequest, false),
+    ] as any[];
+    if (branchId) conditions.push(eq(orders.branchId, branchId));
+
+    const results = await db
+      .select({ order: orders, delivery: deliveryOrders })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .where(and(...conditions));
+
+    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+  }
+
+  async assignDeliveryOrder(
+    orderId: string,
+    driverId: string,
+  ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(
+          and(
+            eq(deliveryOrders.orderId, orderId),
+            eq(orders.isDeliveryRequest, false),
+          ),
+        );
+      if (!existing) return undefined;
+
+      const [updated] = await tx
+        .update(deliveryOrders)
+        .set({ driverId, updatedAt: sql`CURRENT_TIMESTAMP` })
+        .where(eq(deliveryOrders.id, existing.delivery.id))
+        .returning();
+
+      return { ...updated, order: existing.order };
+    });
+  }
+
+  async updateDeliveryStatus(
+    orderId: string,
+    update: Partial<DeliveryOrder>,
+  ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(
+          and(
+            eq(deliveryOrders.orderId, orderId),
+            eq(orders.isDeliveryRequest, false),
+          ),
+        );
+      if (!existing) return undefined;
+
+      const [updated] = await tx
+        .update(deliveryOrders)
+        .set({ ...update, updatedAt: sql`CURRENT_TIMESTAMP` })
+        .where(eq(deliveryOrders.id, existing.delivery.id))
+        .returning();
+
+      return { ...updated, order: existing.order };
+    });
   }
 
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {
