@@ -20,7 +20,14 @@ export function POSSidebar({ activeView, onViewChange }: POSSidebarProps) {
     { id: "packages", label: t.packages, icon: Package },
     { id: "reports", label: t.reports, icon: TrendingUp },
     ...(branch?.deliveryEnabled
-      ? [{ id: "delivery-orders", label: t.deliveryOrders, icon: Truck }]
+      ? [
+          { id: "delivery-orders", label: t.deliveryOrders, icon: Truck },
+          {
+            id: "delivery-order-requests",
+            label: t.deliveryOrderRequests,
+            icon: Truck,
+          },
+        ]
       : []),
     { id: "inventory", label: t.inventory, icon: Package },
     { id: "settings", label: t.settings, icon: Settings }

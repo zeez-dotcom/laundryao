@@ -16,6 +16,7 @@
     "logout": "Logout",
     "navigation": "Navigation",
     "deliveryOrders": "Delivery Orders",
+    "deliveryOrderRequests": "Delivery Order Requests",
     "inventory": "Inventory",
     "settings": "Settings",
     "packages": "Packages",
