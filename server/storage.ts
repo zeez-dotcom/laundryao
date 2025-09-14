@@ -337,6 +337,8 @@ export interface IStorage {
   createOrder(order: InsertOrder & { branchId: string }): Promise<Order>;
   updateOrder(id: string, order: Partial<Omit<Order, 'id' | 'orderNumber' | 'createdAt'>>): Promise<Order | undefined>;
   updateOrderStatus(id: string, status: string): Promise<Order | undefined>;
+  getDeliveryOrderRequests(branchId?: string): Promise<(Order & { delivery: DeliveryOrder })[]>;
+  acceptDeliveryOrderRequest(id: string): Promise<Order | undefined>;
 
   // Delivery orders
     getDeliveryOrders(branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
@@ -2864,7 +2866,7 @@ export class DatabaseStorage implements IStorage {
     sortBy: "createdAt" | "balanceDue" = "createdAt",
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
-    const conditions = [] as any[];
+    const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
     if (branchId) conditions.push(eq(orders.branchId, branchId));
 
     let query = db
@@ -2911,7 +2913,7 @@ export class DatabaseStorage implements IStorage {
     customerId: string,
     branchId?: string,
   ): Promise<(Order & { paid: string; remaining: string })[]> {
-    const conditions = [eq(orders.customerId, customerId)];
+    const conditions = [eq(orders.customerId, customerId), eq(orders.isDeliveryRequest, false)];
     if (branchId) conditions.push(eq(orders.branchId, branchId));
 
     const results = await db
@@ -2938,7 +2940,7 @@ export class DatabaseStorage implements IStorage {
     sortBy: "createdAt" | "balanceDue" = "createdAt",
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
-    const conditions = [eq(orders.status, status as any)];
+    const conditions = [eq(orders.status, status as any), eq(orders.isDeliveryRequest, false)];
     if (branchId) conditions.push(eq(orders.branchId, branchId));
 
     let query = db
@@ -2991,6 +2993,7 @@ export class DatabaseStorage implements IStorage {
         .values({
           ...orderData,
           orderNumber,
+          isDeliveryRequest: orderData.isDeliveryRequest ?? false,
         })
         .returning();
       return order;
@@ -3648,11 +3651,37 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async getDeliveryOrderRequests(branchId?: string): Promise<(Order & { delivery: DeliveryOrder })[]> {
+    const conditions = [eq(orders.isDeliveryRequest, true)] as any[];
+    if (branchId) conditions.push(eq(orders.branchId, branchId));
+
+    const results = await db
+      .select({ order: orders, delivery: deliveryOrders })
+      .from(orders)
+      .innerJoin(deliveryOrders, eq(deliveryOrders.orderId, orders.id))
+      .where(and(...conditions));
+
+    return results.map(({ order, delivery }) => ({ ...order, delivery }));
+  }
+
+  async acceptDeliveryOrderRequest(id: string): Promise<Order | undefined> {
+    const [updated] = await db
+      .update(orders)
+      .set({ isDeliveryRequest: false, updatedAt: new Date() })
+      .where(eq(orders.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {
-    let whereClause = eq(orders.branchId, branchId);
-    
+    let whereClause = and(eq(orders.branchId, branchId), eq(orders.isDeliveryRequest, false));
+
     if (options.status) {
-      whereClause = and(eq(orders.branchId, branchId), eq(orders.status, options.status as any)) as any;
+      whereClause = and(
+        eq(orders.branchId, branchId),
+        eq(orders.status, options.status as any),
+        eq(orders.isDeliveryRequest, false),
+      ) as any;
     }
 
     const query = db
