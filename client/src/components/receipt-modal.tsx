@@ -381,13 +381,29 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
     }
   };
 
-  const items = receiptData.items as any[];
+  const items = (receiptData.items as any[]) || [];
   const date = new Date(receiptData.createdAt);
   const isPayLater = receiptData.paymentMethod === 'pay_later';
   const identifier = receiptData.orderNumber || receiptData.id.slice(-6).toUpperCase();
-  
+
   // Initialize credit pool for stateful allocation
   const creditPool = createCreditPool();
+
+  // Pre-calculate credit usage and totals
+  let subtotalBeforeCredits = 0;
+  let totalCreditsValue = 0;
+  const creditUsages = items.map((item) => {
+    const itemTotal = item.total || 0;
+    subtotalBeforeCredits += itemTotal;
+    const usage = allocateCreditsForItem(item, creditPool);
+    const unitPrice =
+      usage.totalQuantity > 0 ? itemTotal / usage.totalQuantity : 0;
+    totalCreditsValue += usage.creditsUsed * unitPrice;
+    return usage;
+  });
+  const netSubtotal = subtotalBeforeCredits - totalCreditsValue;
+  const taxAmount = taxRate > 0 ? netSubtotal * taxRate : 0;
+  const finalTotal = netSubtotal + taxAmount;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -580,8 +596,7 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
               const arabicLine =
                 [clothing.ar, service.ar].filter(Boolean).join(" - ") +
                 ` × ${item.quantity}`;
-              // Allocate credits from the pool (stateful - updates the pool)
-              const creditUsage = allocateCreditsForItem(item, creditPool);
+              const creditUsage = creditUsages[index];
               return renderBilingualItemRow(
                 englishLine,
                 arabicLine,
@@ -596,18 +611,24 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
             {renderBilingualRow(
               tEn.subtotal,
               tAr.subtotal,
-              formatCurrency(receiptData.subtotal)
+              formatCurrency(subtotalBeforeCredits)
             )}
+            {totalCreditsValue > 0 &&
+              renderBilingualRow(
+                "Package Credits",
+                "أرصدة الباقة",
+                formatCurrency(-totalCreditsValue)
+              )}
             {taxRate > 0 &&
               renderBilingualRow(
                 tEn.tax,
                 tAr.tax,
-                formatCurrency(receiptData.tax)
+                formatCurrency(taxAmount)
               )}
             {renderBilingualRow(
               tEn.total,
               tAr.total,
-              formatCurrency(receiptData.total),
+              formatCurrency(finalTotal),
               'font-bold border-t pt-1'
             )}
           </div>
@@ -673,10 +694,10 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                     </div>
                     <div className="flex">
                       <p className="text-lg font-bold text-red-600 flex-1">
-                        {formatCurrency(receiptData.total)}
+                        {formatCurrency(finalTotal)}
                       </p>
                       <p className="text-lg font-bold text-red-600 flex-1 text-right" dir="rtl">
-                        {formatCurrency(receiptData.total)}
+                        {formatCurrency(finalTotal)}
                       </p>
                     </div>
                     <div className="flex">
