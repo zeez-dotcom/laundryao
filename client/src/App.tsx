@@ -1,0 +1,60 @@
+import { Switch, Route, useLocation } from "wouter";
+import { useEffect } from "react";
+import { queryClient } from "./lib/queryClient";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider, useAuthContext } from "@/context/AuthContext";
+import { useTranslationContext } from "@/context/TranslationContext";
+import { LoginForm } from "@/components/auth/LoginForm";
+import NotFound from "@/pages/not-found";
+import POS from "@/pages/pos";
+import AdminDashboard from "@/pages/admin-dashboard";
+import ForgotPasswordPage from "@/pages/forgot-password";
+import ResetPasswordPage from "@/pages/reset-password";
+import PackagesPage from "@/pages/packages";
+import CustomerOrderPage from "@/pages/customer-order";
+import CustomerAuthPage from "@/pages/customer-auth";
+import CustomerOrderingPage from "@/pages/customer-ordering";
+import LoadingScreen from "@/components/common/LoadingScreen";
+
+function Router() {
+  const { isAuthenticated, isLoading } = useAuthContext();
+  const [location, setLocation] = useLocation();
+  const { t } = useTranslationContext();
+
+  if (isLoading) {
+    return <LoadingScreen message={t.loading} />;
+  }
+
+  // Public routes - accessible without authentication
+  return (
+    <Switch>
+      <Route path="/order" component={CustomerOrderPage} />
+      <Route path="/customer-auth" component={CustomerAuthPage} />
+      <Route path="/customer-ordering" component={CustomerOrderingPage} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/reset-password/:token" component={ResetPasswordPage} />
+      {!isAuthenticated && <Route component={() => <LoginForm />} />}
+      {isAuthenticated && <Route path="/" component={POS} />}
+      {isAuthenticated && <Route path="/admin" component={AdminDashboard} />}
+      {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
+      <Route component={NotFound} />
+    </Switch>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </AuthProvider>
+    </QueryClientProvider>
+  );
+}
+
+export default App;

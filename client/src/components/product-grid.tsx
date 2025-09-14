@@ -1,0 +1,296 @@
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Search, ShoppingCart, Package } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useTranslation } from "@/lib/i18n";
+import { useAuthContext } from "@/context/AuthContext";
+import { ClothingItem, Category } from "@shared/schema";
+import LoadingScreen from "@/components/common/LoadingScreen";
+import EmptyState from "@/components/common/EmptyState";
+import { FixedSizeGrid as Grid, type GridChildComponentProps } from "react-window";
+
+function useDebounce<T>(value: T, delay = 300) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+interface ClothingItemGridProps {
+  onAddToCart: (clothingItem: ClothingItem) => void;
+  cartItemCount: number;
+  onToggleCart: () => void;
+  branchCode?: string;
+}
+
+export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCode }: ClothingItemGridProps) {
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearch = useDebounce(searchQuery);
+  const isMobile = useIsMobile();
+  const { t } = useTranslation();
+  const { isSuperAdmin, branch } = useAuthContext();
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+
+  // Helper function to check if imageUrl is valid
+  const isValidImageUrl = useCallback((imageUrl: string | null | undefined): boolean => {
+    if (!imageUrl) return false;
+    if (imageUrl === '[object Object]') return false;
+    if (typeof imageUrl !== 'string') return false;
+    return imageUrl.trim().length > 0;
+  }, []);
+
+  // Helper function to get image source with fallback
+  const getImageSrc = useCallback((item: ClothingItem): string => {
+    if (isValidImageUrl(item.imageUrl) && !failedImages.has(item.id)) {
+      const url = item.imageUrl!;
+      // Check if it's an external URL (starts with http:// or https://)
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return url; // Return external URLs as-is
+      }
+      // For relative paths, ensure they start with /
+      return url.startsWith('/') ? url : `/${url}`;
+    }
+    return '/uploads/placeholder-clothing.png';
+  }, [isValidImageUrl, failedImages]);
+
+  // Handle image load error
+  const handleImageError = useCallback((itemId: string) => {
+    setFailedImages(prev => new Set(prev).add(itemId));
+  }, []);
+
+  useEffect(() => {
+    const observer = new ResizeObserver(() => {
+      if (gridContainerRef.current) {
+        setGridSize({
+          width: gridContainerRef.current.clientWidth,
+          height: gridContainerRef.current.clientHeight,
+        });
+      }
+    });
+    if (gridContainerRef.current) {
+      observer.observe(gridContainerRef.current);
+      setGridSize({
+        width: gridContainerRef.current.clientWidth,
+        height: gridContainerRef.current.clientHeight,
+      });
+    }
+    return () => observer.disconnect();
+  }, []);
+
+  const {
+    data: fetchedCategories,
+    isLoading: categoriesLoading,
+    isError: categoriesError,
+  } = useQuery<Category[]>({
+    queryKey: ["/api/categories", "clothing"],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.append("type", "clothing");
+      const query = params.toString();
+      const response = await fetch(
+        `/api/categories${query ? `?${query}` : ""}`,
+        {
+          credentials: "include",
+        },
+      );
+      if (!response.ok) throw new Error(`Failed to fetch categories: ${response.status} ${response.statusText}`);
+      return response.json();
+    },
+  });
+
+  const categories: Category[] = categoriesError
+    ? []
+    : [{ id: "all", name: t.allItems, type: "clothing" } as Category, ...(fetchedCategories ?? [])];
+
+  const {
+    data: clothingItems,
+    isLoading: clothingItemsLoading,
+    isError: clothingItemsError,
+    error: clothingItemsErrorMessage,
+  } = useQuery<ClothingItem[]>({
+    queryKey: [
+      "/api/clothing-items",
+      selectedCategory,
+      debouncedSearch,
+      branchCode,
+    ],
+    enabled: searchQuery === debouncedSearch,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
+      if (debouncedSearch) params.append("search", debouncedSearch);
+      if (branchCode) params.append("branchCode", branchCode);
+      const query = params.toString();
+      const response = await fetch(`/api/clothing-items${query ? `?${query}` : ""}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error(`Failed to fetch clothing items: ${response.status} ${response.statusText}`);
+      return response.json();
+    },
+  });
+
+  const items = clothingItems ?? [];
+
+  const columnCount = useMemo(() => {
+    const w = gridSize.width;
+    if (w >= 1280) return 5;
+    if (w >= 1024) return 4;
+    if (w >= 640) return 3;
+    return 2;
+  }, [gridSize.width]);
+
+  const columnWidth = columnCount ? gridSize.width / columnCount : 0;
+  const rowHeight = 200; // approximate card height with padding
+  const rowCount = Math.ceil(items.length / columnCount);
+
+  if (categoriesLoading) {
+    return <LoadingScreen message={t.loadingCategories} />;
+  }
+
+  if (clothingItemsLoading) {
+    return <LoadingScreen message={t.loadingProducts} />;
+  }
+
+  if (clothingItemsError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 space-y-4">
+        <div className="text-red-600 text-center">
+          <p className="font-semibold">{t.loadingProducts || "Error loading products"}</p>
+          <p className="text-sm text-gray-600 mt-2">
+            {clothingItemsErrorMessage?.message || "Please try again later"}
+          </p>
+        </div>
+        <Button 
+          onClick={() => window.location.reload()}
+          variant="outline"
+          className="text-blue-600 border-blue-600 hover:bg-blue-50"
+        >
+          "Retry"
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-pos-background">
+      {/* Search and Categories */}
+      <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <Input
+              type="text"
+              placeholder={t.searchProducts || "Search items..."}
+              className="pl-10 py-3 text-base"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              data-testid="input-search-items"
+            />
+          </div>
+          {isMobile && (
+            <Button 
+              onClick={onToggleCart}
+              className="bg-pos-primary hover:bg-blue-700 text-white px-4 py-3 flex items-center space-x-2"
+            >
+              <ShoppingCart className="h-4 w-4" />
+              <span>{t.cart} ({cartItemCount})</span>
+            </Button>
+          )}
+        </div>
+        
+        {/* Category Tabs */}
+        {!categoriesError && (
+          <div className="flex space-x-1 mt-4 overflow-x-auto">
+            {categories.map((category) => (
+              <Button
+                key={category.id}
+                variant={selectedCategory === category.id ? "default" : "secondary"}
+                size="sm"
+                className={`whitespace-nowrap ${
+                  selectedCategory === category.id
+                    ? "bg-pos-primary hover:bg-blue-700 text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                onClick={() => setSelectedCategory(category.id)}
+              >
+                {category.name}
+              </Button>
+            ))}
+          </div>
+        )}
+        {categoriesError && (
+          <div className="text-center text-sm text-red-500 mt-4">
+            {t.categoriesUnavailable}
+          </div>
+        )}
+      </div>
+
+      {/* Clothing Items Grid */}
+      <div className="flex-1 p-4 overflow-hidden" ref={gridContainerRef}>
+        {items.length === 0 || gridSize.width === 0 ? (
+          <EmptyState
+            icon={<Package className="h-12 w-12 text-gray-400" />}
+            title={t.noProductsFound || "No items found"}
+          />
+        ) : (
+          <Grid
+            columnCount={columnCount}
+            columnWidth={columnWidth}
+            height={gridSize.height}
+            rowCount={rowCount}
+            rowHeight={rowHeight}
+            width={gridSize.width}
+          >
+            {({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
+              const index = rowIndex * columnCount + columnIndex;
+              const item = items[index];
+              if (!item) return null;
+              return (
+                <div style={style} className="p-2">
+                  <Card
+                    key={item.id}
+                    className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
+                    onClick={() => onAddToCart(item)}
+                    data-testid={`card-clothing-item-${item.id}`}
+                  >
+                    <div className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center">
+                      <img
+                        src={getImageSrc(item)}
+                        alt={item.name}
+                        loading="lazy"
+                        className="w-full h-full object-cover"
+                        onError={() => handleImageError(item.id)}
+                        data-testid={`img-clothing-item-${item.id}`}
+                      />
+                    </div>
+                    <CardContent className="p-3">
+                      <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
+                      {item.description && (
+                        <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
+                      )}
+                      <div className="flex justify-center items-center">
+                        <span className="text-sm text-pos-primary font-medium">
+                          {t.selectService || "Select Service"}
+                        </span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              );
+            }}
+          </Grid>
+        )}
+      </div>
+    </div>
+  );
+}

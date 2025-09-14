@@ -1,0 +1,624 @@
+import React, { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { useAuthContext } from "@/context/AuthContext";
+import { useCurrency } from "@/lib/currency";
+import { apiRequest } from "@/lib/queryClient";
+import { OrderStatus, DeliveryStatus, DeliveryMode, Order, DeliveryOrder } from "@shared/schema";
+import { 
+  Package,
+  Clock,
+  CheckCircle,
+  Truck,
+  MapPin,
+  User,
+  Phone,
+  Calendar,
+  ArrowRight,
+  Eye,
+  Edit,
+  RefreshCw,
+  Filter,
+  Search,
+  Home,
+  Car,
+  ShoppingCart
+} from "lucide-react";
+
+// Types are imported from @shared/schema.ts above
+
+const statusConfig = {
+  received: { 
+    label: "Received", 
+    color: "bg-blue-100 text-blue-800", 
+    icon: Package,
+    description: "Order received, awaiting processing"
+  },
+  start_processing: { 
+    label: "Start Processing", 
+    color: "bg-yellow-100 text-yellow-800", 
+    icon: Clock,
+    description: "Order ready to start processing"
+  },
+  processing: { 
+    label: "Processing", 
+    color: "bg-orange-100 text-orange-800", 
+    icon: RefreshCw,
+    description: "Items being processed"
+  },
+  ready: { 
+    label: "Ready", 
+    color: "bg-teal-100 text-teal-800", 
+    icon: CheckCircle,
+    description: "Items ready for pickup/delivery"
+  },
+  handed_over: { 
+    label: "Handed Over", 
+    color: "bg-purple-100 text-purple-800", 
+    icon: Truck,
+    description: "Items handed over for delivery"
+  },
+  completed: { 
+    label: "Completed", 
+    color: "bg-green-100 text-green-800", 
+    icon: CheckCircle,
+    description: "Order completed"
+  },
+};
+
+const deliveryStatusConfig = {
+  pending: {
+    label: "Pending",
+    color: "bg-yellow-100 text-yellow-800",
+    icon: Clock,
+    description: "Awaiting driver assignment"
+  },
+  assigned: {
+    label: "Assigned",
+    color: "bg-blue-100 text-blue-800",
+    icon: User,
+    description: "Driver assigned"
+  },
+  picked_up: {
+    label: "Picked Up",
+    color: "bg-indigo-100 text-indigo-800",
+    icon: Package,
+    description: "Items picked up from customer"
+  },
+  in_transit: {
+    label: "In Transit",
+    color: "bg-purple-100 text-purple-800",
+    icon: Truck,
+    description: "Items being delivered"
+  },
+  delivered: {
+    label: "Delivered",
+    color: "bg-green-100 text-green-800",
+    icon: CheckCircle,
+    description: "Items delivered to customer"
+  },
+  cancelled: {
+    label: "Cancelled",
+    color: "bg-red-100 text-red-800",
+    icon: ArrowRight,
+    description: "Delivery cancelled"
+  },
+};
+
+const nextStatusMap: Record<OrderStatus, OrderStatus | null> = {
+  received: "start_processing",
+  start_processing: "processing",
+  processing: "ready",
+  ready: "handed_over",
+  handed_over: "completed",
+  completed: null,
+};
+
+const nextDeliveryStatusMap: Record<DeliveryStatus, DeliveryStatus | null> = {
+  pending: "assigned",
+  assigned: "picked_up",
+  picked_up: "in_transit",
+  in_transit: "delivered",
+  delivered: null,
+  cancelled: null,
+};
+
+export function OrderManagementDashboard() {
+  const { user, branch } = useAuthContext();
+  const { formatCurrency } = useCurrency();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [orderTypeFilter, setOrderTypeFilter] = useState<string>("all"); // all, regular, delivery
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isStatusUpdateDialogOpen, setIsStatusUpdateDialogOpen] = useState(false);
+  const [updateNotes, setUpdateNotes] = useState("");
+
+  const { data: orders = [], isLoading } = useQuery<Order[]>({
+    queryKey: ["/api/orders", branch?.id, statusFilter, orderTypeFilter],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (branch?.id) params.append("branchId", branch.id);
+      if (statusFilter !== "all") params.append("status", statusFilter);
+      if (orderTypeFilter !== "all") params.append("includeDelivery", "true");
+      
+      const response = await apiRequest("GET", `/api/orders?${params.toString()}`);
+      return response.json();
+    },
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ orderId, status, notes }: { orderId: string, status: OrderStatus, notes?: string }) => {
+      const response = await apiRequest("PUT", `/api/orders/${orderId}/status`, { 
+        status, 
+        notes,
+        updatedBy: user?.id 
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Status updated successfully",
+        description: "The order status has been updated.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      setIsStatusUpdateDialogOpen(false);
+      setUpdateNotes("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to update order status",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const filteredOrders = orders.filter(order => {
+    const matchesSearch = 
+      order.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      order.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      order.customerPhone.includes(searchQuery);
+    
+    const matchesType = orderTypeFilter === "all" || 
+      (orderTypeFilter === "delivery" && order.deliveryOrder) ||
+      (orderTypeFilter === "regular" && !order.deliveryOrder);
+    
+    return matchesSearch && matchesType;
+  });
+
+  const handleStatusUpdate = (order: Order) => {
+    const nextStatus = nextStatusMap[order.status];
+    if (!nextStatus) {
+      toast({
+        title: "No next status",
+        description: "This order is already at the final status.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSelectedOrder(order);
+    setIsStatusUpdateDialogOpen(true);
+  };
+
+  const confirmStatusUpdate = () => {
+    if (!selectedOrder) return;
+    
+    const nextStatus = nextStatusMap[selectedOrder.status];
+    if (!nextStatus) return;
+
+    updateStatusMutation.mutate({
+      orderId: selectedOrder.id,
+      status: nextStatus,
+      notes: updateNotes.trim() || undefined,
+    });
+  };
+
+  const getStatusBadge = (status: OrderStatus) => {
+    const config = statusConfig[status];
+    const Icon = config.icon;
+    
+    return (
+      <Badge className={`${config.color} flex items-center gap-1`}>
+        <Icon className="h-3 w-3" />
+        {config.label}
+      </Badge>
+    );
+  };
+
+  const getDeliveryStatusBadge = (status: DeliveryStatus) => {
+    const config = deliveryStatusConfig[status];
+    const Icon = config.icon;
+    
+    return (
+      <Badge variant="outline" className={`${config.color} flex items-center gap-1`}>
+        <Icon className="h-3 w-3" />
+        {config.label}
+      </Badge>
+    );
+  };
+
+  const getDeliveryIcon = (mode?: DeliveryMode) => {
+    if (!mode) return null;
+    return mode === "driver_pickup" ? (
+      <Car className="h-4 w-4 text-blue-600" title="Driver Pickup" />
+    ) : (
+      <ShoppingCart className="h-4 w-4 text-green-600" title="Customer Cart" />
+    );
+  };
+
+  if (!user || user.role === "driver") {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <p className="text-center text-muted-foreground">
+            Access denied. Only branch staff can access order management.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Order Management Dashboard
+          </CardTitle>
+          <CardDescription>
+            Track and manage orders throughout the entire workflow process
+          </CardDescription>
+        </CardHeader>
+      </Card>
+
+      {/* Filters and Search */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by order number, customer name, or phone..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Select value={orderTypeFilter} onValueChange={setOrderTypeFilter}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Order type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="regular">Regular</SelectItem>
+                  <SelectItem value="delivery">Delivery</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  {Object.entries(statusConfig).map(([status, config]) => (
+                    <SelectItem key={status} value={status}>
+                      {config.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Orders List */}
+      <div className="grid gap-4">
+        {isLoading ? (
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-center">
+                <RefreshCw className="h-6 w-6 animate-spin mr-2" />
+                Loading orders...
+              </div>
+            </CardContent>
+          </Card>
+        ) : filteredOrders.length === 0 ? (
+          <Card>
+            <CardContent className="p-6">
+              <div className="text-center text-muted-foreground">
+                {searchQuery || statusFilter !== "all" 
+                  ? "No orders found matching your criteria" 
+                  : "No orders found"
+                }
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          filteredOrders.map((order) => (
+            <Card key={order.id} className="hover:shadow-md transition-shadow">
+              <CardContent className="p-6">
+                <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                  {/* Order Info */}
+                  <div className="flex-1 space-y-2">
+                    <div className="flex items-center gap-3">
+                      <div className="font-semibold text-lg">#{order.orderNumber}</div>
+                      {getDeliveryIcon(order.deliveryOrder?.deliveryMode)}
+                      {getStatusBadge(order.status)}
+                      {order.deliveryOrder && getDeliveryStatusBadge(order.deliveryOrder.deliveryStatus)}
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2">
+                        <User className="h-4 w-4" />
+                        {order.customerName}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4" />
+                        {order.customerPhone}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4" />
+                        {new Date(order.createdAt).toLocaleDateString()}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Package className="h-4 w-4" />
+                        {order.items.length} items - {formatCurrency(Number(order.total))}
+                      </div>
+                    </div>
+
+                    <div className="text-sm text-muted-foreground">
+                      <strong>Ready by:</strong> {new Date(order.promisedReadyDate).toLocaleDateString()}
+                    </div>
+
+                    {/* Delivery Information */}
+                    {order.deliveryOrder && (
+                      <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <div className="flex items-center gap-2 font-medium text-blue-800 dark:text-blue-200">
+                          <Truck className="h-4 w-4" />
+                          Delivery Order
+                        </div>
+                        
+                        {order.deliveryOrder.deliveryAddress && (
+                          <div className="text-sm">
+                            <div className="flex items-start gap-2">
+                              <MapPin className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                              <div>
+                                <div className="font-medium">{order.deliveryOrder.deliveryAddress.label}</div>
+                                <div className="text-muted-foreground">{order.deliveryOrder.deliveryAddress.address}</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {order.deliveryOrder.deliveryFee && (
+                          <div className="text-sm flex items-center gap-2">
+                            <span className="font-medium">Delivery Fee:</span>
+                            <span>{formatCurrency(order.deliveryOrder.deliveryFee)}</span>
+                          </div>
+                        )}
+                        
+                        {order.deliveryOrder.deliveryInstructions && (
+                          <div className="text-sm">
+                            <span className="font-medium">Instructions:</span> {order.deliveryOrder.deliveryInstructions}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {order.notes && (
+                      <div className="text-sm bg-muted p-2 rounded">
+                        <strong>Notes:</strong> {order.notes}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Eye className="h-4 w-4 mr-2" />
+                          View Details
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                          <DialogTitle>Order Details - #{order.orderNumber}</DialogTitle>
+                          <DialogDescription>
+                            Complete order information and status history
+                          </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label>Customer</Label>
+                              <div className="font-medium">{order.customerName}</div>
+                              <div className="text-sm text-muted-foreground">{order.customerPhone}</div>
+                            </div>
+                            <div>
+                              <Label>Status</Label>
+                              <div className="mt-1">{getStatusBadge(order.status)}</div>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <Label>Order Items</Label>
+                            <div className="mt-2 space-y-2">
+                              {order.items.map((item, index) => (
+                                <div key={index} className="flex justify-between items-center p-2 bg-muted rounded">
+                                  <div>
+                                    <div className="font-medium">{item.clothingItem?.nameEn || 'Item'}</div>
+                                    <div className="text-sm text-muted-foreground">
+                                      {item.service?.nameEn || 'Service'} × {item.quantity}
+                                    </div>
+                                  </div>
+                                  <div className="font-medium">{formatCurrency(Number(item.total))}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Delivery Information in Dialog */}
+                          {order.deliveryOrder && (
+                            <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                              <div className="flex items-center gap-2 font-medium text-blue-800 dark:text-blue-200 mb-3">
+                                <Truck className="h-4 w-4" />
+                                Delivery Information
+                              </div>
+                              
+                              <div className="space-y-3">
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <Label>Delivery Mode</Label>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      {getDeliveryIcon(order.deliveryOrder.deliveryMode)}
+                                      <span className="capitalize">
+                                        {order.deliveryOrder.deliveryMode.replace('_', ' ')}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <Label>Delivery Status</Label>
+                                    <div className="mt-1">{getDeliveryStatusBadge(order.deliveryOrder.deliveryStatus)}</div>
+                                  </div>
+                                </div>
+                                
+                                {order.deliveryOrder.deliveryAddress && (
+                                  <div>
+                                    <Label>Delivery Address</Label>
+                                    <div className="mt-1 p-2 bg-white dark:bg-gray-800 rounded border">
+                                      <div className="font-medium">{order.deliveryOrder.deliveryAddress.label}</div>
+                                      <div className="text-sm text-muted-foreground">{order.deliveryOrder.deliveryAddress.address}</div>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {order.deliveryOrder.deliveryFee && (
+                                  <div>
+                                    <Label>Delivery Fee</Label>
+                                    <div className="font-medium">{formatCurrency(order.deliveryOrder.deliveryFee)}</div>
+                                  </div>
+                                )}
+                                
+                                {order.deliveryOrder.deliveryInstructions && (
+                                  <div>
+                                    <Label>Delivery Instructions</Label>
+                                    <div className="text-sm mt-1 p-2 bg-white dark:bg-gray-800 rounded border">
+                                      {order.deliveryOrder.deliveryInstructions}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-3 gap-4 pt-2 border-t">
+                            <div>
+                              <Label>Subtotal</Label>
+                              <div className="font-medium">{formatCurrency(Number(order.subtotal))}</div>
+                            </div>
+                            <div>
+                              <Label>Tax</Label>
+                              <div className="font-medium">{formatCurrency(Number(order.tax))}</div>
+                            </div>
+                            <div>
+                              <Label>Total</Label>
+                              <div className="font-bold text-lg">{formatCurrency(Number(order.total))}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
+
+                    {nextStatusMap[order.status] && (
+                      <Button 
+                        onClick={() => handleStatusUpdate(order)}
+                        disabled={updateStatusMutation.isPending}
+                        size="sm"
+                      >
+                        <ArrowRight className="h-4 w-4 mr-2" />
+                        Next Status
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        )}
+      </div>
+
+      {/* Status Update Dialog */}
+      <Dialog open={isStatusUpdateDialogOpen} onOpenChange={setIsStatusUpdateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Update Order Status</DialogTitle>
+            <DialogDescription>
+              {selectedOrder && (
+                <>
+                  Moving order #{selectedOrder.orderNumber} from{" "}
+                  <strong>{statusConfig[selectedOrder.status].label}</strong> to{" "}
+                  <strong>{nextStatusMap[selectedOrder.status] && statusConfig[nextStatusMap[selectedOrder.status]!].label}</strong>
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="notes">Update Notes (Optional)</Label>
+              <Textarea
+                id="notes"
+                placeholder="Add any notes about this status update..."
+                value={updateNotes}
+                onChange={(e) => setUpdateNotes(e.target.value)}
+                rows={3}
+              />
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <Button 
+                variant="outline" 
+                onClick={() => setIsStatusUpdateDialogOpen(false)}
+                disabled={updateStatusMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={confirmStatusUpdate}
+                disabled={updateStatusMutation.isPending}
+              >
+                {updateStatusMutation.isPending ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  "Update Status"
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

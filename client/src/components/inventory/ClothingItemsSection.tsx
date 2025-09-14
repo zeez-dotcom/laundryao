@@ -1,0 +1,559 @@
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Plus, Edit, Trash2, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+} from "@/components/ui/form";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  ClothingItem,
+  LaundryService,
+  insertClothingItemSchema,
+  insertItemServicePriceSchema,
+} from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
+import { useTranslation } from "@/lib/i18n";
+import { useToast } from "@/hooks/use-toast";
+
+interface ClothingItemPayload {
+  name: string;
+  description?: string;
+  categoryId: string;
+  imageUrl?: string;
+}
+
+export function ClothingItemsSection() {
+  const [addingClothing, setAddingClothing] = useState(false);
+  const [editingClothing, setEditingClothing] = useState<ClothingItem | null>(
+    null,
+  );
+  const [priceItemId, setPriceItemId] = useState<string | null>(null);
+  const [clothingToDelete, setClothingToDelete] = useState<string | null>(null);
+  const [clothingSearch, setClothingSearch] = useState("");
+
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: clothingItems = [] } = useQuery({
+    queryKey: ["/api/clothing-items"],
+    queryFn: async () => {
+      const response = await fetch("/api/clothing-items", {
+        credentials: "include",
+      });
+      return response.json();
+    },
+  }) as { data: ClothingItem[] };
+
+  const { data: services = [] } = useQuery({
+    queryKey: ["/api/laundry-services"],
+    queryFn: async () => {
+      const response = await fetch("/api/laundry-services", {
+        credentials: "include",
+      });
+      return response.json();
+    },
+  }) as { data: LaundryService[] };
+
+  const clothingForm = useForm<ClothingItemPayload>({
+    resolver: zodResolver(insertClothingItemSchema),
+    defaultValues: {
+      name: "",
+      description: "",
+      categoryId: "",
+      imageUrl: "",
+    },
+  });
+
+  const priceForm = useForm<{
+    clothingItemId: string;
+    serviceId: string;
+    price: string;
+  }>({
+    resolver: zodResolver(insertItemServicePriceSchema),
+    defaultValues: { clothingItemId: "", serviceId: "", price: "" },
+  });
+
+  const createClothingMutation = useMutation({
+    mutationFn: async (data: ClothingItemPayload) => {
+      const response = await apiRequest("POST", "/api/clothing-items", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clothing-items"] });
+      setAddingClothing(false);
+      clothingForm.reset();
+      toast({ title: t.clothingItemCreated });
+    },
+  });
+
+  const updateClothingMutation = useMutation({
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: ClothingItemPayload;
+    }) => {
+      const response = await apiRequest(
+        "PUT",
+        `/api/clothing-items/${id}`,
+        data,
+      );
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clothing-items"] });
+      setEditingClothing(null);
+      clothingForm.reset();
+      toast({ title: t.clothingItemUpdated });
+    },
+  });
+
+  const deleteClothingMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await apiRequest("DELETE", `/api/clothing-items/${id}`);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/clothing-items"] });
+      toast({ title: t.clothingItemDeleted });
+    },
+  });
+
+  const priceMutation = useMutation({
+    mutationFn: async (data: {
+      clothingItemId: string;
+      serviceId: string;
+      price: string;
+    }) => {
+      const response = await apiRequest(
+        "POST",
+        "/api/item-service-prices",
+        data,
+      );
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/item-service-prices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/laundry-services"] });
+      setPriceItemId(null);
+      priceForm.reset();
+      toast({ title: "Price saved successfully" });
+    },
+  });
+
+  const handleClothingSubmit = (data: ClothingItemPayload) => {
+    if (editingClothing) {
+      updateClothingMutation.mutate({ id: editingClothing.id, data });
+    } else {
+      createClothingMutation.mutate(data);
+    }
+  };
+
+  const handleAddClothing = () => {
+    setAddingClothing(true);
+    setEditingClothing(null);
+    clothingForm.reset({
+      name: "",
+      description: "",
+      categoryId: "",
+      imageUrl: "",
+    });
+  };
+
+  const handleEditClothing = (item: ClothingItem) => {
+    setEditingClothing(item);
+    setAddingClothing(false);
+    clothingForm.reset({
+      name: item.name,
+      description: item.description || "",
+      categoryId: item.categoryId,
+      imageUrl: item.imageUrl || "",
+    });
+  };
+
+  const handleDeleteClothing = (id: string) => {
+    setClothingToDelete(id);
+  };
+
+  const handlePriceSubmit = (data: {
+    clothingItemId: string;
+    serviceId: string;
+    price: string;
+  }) => {
+    priceMutation.mutate(data);
+  };
+
+  const filteredClothing = clothingItems.filter(
+    (item) =>
+      item.name.toLowerCase().includes(clothingSearch.toLowerCase()) ||
+      item.categoryId.toLowerCase().includes(clothingSearch.toLowerCase()),
+  );
+
+  return (
+    <>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold">
+          Clothing Items ({filteredClothing.length})
+        </h2>
+        <div className="flex items-center space-x-2">
+          <div className="relative w-64">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+            <Input
+              placeholder="Search clothing"
+              value={clothingSearch}
+              onChange={(e) => setClothingSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+          <Button
+            className="bg-pos-primary hover:bg-blue-700"
+            onClick={handleAddClothing}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Clothing Item
+          </Button>
+        </div>
+      </div>
+
+      {addingClothing && (
+        <Card className="mt-4">
+          <CardContent className="p-4">
+            <Form {...clothingForm}>
+              <form
+                onSubmit={clothingForm.handleSubmit(handleClothingSubmit)}
+                className="space-y-4"
+              >
+                <FormField
+                  control={clothingForm.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., Pants, Shirt" {...field} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={clothingForm.control}
+                  name="description"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Brief description..."
+                          {...field}
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={clothingForm.control}
+                  name="categoryId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Category</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select category" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="pants">Pants</SelectItem>
+                          <SelectItem value="shirts">Shirts</SelectItem>
+                          <SelectItem value="traditional">
+                            Traditional
+                          </SelectItem>
+                          <SelectItem value="dresses">Dresses</SelectItem>
+                          <SelectItem value="formal">Formal</SelectItem>
+                          <SelectItem value="linens">Linens</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={clothingForm.control}
+                  name="imageUrl"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Image URL (Optional)</FormLabel>
+                      <FormControl>
+                        <Input placeholder="https://..." {...field} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <div className="flex justify-end space-x-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setAddingClothing(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="bg-pos-secondary hover:bg-green-600"
+                  >
+                    Create Item
+                  </Button>
+                </div>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+        {filteredClothing.map((item) => (
+          <Card key={item.id} className="hover:shadow-md transition-shadow">
+            <CardContent className="p-4">
+              {editingClothing?.id === item.id ? (
+                <Form {...clothingForm}>
+                  <form
+                    onSubmit={clothingForm.handleSubmit(handleClothingSubmit)}
+                    className="space-y-2"
+                  >
+                    <FormField
+                      control={clothingForm.control}
+                      name="name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Name</FormLabel>
+                          <FormControl>
+                            <Input {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
+                      name="description"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description</FormLabel>
+                          <FormControl>
+                            <Textarea {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
+                      name="categoryId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Category</FormLabel>
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select category" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="pants">Pants</SelectItem>
+                              <SelectItem value="shirts">Shirts</SelectItem>
+                              <SelectItem value="traditional">
+                                Traditional
+                              </SelectItem>
+                              <SelectItem value="dresses">Dresses</SelectItem>
+                              <SelectItem value="formal">Formal</SelectItem>
+                              <SelectItem value="linens">Linens</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
+                      name="imageUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Image URL (Optional)</FormLabel>
+                          <FormControl>
+                            <Input {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <div className="flex justify-end space-x-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => {
+                          setEditingClothing(null);
+                          clothingForm.reset();
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        className="bg-pos-secondary hover:bg-green-600"
+                      >
+                        Update Item
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              ) : (
+                <div>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-gray-900 mb-1">
+                        {item.name}
+                      </h3>
+                      <p className="text-sm text-gray-600 mb-2">
+                        {item.description}
+                      </p>
+                      <span className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded capitalize">
+                        {item.categoryId}
+                      </span>
+                    </div>
+                    <div className="flex space-x-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEditClothing(item)}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteClothing(item.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setPriceItemId(item.id);
+                          priceForm.reset({
+                            clothingItemId: item.id,
+                            serviceId: "",
+                            price: "",
+                          });
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {priceItemId === item.id && (
+                    <Form {...priceForm}>
+                      <form
+                        onSubmit={priceForm.handleSubmit(handlePriceSubmit)}
+                        className="space-y-2 mt-2"
+                      >
+                        <FormField
+                          control={priceForm.control}
+                          name="serviceId"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Service</FormLabel>
+                              <Select
+                                onValueChange={field.onChange}
+                                value={field.value}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select service" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {services.map((svc) => (
+                                    <SelectItem key={svc.id} value={svc.id}>
+                                      {svc.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={priceForm.control}
+                          name="price"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Price</FormLabel>
+                              <FormControl>
+                                <Input type="number" step="0.01" {...field} />
+                              </FormControl>
+                            </FormItem>
+                          )}
+                        />
+                        <div className="flex justify-end space-x-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => setPriceItemId(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            type="submit"
+                            className="bg-pos-secondary hover:bg-green-600"
+                          >
+                            Save
+                          </Button>
+                        </div>
+                      </form>
+                    </Form>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <ConfirmDialog
+        open={!!clothingToDelete}
+        onOpenChange={(open) => !open && setClothingToDelete(null)}
+        title={t.delete}
+        description={t.confirmDeleteClothing}
+        confirmText={t.delete}
+        cancelText={t.cancel}
+        onConfirm={() => {
+          if (clothingToDelete) {
+            deleteClothingMutation.mutate(clothingToDelete);
+          }
+          setClothingToDelete(null);
+        }}
+      />
+    </>
+  );
+}

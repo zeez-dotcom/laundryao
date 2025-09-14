@@ -1,0 +1,3911 @@
+import type { Express } from "express";
+import { createServer, type Server } from "http";
+import {
+  storage,
+  type ParsedRow,
+  generateCustomerPasswordOtp,
+  verifyCustomerPasswordOtp,
+} from "./storage";
+import { db } from "./db";
+import {
+  insertTransactionSchema,
+  insertClothingItemSchema,
+  insertLaundryServiceSchema,
+  insertProductSchema,
+  insertUserSchema,
+  updateUserSchema,
+  insertCategorySchema,
+  insertBranchSchema,
+  updateBranchSchema,
+  insertCustomerSchema,
+  insertCustomerAddressSchema,
+  insertOrderSchema,
+  packageUsageSchema,
+  packageUsagesSchema,
+  insertPackageSchema,
+  clothingItems,
+  laundryServices,
+  itemServicePrices,
+  users,
+  insertPaymentSchema,
+  insertSecuritySettingsSchema,
+  insertItemServicePriceSchema,
+  type InsertPayment,
+  type User,
+  type ItemType,
+  type ClothingItem,
+} from "@shared/schema";
+import { loginSchema } from "@shared/schemas";
+import {
+  setupAuth,
+  requireAuth,
+  requireSuperAdmin,
+  requireAdminOrSuperAdmin,
+  getSession,
+} from "./auth";
+import { seedSuperAdmin } from "./seed-superadmin";
+import { seedPackages } from "./seed-packages";
+import { seedBranches } from "./seed-branches";
+import passport from "passport";
+import type { UserWithBranch } from "@shared/schema";
+import type { IStorage } from "./storage";
+import multer from "multer";
+import ExcelJS from "exceljs";
+import { z, ZodError } from "zod";
+import { eq, sql, and, inArray } from "drizzle-orm";
+import {
+  generateCatalogTemplate,
+  parsePrice,
+  SERVICE_HEADERS,
+  parseWorksheetData,
+  parseProductRow,
+  extractStringValue,
+  parsePricingMatrixWorksheet,
+} from "./utils/excel";
+import logger from "./logger";
+import { NotificationService } from "./services/notification";
+import { registerHealthRoutes } from "./routes/health";
+import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
+import { passwordSchema } from "@shared/schemas";
+import path from "path";
+import fs from "fs";
+
+const upload = multer();
+const uploadDir = path.resolve(import.meta.dirname, "uploads");
+fs.mkdirSync(uploadDir, { recursive: true });
+const uploadLogo = multer({
+  storage: multer.diskStorage({
+    destination: uploadDir,
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname);
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`);
+    },
+  }),
+});
+
+const passwordResetTokens = new Map<string, { userId: string; expires: Date }>();
+
+// Enhanced security: Comprehensive rate limiting for all auth endpoints
+interface RateLimitRecord {
+  count: number;
+  windowStart: number;
+  lastAttempt: number;
+  lockoutUntil?: number; // For temporary lockouts
+}
+
+const authAttempts = new Map<string, RateLimitRecord>();
+let lastCityFetch = 0;
+
+// Security constants for rate limiting
+const RATE_LIMIT_CONFIG = {
+  LOGIN_WINDOW_MS: 15 * 60 * 1000, // 15 minutes
+  LOGIN_MAX_ATTEMPTS: 5,
+  RESET_WINDOW_MS: 60 * 60 * 1000, // 1 hour
+  RESET_MAX_ATTEMPTS: 3,
+  REGISTER_WINDOW_MS: 60 * 60 * 1000, // 1 hour
+  REGISTER_MAX_ATTEMPTS: 5,
+  LOCKOUT_DURATION_MS: 30 * 60 * 1000, // 30 minutes lockout
+} as const;
+
+/**
+ * Enhanced rate limiting with exponential backoff and temporary lockouts
+ * Protects against brute-force attacks on authentication endpoints
+ */
+function isRateLimited(key: string, type: 'login' | 'reset' | 'register' = 'reset'): boolean {
+  const now = Date.now();
+  const record = authAttempts.get(key);
+  
+  // Select configuration based on endpoint type
+  const config = {
+    login: { window: RATE_LIMIT_CONFIG.LOGIN_WINDOW_MS, maxAttempts: RATE_LIMIT_CONFIG.LOGIN_MAX_ATTEMPTS },
+    reset: { window: RATE_LIMIT_CONFIG.RESET_WINDOW_MS, maxAttempts: RATE_LIMIT_CONFIG.RESET_MAX_ATTEMPTS },
+    register: { window: RATE_LIMIT_CONFIG.REGISTER_WINDOW_MS, maxAttempts: RATE_LIMIT_CONFIG.REGISTER_MAX_ATTEMPTS },
+  }[type];
+  
+  // Check if currently locked out
+  if (record?.lockoutUntil && now < record.lockoutUntil) {
+    return true;
+  }
+  
+  // Reset window if expired or no record exists
+  if (!record || now - record.windowStart > config.window) {
+    authAttempts.set(key, {
+      count: 1,
+      windowStart: now,
+      lastAttempt: now,
+    });
+    return false;
+  }
+  
+  // Check if max attempts exceeded
+  if (record.count >= config.maxAttempts) {
+    // Implement temporary lockout for repeated violations
+    record.lockoutUntil = now + RATE_LIMIT_CONFIG.LOCKOUT_DURATION_MS;
+    authAttempts.set(key, record);
+    logger.warn({ key, type, attempts: record.count }, 'Rate limit exceeded - temporary lockout applied');
+    return true;
+  }
+  
+  // Increment attempt counter
+  record.count++;
+  record.lastAttempt = now;
+  authAttempts.set(key, record);
+  return false;
+}
+
+/**
+ * Clear rate limiting record on successful authentication
+ */
+function clearRateLimit(key: string): void {
+  authAttempts.delete(key);
+}
+
+/**
+ * Apply package modification logic to show per-transaction usage instead of cumulative.
+ * This ensures receipts display only the credits used in the current transaction.
+ * Now supports multiple package usages for comprehensive credit tracking.
+ */
+function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
+  if (!packageUsages || !packages.length) {
+    return packages;
+  }
+
+  // Build a comprehensive usage map across all packages
+  const usedMap = new Map<string, number>();
+  
+  packageUsages.forEach((packageUsage: any) => {
+    packageUsage.items?.forEach((item: any) => {
+      const key = `${item.serviceId}:${item.clothingItemId}`;
+      const currentUsed = usedMap.get(key) || 0;
+      usedMap.set(key, currentUsed + item.quantity);
+    });
+  });
+
+  // Apply usage to each package based on packageId
+  const packageUsageMap = new Map(packageUsages.map((pu: any) => [pu.packageId, pu]));
+  
+  return packages.map((pkg: any) => {
+    const packageUsage = packageUsageMap.get(pkg.id);
+    if (!packageUsage) {
+      return pkg; // No usage for this package
+    }
+
+    const packageUsedMap = new Map(
+      packageUsage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+    );
+
+    return {
+      ...pkg,
+      items: pkg.items?.map((item: any) => ({
+        ...item,
+        used: packageUsedMap.get(`${item.serviceId}:${item.clothingItemId}`) || 0,
+      })),
+    };
+  });
+}
+
+/**
+ * Compute packageUsages server-side based on customer's available packages and cart items.
+ * Uses multiple packages to maximize credit utilization and prevent unnecessary cash charges.
+ * This prevents client-side tampering with financial credit data.
+ */
+async function computePackageUsage(
+  customerId: string,
+  cartItems: any[],
+  storage: IStorage
+): Promise<{ packageUsages: any[]; usedCredits: { customerPackageId: string; serviceId: string; clothingItemId: string; quantity: number }[] } | null> {
+  try {
+    // Get customer's available packages with current usage/balance
+    const customerPackages = await storage.getCustomerPackagesWithUsage(customerId);
+    if (!customerPackages?.length) {
+      return null;
+    }
+
+    const usedCredits: { customerPackageId: string; serviceId: string; clothingItemId: string; quantity: number }[] = [];
+    const packageUsageMap = new Map<string, { packageId: string; items: { serviceId: string; clothingItemId: string; quantity: number }[] }>();
+
+    // Process each cart item to see if we can use package credits
+    for (const cartItem of cartItems) {
+      if (!cartItem.serviceId || !cartItem.clothingItemId || !cartItem.quantity) {
+        continue;
+      }
+
+      let remainingQuantity = cartItem.quantity;
+
+      // Continue using credits from multiple packages until the item quantity is fully covered
+      for (const customerPackage of customerPackages) {
+        if (remainingQuantity <= 0) break; // No more quantity to cover
+        if (!customerPackage.items?.length) continue;
+
+        const packageItem = customerPackage.items.find(
+          (item: any) => 
+            item.serviceId === cartItem.serviceId && 
+            item.clothingItemId === cartItem.clothingItemId &&
+            item.balance > 0
+        );
+
+        if (packageItem) {
+          const creditsToUse = Math.min(remainingQuantity, packageItem.balance);
+          if (creditsToUse > 0) {
+            // Track used credits for database updates
+            usedCredits.push({
+              customerPackageId: customerPackage.id,
+              serviceId: cartItem.serviceId,
+              clothingItemId: cartItem.clothingItemId,
+              quantity: creditsToUse
+            });
+
+            // Build package usage tracking for receipt display
+            const packageId = customerPackage.packageId;
+            if (!packageUsageMap.has(packageId)) {
+              packageUsageMap.set(packageId, {
+                packageId,
+                items: []
+              });
+            }
+            
+            const packageUsage = packageUsageMap.get(packageId)!;
+            const existingItem = packageUsage.items.find(
+              item => item.serviceId === cartItem.serviceId && 
+                     item.clothingItemId === cartItem.clothingItemId
+            );
+            
+            if (existingItem) {
+              existingItem.quantity += creditsToUse;
+            } else {
+              packageUsage.items.push({
+                serviceId: cartItem.serviceId,
+                clothingItemId: cartItem.clothingItemId,
+                quantity: creditsToUse
+              });
+            }
+
+            // Update the package item balance to reflect usage
+            packageItem.balance -= creditsToUse;
+            remainingQuantity -= creditsToUse;
+          }
+        }
+      }
+    }
+
+    if (usedCredits.length === 0) {
+      return null;
+    }
+
+    return {
+      packageUsages: Array.from(packageUsageMap.values()),
+      usedCredits
+    };
+  } catch (error) {
+    logger.error({ error, customerId }, "Error computing package usage");
+    return null;
+  }
+}
+
+export async function registerRoutes(
+  app: Express,
+  notificationService: NotificationService,
+): Promise<Server> {
+  // Setup authentication
+  await setupAuth(app);
+  await seedSuperAdmin();
+  await seedBranches();
+  await seedPackages();
+
+  registerHealthRoutes(app);
+
+  // Authentication routes
+  app.post("/api/login", (req, res, next) => {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid login data" });
+    }
+    passport.authenticate("local", (err: any, user: any, info: any) => {
+      if (err) {
+        return next(err);
+      }
+      if (!user) {
+        return res.status(401).json({ message: info?.message || "Login failed" });
+      }
+
+      req.logIn(user, (err) => {
+        if (err) {
+          return next(err);
+        }
+        
+        // Set session data manually and save
+        (req.session as any).passport = { user: user.id };
+        req.session.save((saveErr) => {
+          if (saveErr) {
+            console.error("Session save error:", saveErr);
+            return next(saveErr);
+          }
+          
+          console.log("Session saved successfully. Session ID:", req.sessionID);
+          console.log("Session data:", req.session);
+          
+          // Don't send password hash to client
+          const { passwordHash, ...safeUser } = user;
+          return res.json({ user: safeUser, message: "Login successful" });
+        });
+      });
+    })(req, res, next);
+  });
+
+  app.post("/api/logout", (req, res) => {
+    const userId = (req.user as any)?.id;
+    
+    req.logout((err) => {
+      if (err) {
+        logger.error({ err, userId }, 'Error during admin logout');
+        return res.status(500).json({ message: "Logout failed" });
+      }
+      
+      // Destroy session completely for security
+      req.session.destroy((sessionErr) => {
+        if (sessionErr) {
+          logger.error({ sessionErr, userId }, 'Error destroying admin session during logout');
+        }
+        
+        // Clear the session cookie
+        res.clearCookie('sid', { 
+          path: '/',
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
+        });
+        
+        logger.info({ userId }, 'Admin logged out successfully');
+        res.json({ message: "Logout successful" });
+      });
+    });
+  });
+
+  app.get("/api/auth/user", requireAuth, (req, res) => {
+    const user = req.user as any;
+    // Sanitize user object - remove sensitive fields
+    const sanitizedUser = {
+      ...user,
+      passwordHash: undefined // Remove password hash for security
+    };
+    console.log("Auth API - returning sanitized user object:", JSON.stringify(sanitizedUser, null, 2));
+    console.log("Auth API - user role:", user?.role);
+    res.json(sanitizedUser);
+  });
+
+  app.post("/auth/password/forgot", async (req, res) => {
+    try {
+      const { username } = z.object({ username: z.string() }).parse(req.body);
+      const ip = req.ip;
+      if (isRateLimited(`u:${username}`) || isRateLimited(`i:${ip}`)) {
+        return res.status(429).json({ message: "tooManyRequests" });
+      }
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
+        return res.status(404).json({ message: "userNotFound" });
+      }
+      const token = randomUUID();
+      passwordResetTokens.set(token, {
+        userId: user.id,
+        expires: new Date(Date.now() + 30 * 60 * 1000),
+      });
+      // In production, send email. For tests, return token.
+      res.json({ message: "passwordResetLinkSent", token });
+    } catch (err) {
+      res.status(400).json({ message: "invalidData" });
+    }
+  });
+
+  app.post("/auth/password/reset", async (req, res) => {
+    try {
+      const { token, newPassword } = z
+        .object({ token: z.string(), newPassword: z.string() })
+        .parse(req.body);
+      const info = passwordResetTokens.get(token);
+      if (!info || info.expires < new Date()) {
+        return res.status(400).json({ message: "invalidOrExpiredToken" });
+      }
+      const schema = passwordSchema("passwordRequirements");
+      try {
+        schema.parse(newPassword);
+      } catch {
+        return res.status(400).json({ message: "passwordRequirements" });
+      }
+      await storage.updateUserPassword(info.userId, newPassword);
+      passwordResetTokens.delete(token);
+      res.json({ message: "passwordReset" });
+    } catch {
+      res.status(400).json({ message: "invalidData" });
+    }
+  });
+
+
+  // Customer authentication routes
+  app.post("/customer/register", async (req, res) => {
+    try {
+      const ip = req.ip;
+      // Security: Rate limit registration attempts per IP
+      if (isRateLimited(`reg_ip:${ip}`, 'register')) {
+        return res.status(429).json({ message: "Too many registration attempts. Please try again later." });
+      }
+      
+      const schema = z.object({
+        branchCode: z.string(),
+        phoneNumber: z.string(),
+        name: z.string(),
+        password: z.string().min(8),
+        city: z.string(),
+        addressLabel: z.string().optional(),
+        address: z.string().optional(),
+        lat: z.number().optional(),
+        lng: z.number().optional(),
+      });
+      const data = schema.parse(req.body);
+      
+      // Additional rate limiting per phone number to prevent spam
+      if (isRateLimited(`reg_phone:${data.phoneNumber}`, 'register')) {
+        return res.status(429).json({ message: "Too many attempts with this phone number. Please try again later." });
+      }
+      
+      const existing = await storage.getCustomerByPhone(data.phoneNumber);
+      if (existing) {
+        return res.status(400).json({ message: "Customer already exists" });
+      }
+      const branch = await storage.getBranchByCode(data.branchCode);
+      if (!branch) return res.status(404).json({ message: "Branch not found" });
+      if (branch.serviceCityIds?.length && !branch.serviceCityIds.includes(data.city)) {
+        return res.status(400).json({ message: "areas.notServed" });
+      }
+      const passwordHash = await bcrypt.hash(data.password, 10);
+      const customer = await storage.createCustomer(
+        { phoneNumber: data.phoneNumber, name: data.name, passwordHash },
+        branch.id,
+      );
+      if (data.address && data.addressLabel) {
+        await storage.createCustomerAddress({
+          customerId: customer.id,
+          label: data.addressLabel,
+          address: data.address,
+          lat: data.lat,
+          lng: data.lng,
+          isDefault: true,
+        });
+      }
+      
+      // Clear rate limiting on successful registration
+      clearRateLimit(`reg_ip:${ip}`);
+      clearRateLimit(`reg_phone:${data.phoneNumber}`);
+      
+      (req.session as any).customerId = customer.id;
+      const { passwordHash: _pw, ...safe } = customer;
+      res.status(201).json(safe);
+    } catch (err) {
+      res.status(400).json({ message: "Invalid registration data" });
+    }
+  });
+
+  app.post("/customer/login", async (req, res) => {
+    try {
+      const schema = z.object({ phoneNumber: z.string(), password: z.string() });
+      const { phoneNumber, password } = schema.parse(req.body);
+      const ip = req.ip;
+      
+      // Security: Rate limit login attempts per IP and per phone number
+      if (isRateLimited(`login_ip:${ip}`, 'login') || isRateLimited(`login_phone:${phoneNumber}`, 'login')) {
+        return res.status(429).json({ message: "Too many login attempts. Please try again later." });
+      }
+      
+      const customer = await storage.getCustomerByPhone(phoneNumber);
+      if (!customer || !customer.passwordHash) {
+        logger.warn({ phoneNumber, ip }, 'Failed customer login attempt - invalid phone');
+        return res.status(401).json({ message: "Invalid phone or password" });
+      }
+      
+      const valid = await bcrypt.compare(password, customer.passwordHash);
+      if (!valid) {
+        logger.warn({ phoneNumber, ip, customerId: customer.id }, 'Failed customer login attempt - invalid password');
+        return res.status(401).json({ message: "Invalid phone or password" });
+      }
+      
+      // Clear rate limiting on successful login
+      clearRateLimit(`login_ip:${ip}`);
+      clearRateLimit(`login_phone:${phoneNumber}`);
+      
+      (req.session as any).customerId = customer.id;
+      const { passwordHash, ...safe } = customer;
+      logger.info({ customerId: customer.id, ip }, 'Successful customer login');
+      res.json(safe);
+    } catch (err) {
+      res.status(400).json({ message: "Invalid login data" });
+    }
+  });
+
+  app.post("/customer/logout", (req, res) => {
+    const customerId = (req.session as any).customerId;
+    
+    // Properly destroy the session for security
+    req.session.destroy((err) => {
+      if (err) {
+        logger.error({ err, customerId }, 'Error destroying customer session during logout');
+        return res.status(500).json({ message: "Logout failed" });
+      }
+      
+      // Clear the session cookie
+      res.clearCookie('sid', { 
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax'
+      });
+      
+      logger.info({ customerId }, 'Customer logged out successfully');
+      res.json({ message: "Logout successful" });
+    });
+  });
+
+  app.get("/customer/me", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    try {
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const { passwordHash, ...safe } = customer;
+      res.json(safe);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch customer" });
+    }
+  });
+
+  app.post("/customer/request-password-reset", async (req, res) => {
+    try {
+      const { phoneNumber } = z.object({ phoneNumber: z.string() }).parse(req.body);
+      const ip = req.ip;
+      if (isRateLimited(`reset_phone:${phoneNumber}`, 'reset') || isRateLimited(`reset_ip:${ip}`, 'reset')) {
+        return res.status(429).json({ message: "Too many password reset requests. Please try again later." });
+      }
+      const customer = await storage.getCustomerByPhone(phoneNumber);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const otp = generateCustomerPasswordOtp(phoneNumber);
+      
+      // Send OTP via SMS using NotificationService (secure approach)
+      const otpMessage = `Your password reset code is: ${otp}. Valid for 10 minutes.`;
+      await notificationService.sendSMS(phoneNumber, otpMessage);
+      
+      // SECURITY: Never return OTP in API response - only send via SMS
+      // Development debugging can be enabled via environment variable
+      const response: any = { message: "OTP sent successfully to your mobile number" };
+      if (process.env.NODE_ENV === "development" && process.env.DEBUG_OTP === "true") {
+        response.debug_otp = otp; // Only for local development debugging
+      }
+      res.json(response);
+    } catch {
+      res.status(400).json({ message: "Invalid data" });
+    }
+  });
+
+  app.post("/customer/reset-password", async (req, res) => {
+    try {
+      const { phoneNumber, otp, newPassword } = z
+        .object({
+          phoneNumber: z.string(),
+          otp: z.string(),
+          newPassword: z.string().min(8),
+        })
+        .parse(req.body);
+      if (!verifyCustomerPasswordOtp(phoneNumber, otp)) {
+        return res.status(400).json({ message: "Invalid or expired OTP" });
+      }
+      const customer = await storage.getCustomerByPhone(phoneNumber);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const passwordHash = await bcrypt.hash(newPassword, 10);
+      await storage.updateCustomerPassword(customer.id, passwordHash);
+      res.json({ message: "Password updated" });
+    } catch {
+      res.status(400).json({ message: "Invalid data" });
+    }
+  });
+
+  app.get("/customer/addresses", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const addresses = await storage.getCustomerAddresses(customerId);
+      res.json(addresses);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch addresses" });
+    }
+  });
+
+  app.post("/customer/addresses", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const data = insertCustomerAddressSchema
+        .omit({ customerId: true })
+        .parse(req.body);
+      const address = await storage.createCustomerAddress({ ...data, customerId });
+      res.status(201).json(address);
+    } catch {
+      res.status(400).json({ message: "Invalid address data" });
+    }
+  });
+
+  app.put("/customer/addresses/:id", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const data = insertCustomerAddressSchema
+        .partial()
+        .omit({ customerId: true })
+        .parse(req.body);
+      const address = await storage.updateCustomerAddress(req.params.id, data, customerId);
+      if (!address) return res.status(404).json({ message: "Address not found" });
+      res.json(address);
+    } catch {
+      res.status(400).json({ message: "Invalid address data" });
+    }
+  });
+
+  app.delete("/customer/addresses/:id", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const success = await storage.deleteCustomerAddress(req.params.id, customerId);
+      if (!success) return res.status(404).json({ message: "Address not found" });
+      res.status(204).end();
+    } catch {
+      res.status(500).json({ message: "Failed to delete address" });
+    }
+  });
+
+  // Customer addresses for ordering interface
+  app.get("/api/customers/:customerId/addresses", async (req, res) => {
+    const sessionCustomerId = (req.session as any).customerId as string | undefined;
+    const { customerId } = req.params;
+    
+    // Ensure the requesting customer can only access their own addresses
+    if (!sessionCustomerId || sessionCustomerId !== customerId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    
+    try {
+      const addresses = await storage.getCustomerAddresses(customerId);
+      res.json(addresses);
+    } catch (error) {
+      logger.error("Error fetching customer addresses:", error as any);
+      res.status(500).json({ message: "Failed to fetch addresses" });
+    }
+  });
+
+  // Create customer address for ordering interface
+  app.post("/api/customers/:customerId/addresses", async (req, res) => {
+    const sessionCustomerId = (req.session as any).customerId as string | undefined;
+    const { customerId } = req.params;
+    
+    // Ensure the requesting customer can only create addresses for themselves
+    if (!sessionCustomerId || sessionCustomerId !== customerId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    
+    try {
+      const data = insertCustomerAddressSchema
+        .omit({ customerId: true })
+        .parse(req.body);
+      const address = await storage.createCustomerAddress({ ...data, customerId });
+      res.status(201).json(address);
+    } catch (error) {
+      logger.error("Error creating customer address:", error as any);
+      res.status(400).json({ message: "Invalid address data" });
+    }
+  });
+
+  // Customer delivery order creation
+  app.post("/api/delivery-orders", async (req, res) => {
+    const sessionCustomerId = (req.session as any).customerId as string | undefined;
+    
+    if (!sessionCustomerId) {
+      return res.status(401).json({ message: "Login required" });
+    }
+    
+    try {
+      const orderData = req.body;
+      
+      // Validate required fields for customer orders
+      if (!orderData.branchCode || !orderData.items || !Array.isArray(orderData.items) || orderData.items.length === 0) {
+        return res.status(400).json({ message: "Missing required fields: branchCode and items" });
+      }
+      
+      // Ensure the order is created by the authenticated customer
+      if (orderData.customerId !== sessionCustomerId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      // Get branch by code
+      const branch = await storage.getBranchByCode(orderData.branchCode);
+      if (!branch) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      
+      // Create the main order first
+      const orderItems = orderData.items.map((item: any) => ({
+        clothingItemId: item.clothingItemId,
+        serviceId: item.serviceId,
+        quantity: item.quantity
+      }));
+      
+      // Calculate total from items
+      let subtotal = 0;
+      for (const item of orderData.items) {
+        const price = await storage.getItemServicePrice(
+          item.clothingItemId,
+          item.serviceId,
+          "", // No user for customer orders
+          branch.id
+        );
+        subtotal += (price || 0) * item.quantity;
+      }
+      
+      const deliveryFee = orderData.deliveryFee || 0;
+      const total = subtotal + deliveryFee;
+      
+      // Create order data
+      const newOrderData = {
+        customerId: sessionCustomerId,
+        branchId: branch.id,
+        customerName: orderData.customerName || "Customer",
+        customerPhone: orderData.customerPhone || "",
+        items: orderItems,
+        subtotal: subtotal.toString(),
+        tax: "0",
+        total: total.toString(),
+        paymentMethod: orderData.paymentMethod || "cash",
+        status: "received" as const,
+        sellerName: "Online Order",
+        promisedReadyDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0], // Tomorrow
+        promisedReadyOption: "tomorrow" as const
+      };
+      
+      // Create the order
+      const order = await storage.createOrder(newOrderData);
+      
+      // Create delivery order if address is provided
+      if (orderData.deliveryAddressId) {
+        const deliveryOrderData = {
+          orderId: order.id,
+          deliveryMode: "driver_pickup" as const,
+          deliveryAddressId: orderData.deliveryAddressId,
+          deliveryInstructions: orderData.deliveryInstructions || "",
+          deliveryStatus: "pending" as const,
+          deliveryFee: deliveryFee.toString()
+        };
+        
+        await storage.createDeliveryOrder(deliveryOrderData);
+      }
+      
+      res.status(201).json({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        total: order.total
+      });
+      
+    } catch (error) {
+      logger.error("Error creating delivery order:", error as any);
+      res.status(500).json({ message: "Failed to create order" });
+    }
+  });
+
+  app.put("/api/users/:id", requireAuth, async (req, res, next) => {
+    const { id } = req.params;
+    const user = req.user as UserWithBranch;
+    if (user.id !== id) {
+      if (user.role === "super_admin") return next();
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+    try {
+      const data = insertUserSchema
+        .pick({ firstName: true, lastName: true, email: true })
+        .partial()
+        .parse(req.body);
+      const updated = await storage.updateUserProfile(id, data);
+      if (!updated) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const { passwordHash, ...safeUser } = updated;
+      res.json(safeUser);
+    } catch (error) {
+      logger.error("Error updating profile:", error as any);
+      res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
+  app.put("/api/users/:id/password", requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const user = req.user as UserWithBranch;
+    if (user.id !== id) {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+    try {
+      const { password } = req.body as { password: string };
+      const updated = await storage.updateUserPassword(id, password);
+      if (!updated) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ message: "Password updated" });
+    } catch (error) {
+      logger.error("Error updating password:", error as any);
+      res.status(500).json({ message: "Failed to update password" });
+    }
+  });
+
+  // User management routes (Super Admin only)
+  app.get("/api/users", requireSuperAdmin, async (req, res) => {
+    try {
+      const users = await storage.getUsers();
+      // Don't send password hashes
+      const safeUsers = users.map(({ passwordHash, ...user }) => user);
+      res.json(safeUsers);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/users", requireSuperAdmin, async (req, res) => {
+    try {
+      const validatedData = insertUserSchema.parse(req.body);
+      const newUser = await storage.createUser(validatedData);
+      // Don't send password hash
+      const { passwordHash, ...safeUser } = newUser;
+      res.json(safeUser);
+    } catch (error) {
+      logger.error("Error creating user:", error as any);
+      res.status(500).json({ message: "Failed to create user" });
+    }
+  });
+
+  app.put("/api/users/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validatedData = updateUserSchema.parse(req.body);
+      if (validatedData.passwordHash === "") {
+        delete validatedData.passwordHash;
+      }
+      const updatedUser = await storage.updateUser(id, validatedData);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      // Don't send password hash
+      const { passwordHash, ...safeUser } = updatedUser;
+      res.json(safeUser);
+    } catch (error) {
+      logger.error("Error updating user:", error as any);
+      res.status(500).json({ message: "Failed to update user" });
+    }
+  });
+
+  app.put("/api/users/:id/branch", requireSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const data = insertUserSchema.pick({ branchId: true }).parse(req.body);
+      const updatedUser = await storage.updateUserBranch(id, data.branchId ?? null);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const { passwordHash, ...safeUser } = updatedUser;
+      res.json(safeUser);
+    } catch (error) {
+      logger.error("Error updating user branch:", error as any);
+      res.status(500).json({ message: "Failed to update user branch" });
+    }
+  });
+
+  // Category management routes (Admin or Super Admin)
+  app.get("/api/categories", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const type = req.query.type as string;
+      const userId = (req.user as UserWithBranch).id;
+      const categories = type
+        ? await storage.getCategoriesByType(type, userId)
+        : await storage.getCategories(userId);
+      res.json(categories);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch categories" });
+    }
+  });
+
+  app.post("/api/categories", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const validatedData = insertCategorySchema.parse(req.body);
+      const currentUser = req.user as UserWithBranch;
+      const { userId: bodyUserId, ...categoryData } = validatedData;
+      const userId =
+        currentUser.role === "super_admin"
+          ? bodyUserId ?? currentUser.id
+          : currentUser.id;
+      const newCategory = await storage.createCategory(categoryData, userId);
+      res.json(newCategory);
+    } catch (error) {
+      logger.error("Error creating category:", error as any);
+      res.status(500).json({ message: "Failed to create category" });
+    }
+  });
+
+  app.put("/api/categories/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validatedData = insertCategorySchema.parse(req.body);
+      const currentUser = req.user as UserWithBranch;
+      const { userId: bodyUserId, ...categoryData } = validatedData;
+      const userId =
+        currentUser.role === "super_admin"
+          ? bodyUserId ?? currentUser.id
+          : currentUser.id;
+      const updatedCategory = await storage.updateCategory(
+        id,
+        categoryData,
+        userId,
+      );
+      if (!updatedCategory) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+      res.json(updatedCategory);
+    } catch (error) {
+      logger.error("Error updating category:", error as any);
+      res.status(500).json({ message: "Failed to update category" });
+    }
+  });
+
+  app.delete("/api/categories/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = (req.user as UserWithBranch).id;
+      const deleted = await storage.deleteCategory(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+      res.json({ message: "Category deleted successfully" });
+    } catch (error) {
+      logger.error("Error deleting category:", error as any);
+      res.status(500).json({ message: "Failed to delete category" });
+    }
+  });
+
+  app.get("/api/catalog/export", requireAuth, async (req, res) => {
+    try {
+      const currentUser = req.user as UserWithBranch;
+      const rows = await storage.getCatalogForExport(currentUser.id);
+      const headers = [
+        "Item (English)",
+        "Item (Arabic)",
+        SERVICE_HEADERS.normalIron[0],
+        SERVICE_HEADERS.normalWash[0],
+        SERVICE_HEADERS.normalWashIron[0],
+        SERVICE_HEADERS.urgentIron[0],
+        SERVICE_HEADERS.urgentWash[0],
+        SERVICE_HEADERS.urgentWashIron[0],
+        "Picture Link",
+      ];
+      const data = rows.map((r) => [
+        r.itemEn,
+        r.itemAr ?? "",
+        r.normalIron ?? "",
+        r.normalWash ?? "",
+        r.normalWashIron ?? "",
+        r.urgentIron ?? "",
+        r.urgentWash ?? "",
+        r.urgentWashIron ?? "",
+        r.imageUrl ?? "",
+      ]);
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Catalog");
+      worksheet.addRow(headers);
+      data.forEach((row) => worksheet.addRow(row));
+      const buf = (await workbook.xlsx.writeBuffer()) as Buffer;
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=catalog.xlsx",
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+      res.send(Buffer.from(buf));
+      } catch (err) {
+        logger.error("Catalog export failed", err as any);
+        res.status(500).json({ message: "Failed to export catalog" });
+      }
+    });
+
+  app.get("/api/catalog/bulk-template", requireAuth, async (_req, res) => {
+    const buf = await generateCatalogTemplate();
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=catalog_template.xlsx",
+    );
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.send(Buffer.from(buf));
+  });
+
+  app.post(
+    "/api/catalog/bulk-upload",
+    requireAuth,
+    upload.single("file"),
+    async (req, res) => {
+      try {
+        const currentUser = req.user as UserWithBranch;
+        const branchId = req.body.branchId as string | undefined;
+        if (!req.file) {
+          return res.status(400).json({ message: "file is required" });
+        }
+        if (branchId && currentUser.role !== "super_admin") {
+          return res
+            .status(403)
+            .json({ message: "Only super admin can specify branchId" });
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        
+        const errors: string[] = [];
+        let servicesResult: any = null;
+        let productsResult: { created: number; updated: number; errors: string[] } | null = null;
+        let newClothingItemIds: string[] = [];
+        let newServiceIds: string[] = [];
+        
+        const targetBranchId = branchId && currentUser.role === "super_admin" ? branchId : currentUser.branchId;
+        if (!targetBranchId) {
+          return res.status(400).json({ message: "Branch ID is required" });
+        }
+
+        // Check if this is a bilingual pricing matrix format (single sheet with //bilingual data)
+        const mainSheet = workbook.worksheets[0];
+        if (mainSheet) {
+          // Try parsing as pricing matrix first
+          const matrixResult = parsePricingMatrixWorksheet(mainSheet);
+          
+          if (matrixResult.clothingItems.length > 0 && matrixResult.services.length > 0) {
+            // This appears to be a bilingual pricing matrix format
+            console.log('Processing bilingual pricing matrix format:', {
+              items: matrixResult.clothingItems.length,
+              services: matrixResult.services.length,
+              prices: matrixResult.prices.length
+            });
+            
+            errors.push(...matrixResult.errors);
+            
+            if (matrixResult.errors.length === 0) {
+              // Convert to the format expected by bulkUpsertBranchCatalog
+              const rows: ParsedRow[] = [];
+              
+              // Create a map of service names to their prices for each item
+              const servicePriceMap = new Map<string, Map<string, number>>();
+              matrixResult.prices.forEach(({ itemName, serviceName, price }) => {
+                if (!servicePriceMap.has(itemName)) {
+                  servicePriceMap.set(itemName, new Map());
+                }
+                servicePriceMap.get(itemName)!.set(serviceName, price);
+              });
+              
+              // Process each clothing item
+              matrixResult.clothingItems.forEach(item => {
+                const itemPrices = servicePriceMap.get(item.nameEn) || new Map();
+                
+                // Map services to expected names (handle variations)
+                const normalIron = itemPrices.get("Normal Iron") || itemPrices.get("كي عادي");
+                const normalWash = itemPrices.get("Normal Wash") || itemPrices.get("غسيل عادي");
+                const normalWashIron = itemPrices.get("Normal Wash & Iron") || itemPrices.get("Normal Wash and Iron") || itemPrices.get("Normal Wash&Iron") || itemPrices.get("غسيل وكي عادي");
+                const urgentIron = itemPrices.get("Urgent Iron") || itemPrices.get("كي مستعجل");
+                const urgentWash = itemPrices.get("Urgent Wash") || itemPrices.get("غسيل مستعجل");
+                const urgentWashIron = itemPrices.get("Urgent Wash & Iron") || itemPrices.get("Urgent Wash and Iron") || itemPrices.get("Urgent Wash&Iron") || itemPrices.get("غسيل وكي مستعجل");
+                
+                const row: ParsedRow = {
+                  itemEn: item.nameEn,
+                  itemAr: item.nameAr || undefined,
+                  normalIron,
+                  normalWash,
+                  normalWashIron,
+                  urgentIron,
+                  urgentWash,
+                  urgentWashIron,
+                  imageUrl: item.imageUrl,
+                };
+                
+                rows.push(row);
+              });
+              
+              if (rows.length > 0) {
+                servicesResult = await storage.bulkUpsertBranchCatalog(targetBranchId, rows);
+                newClothingItemIds = servicesResult.newClothingItemIds || [];
+                newServiceIds = servicesResult.newServiceIds || [];
+              }
+            }
+          } else {
+            // Fall back to legacy format parsing
+            console.log('Falling back to legacy format parsing');
+            const laundryData = parseWorksheetData(mainSheet);
+            const rows: ParsedRow[] = laundryData
+              .map((r: any, index: number) => {
+                const getFieldValue = (fields: readonly string[]) => {
+                  for (const f of fields) {
+                    if (r[f] !== undefined) return r[f];
+                  }
+                  return undefined;
+                };
+
+                const parseField = (fields: readonly string[]) => {
+                  const raw = getFieldValue(fields);
+                  const parsed = parsePrice(raw);
+                  if (
+                    raw !== undefined &&
+                    raw !== null &&
+                    raw !== "" &&
+                    parsed === undefined
+                  ) {
+                    errors.push(`Row ${index + 2}: Invalid ${fields[0]}`);
+                  }
+                  return parsed;
+                };
+
+                return {
+                  itemEn: String(r["Item (English)"] ?? "").trim(),
+                  itemAr: r["Item (Arabic)"]
+                    ? String(r["Item (Arabic)"]).trim()
+                    : undefined,
+                  normalIron: parseField(SERVICE_HEADERS.normalIron),
+                  normalWash: parseField(SERVICE_HEADERS.normalWash),
+                  normalWashIron: parseField(SERVICE_HEADERS.normalWashIron),
+                  urgentIron: parseField(SERVICE_HEADERS.urgentIron),
+                  urgentWash: parseField(SERVICE_HEADERS.urgentWash),
+                  urgentWashIron: parseField(SERVICE_HEADERS.urgentWashIron),
+                  imageUrl: r["Picture Link"]
+                    ? extractStringValue(r["Picture Link"]).trim()
+                    : undefined,
+                };
+              })
+              .filter((r) => r.itemEn);
+
+            if (rows.length > 0) {
+              servicesResult = await storage.bulkUpsertBranchCatalog(targetBranchId, rows);
+              newClothingItemIds = servicesResult.newClothingItemIds || [];
+              newServiceIds = servicesResult.newServiceIds || [];
+            }
+          }
+        }
+
+        // Process Retail Products Sheet
+        const productsSheet = workbook.worksheets.find(ws => ws.name === "Retail Products");
+        if (productsSheet) {
+          const productData = parseWorksheetData(productsSheet);
+          const productRows = productData
+            .map((row: any, index: number) => parseProductRow(row, index, errors))
+            .filter((row) => row !== null);
+
+          if (productRows.length > 0) {
+            productsResult = await storage.bulkUpsertProducts(targetBranchId, productRows);
+            errors.push(...productsResult.errors);
+          }
+        }
+
+        if (errors.length > 0) {
+          return res.status(400).json({ errors });
+        }
+
+        // Sync packages with new items
+        if ((newClothingItemIds.length > 0 || newServiceIds.length > 0)) {
+          try {
+            await storage.syncPackagesWithNewItems(targetBranchId, newClothingItemIds, newServiceIds);
+          } catch (syncError: any) {
+            console.warn("Package sync warning:", syncError.message);
+          }
+        }
+
+        // Return backward-compatible response
+        const result = servicesResult || { processed: 0, created: 0, updated: 0 };
+        res.json({
+          processed: result.processed || 0,
+          created: result.created || 0,
+          updated: result.updated || 0,
+          clothingItemsCreated: result.clothingItemsCreated || 0,
+          clothingItemsUpdated: result.clothingItemsUpdated || 0,
+          branchId: targetBranchId,
+          userResults: result.userResults || [],
+          packagesSync: (newClothingItemIds.length > 0 || newServiceIds.length > 0) ? "completed" : "not_needed",
+          products: productsResult,
+        });
+      } catch (error) {
+        logger.error("Bulk upload failed:", error as any);
+        res.status(500).json({ message: "Bulk upload failed" });
+      }
+    },
+  );
+
+  // Public branch info
+  app.get("/api/branches/:code", async (req, res) => {
+    try {
+      const branch = await storage.getBranchByCode(req.params.code);
+      if (!branch) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      // Only expose public fields needed by client
+      const branchData = branch as any;
+      const { name, tagline, logoUrl, serviceCityIds } = branchData;
+      const deliveryEnabled = branchData.deliveryEnabled || false;
+      res.json({ name, tagline, logoUrl, serviceCityIds, deliveryEnabled });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branch" });
+    }
+  });
+
+  app.get("/api/cities", async (_req, res) => {
+    try {
+      const cities = await storage.getCities();
+      res.json(cities);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch cities" });
+    }
+  });
+
+  // Coupon management routes
+  app.get("/api/coupons", requireAuth, async (req, res) => {
+    try {
+      const branchId = (req.user as UserWithBranch)?.branchId || undefined;
+      const coupons = await storage.getCoupons(branchId);
+      res.json(coupons);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch coupons" });
+    }
+  });
+
+  app.get("/api/coupons/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const branchId = (req.user as UserWithBranch)?.branchId || undefined;
+      const coupon = await storage.getCoupon(id, branchId);
+      if (!coupon) return res.status(404).json({ message: "Coupon not found" });
+
+      // Get applicable items and services
+      const clothingItems = await storage.getCouponClothingItems(id);
+      const services = await storage.getCouponServices(id);
+      
+      res.json({ 
+        ...coupon,
+        clothingItems: clothingItems.map(ci => ci.clothingItemId),
+        services: services.map(cs => cs.serviceId)
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch coupon" });
+    }
+  });
+
+  app.post("/api/coupons", requireAuth, async (req, res) => {
+    try {
+      const branchId = (req.user as UserWithBranch)?.branchId || "default";
+      const createdBy = (req.user as UserWithBranch)?.id || "unknown";
+      const { clothingItemIds = [], serviceIds = [], ...couponData } = req.body;
+
+      // Validate that specific items/services are provided when needed
+      if (couponData.applicationType === "specific_items" && clothingItemIds.length === 0) {
+        return res.status(400).json({ message: "Clothing items must be specified for item-specific coupons" });
+      }
+      if (couponData.applicationType === "specific_services" && serviceIds.length === 0) {
+        return res.status(400).json({ message: "Services must be specified for service-specific coupons" });
+      }
+
+      const coupon = await storage.createCoupon(couponData, branchId, createdBy, clothingItemIds, serviceIds);
+      res.status(201).json(coupon);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message || "Failed to create coupon" });
+    }
+  });
+
+  app.put("/api/coupons/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const branchId = (req.user as UserWithBranch)?.branchId || undefined;
+      const { clothingItemIds = [], serviceIds = [], ...couponData } = req.body;
+
+      // Validate that specific items/services are provided when needed
+      if (couponData.applicationType === "specific_items" && clothingItemIds.length === 0) {
+        return res.status(400).json({ message: "Clothing items must be specified for item-specific coupons" });
+      }
+      if (couponData.applicationType === "specific_services" && serviceIds.length === 0) {
+        return res.status(400).json({ message: "Services must be specified for service-specific coupons" });
+      }
+
+      const coupon = await storage.updateCoupon(id, couponData, branchId, clothingItemIds, serviceIds);
+      if (!coupon) return res.status(404).json({ message: "Coupon not found" });
+      res.json(coupon);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message || "Failed to update coupon" });
+    }
+  });
+
+  app.delete("/api/coupons/:id", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const branchId = (req.user as UserWithBranch)?.branchId || undefined;
+      const deleted = await storage.deleteCoupon(id, branchId);
+      if (!deleted) return res.status(404).json({ message: "Coupon not found" });
+      res.json({ message: "Coupon deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete coupon" });
+    }
+  });
+
+  app.post("/api/coupons/validate", async (req, res) => {
+    try {
+      const { code, branchId, cartItems = [] } = req.body;
+      const validation = await storage.validateCoupon(code, branchId, cartItems);
+      res.json(validation);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to validate coupon" });
+    }
+  });
+
+  // Global reporting routes (Super Admin only)
+  app.get("/api/reports/global-stats", requireSuperAdmin, async (_req, res) => {
+    try {
+      const now = new Date();
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+      
+      // Get all transactions, orders, payments, and branches for comprehensive calculations
+      const [allTransactions, allOrders, allPayments, branches] = await Promise.all([
+        storage.getTransactions(),
+        storage.getOrders(),
+        storage.getPayments(),
+        storage.getBranches()
+      ]);
+
+      // Filter by date ranges
+      const currentMonthTransactions = allTransactions.filter(t => new Date(t.createdAt) >= lastMonth);
+      const currentMonthPayments = allPayments.filter(p => new Date(p.createdAt) >= lastMonth);
+      
+      const previousMonthEnd = new Date(lastMonth.getFullYear(), lastMonth.getMonth(), lastMonth.getDate());
+      const previousMonthStart = new Date(previousMonthEnd.getFullYear(), previousMonthEnd.getMonth() - 1, previousMonthEnd.getDate());
+      
+      const previousMonthTransactions = allTransactions.filter(t => {
+        const date = new Date(t.createdAt);
+        return date >= previousMonthStart && date < lastMonth;
+      });
+      const previousMonthPayments = allPayments.filter(p => {
+        const date = new Date(p.createdAt);
+        return date >= previousMonthStart && date < lastMonth;
+      });
+
+      // Use only payments table to avoid double counting cash orders
+      // Cash orders appear in both transactions and payments tables
+      const totalRevenue = allPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+
+      const currentRevenue = currentMonthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+
+      const previousRevenue = previousMonthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+      
+      const revenueGrowth = previousRevenue > 0 ? ((currentRevenue - previousRevenue) / previousRevenue * 100) : 0;
+
+      const totalOrders = allOrders.length;
+      const currentOrders = allOrders.filter(o => new Date(o.createdAt) >= lastMonth).length;
+      const previousOrders = allOrders.filter(o => {
+        const date = new Date(o.createdAt);
+        return date >= previousMonthStart && date < lastMonth;
+      }).length;
+      const orderGrowth = previousOrders > 0 ? ((currentOrders - previousOrders) / previousOrders * 100) : 0;
+
+      // Active users (customers who placed orders in last 30 days)
+      const activeUsers = new Set(allOrders.filter(o => new Date(o.createdAt) >= lastMonth).map(o => o.customerId).filter(Boolean)).size;
+
+      res.json({
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+        revenueGrowth: Math.round(revenueGrowth * 100) / 100,
+        totalOrders,
+        orderGrowth: Math.round(orderGrowth * 100) / 100,
+        activeUsers,
+        activeBranches: branches.filter(b => (b as any).deliveryEnabled).length,
+        totalBranches: branches.length
+      });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch global stats" });
+    }
+  });
+
+  app.get("/api/reports/branch-performance", requireSuperAdmin, async (_req, res) => {
+    try {
+      const [allTransactions, allOrders, allPayments, branches] = await Promise.all([
+        storage.getTransactions(),
+        storage.getOrders(),
+        storage.getPayments(),
+        storage.getBranches()
+      ]);
+
+      const branchPerformance = branches.map(branch => {
+        const branchOrders = allOrders.filter(o => o.branchId === branch.id);
+        const branchTransactions = allTransactions.filter(t => t.branchId === branch.id);
+        
+        // Get customers from this branch to match with their package payments
+        const branchCustomerIds = new Set(branchOrders.map(o => o.customerId).filter(Boolean));
+        const branchPayments = allPayments.filter(p => branchCustomerIds.has(p.customerId));
+        
+        const transactionRevenue = branchTransactions.reduce((sum, t) => sum + parseFloat(t.total), 0);
+        const packageRevenue = branchPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const totalRevenue = transactionRevenue + packageRevenue;
+        
+        const orderCount = branchOrders.length;
+        const avgOrderValue = orderCount > 0 ? totalRevenue / orderCount : 0;
+
+        return {
+          branchId: branch.id,
+          branchName: branch.name,
+          branchCode: branch.code,
+          revenue: Math.round(totalRevenue * 100) / 100,
+          orderCount,
+          avgOrderValue: Math.round(avgOrderValue * 100) / 100,
+          isActive: (branch as any).deliveryEnabled || false
+        };
+      });
+
+      res.json(branchPerformance);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branch performance" });
+    }
+  });
+
+  app.get("/api/reports/revenue-trends", requireSuperAdmin, async (_req, res) => {
+    try {
+      // Get both transactions and package payments for comprehensive revenue tracking
+      const [allTransactions, allPayments] = await Promise.all([
+        storage.getTransactions(),
+        storage.getPayments()
+      ]);
+      
+      // Group transactions and payments by month for the last 12 months
+      const monthlyRevenue = [];
+      const now = new Date();
+      
+      for (let i = 11; i >= 0; i--) {
+        const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+        
+        const monthTransactions = allTransactions.filter(t => {
+          const date = new Date(t.createdAt);
+          return date >= month && date < nextMonth;
+        });
+        
+        const monthPayments = allPayments.filter(p => {
+          const date = new Date(p.createdAt);
+          return date >= month && date < nextMonth;
+        });
+        
+        const transactionRevenue = monthTransactions.reduce((sum, t) => sum + parseFloat(t.total), 0);
+        const packageRevenue = monthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const totalRevenue = transactionRevenue + packageRevenue;
+        
+        const orderCount = monthTransactions.length;
+        
+        monthlyRevenue.push({
+          month: month.toISOString().slice(0, 7), // YYYY-MM format
+          revenue: Math.round(totalRevenue * 100) / 100,
+          orderCount
+        });
+      }
+
+      res.json(monthlyRevenue);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch revenue trends" });
+    }
+  });
+
+  app.get("/api/reports/service-analytics", requireSuperAdmin, async (_req, res) => {
+    try {
+      const allOrders = await storage.getOrders();
+      
+      // Aggregate service usage across all orders
+      const serviceStats = new Map();
+      
+      allOrders.forEach(order => {
+        if (order.items && Array.isArray(order.items)) {
+          order.items.forEach((item: any) => {
+            const serviceName = item.service?.name || 'Unknown Service';
+            const revenue = parseFloat(item.total || '0');
+            
+            if (serviceStats.has(serviceName)) {
+              const current = serviceStats.get(serviceName);
+              serviceStats.set(serviceName, {
+                ...current,
+                orderCount: current.orderCount + 1,
+                revenue: current.revenue + revenue
+              });
+            } else {
+              serviceStats.set(serviceName, {
+                serviceName,
+                orderCount: 1,
+                revenue
+              });
+            }
+          });
+        }
+      });
+
+      const topServices = Array.from(serviceStats.values())
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 10)
+        .map(service => ({
+          ...service,
+          revenue: Math.round(service.revenue * 100) / 100
+        }));
+
+      res.json(topServices);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch service analytics" });
+    }
+  });
+
+  // Branch customization routes
+  app.get("/api/branches/:branchId/customization", requireAuth, async (req, res) => {
+    try {
+      const { branchId } = req.params;
+      const user = req.user as UserWithBranch;
+      
+      // Allow super admin to access any branch, or branch-specific admin/user for their own branch
+      if (user.role !== "super_admin" && user.branchId !== branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const customization = await storage.getBranchCustomization(branchId);
+      res.json(customization);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branch customization" });
+    }
+  });
+
+  app.put("/api/branches/:branchId/customization", requireAuth, async (req, res) => {
+    try {
+      const { branchId } = req.params;
+      const user = req.user as UserWithBranch;
+      
+      // Allow super admin to update any branch, or branch admin for their own branch
+      if (user.role !== "super_admin" && user.branchId !== branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const customization = await storage.updateBranchCustomization(branchId, req.body);
+      res.json(customization);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update branch customization" });
+    }
+  });
+
+  // Order management routes for branches
+  app.put("/api/orders/:orderId/status", requireAuth, async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { status, notes, updatedBy } = req.body;
+      const user = req.user as UserWithBranch;
+
+      // Verify user has permission to update orders
+      if (!user || user.role === "driver") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const order = await storage.getOrder(orderId);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      // Check if user can access this order (branch permission)
+      if (user.role !== "super_admin" && user.branchId !== order.branchId) {
+        return res.status(403).json({ message: "Access denied to this order" });
+      }
+
+      // Valid status transitions (using orderStatusEnum from schema)
+      const validStatuses = [
+        "received",
+        "start_processing",
+        "processing", 
+        "ready",
+        "handed_over",
+        "completed"
+      ];
+
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ message: "Invalid status" });
+      }
+
+      // Update order status
+      const updatedOrder = await storage.updateOrderStatus(orderId, status, notes);
+      res.json(updatedOrder);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update order status" });
+    }
+  });
+
+  app.get("/api/orders/branch/:branchId", requireAuth, async (req, res) => {
+    try {
+      const { branchId } = req.params;
+      const user = req.user as UserWithBranch;
+      const { status, limit = "50" } = req.query;
+
+      // Check permissions
+      if (user.role !== "super_admin" && user.branchId !== branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const orders = await storage.getOrdersByBranch(branchId, {
+        status: status as string,
+        limit: parseInt(limit as string, 10)
+      });
+
+      res.json(orders);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branch orders" });
+    }
+  });
+
+  // Branch management routes (Super Admin only)
+  app.get("/api/branches", requireSuperAdmin, async (_req, res) => {
+    try {
+      const branches = await storage.getBranches();
+      const withUrls = branches.map((b) => {
+        const result: any = {
+          ...b,
+          deliveryUrl: `/delivery/branch/${b.code}`,
+        };
+        if (!b.serviceCityIds || b.serviceCityIds.length === 0) {
+          delete result.serviceCityIds;
+        }
+        return result;
+      });
+      res.json(withUrls);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branches" });
+    }
+  });
+
+  app.post("/api/branches", requireSuperAdmin, async (req, res) => {
+    try {
+      const { deliveryCities = [], ...rest } = req.body;
+      const validatedData = insertBranchSchema.parse({
+        ...rest,
+        logoUrl: rest.logoUrl || null,
+        tagline: rest.tagline || null,
+        deliveryEnabled: rest.deliveryEnabled ?? true,
+      });
+      const branch = await storage.createBranch(validatedData, deliveryCities);
+      const response = {
+        ...branch,
+        ...(deliveryCities.length ? { serviceCityIds: deliveryCities } : {}),
+      };
+      res.json(response);
+    } catch (error) {
+      logger.error("Error creating branch:", error as any);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.message });
+      }
+      res.status(500).json({ message: "Failed to create branch" });
+    }
+  });
+
+  app.put("/api/branches/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branches" });
+      }
+      const { deliveryCities = [], ...rest } = req.body;
+      const validatedData = updateBranchSchema.parse({
+        ...rest,
+        logoUrl: rest.logoUrl || null,
+        tagline: rest.tagline || null,
+        deliveryEnabled: rest.deliveryEnabled ?? true,
+      });
+      const branch = await storage.updateBranch(id, validatedData, deliveryCities);
+      if (!branch) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      const response = {
+        ...branch,
+        ...(branch.serviceCityIds && branch.serviceCityIds.length
+          ? { serviceCityIds: branch.serviceCityIds }
+          : {}),
+      };
+      res.json(response);
+    } catch (error) {
+      logger.error("Error updating branch:", error as any);
+      res.status(500).json({ message: "Failed to update branch" });
+    }
+  });
+
+  app.post(
+    "/api/branches/:id/logo",
+    requireAdminOrSuperAdmin,
+    uploadLogo.single("logo"),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const user = req.user as User;
+        if (user.role !== "super_admin" && user.branchId !== id) {
+          return res.status(403).json({ message: "Cannot modify other branches" });
+        }
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        const logoUrl = `/uploads/${req.file.filename}`;
+        const branch = await storage.updateBranch(id, { logoUrl });
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        res.json({ logoUrl });
+      } catch (error) {
+        logger.error("Error uploading branch logo:", error as any);
+        res.status(500).json({ message: "Failed to upload logo" });
+      }
+    },
+  );
+
+  app.delete("/api/branches/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const deleted = await storage.deleteBranch(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      res.json({ message: "Branch deleted successfully" });
+    } catch (error) {
+      logger.error("Error deleting branch:", error as any);
+      res.status(500).json({ message: "Failed to delete branch" });
+    }
+  });
+
+  // Branch QR Code Management Routes
+  app.get("/api/branches/:id/qr-codes", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      // Authorization: users can only access their own branch QR codes unless super admin
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch QR codes" });
+      }
+
+      const qrCodes = await storage.getBranchQRCodes(id);
+      res.json(qrCodes);
+    } catch (error) {
+      logger.error("Error fetching branch QR codes:", error as any);
+      res.status(500).json({ message: "Failed to fetch QR codes" });
+    }
+  });
+
+  app.get("/api/branches/:id/qr-codes/active", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch QR codes" });
+      }
+
+      const activeQrCode = await storage.getActiveBranchQRCode(id);
+      if (!activeQrCode) {
+        return res.status(404).json({ message: "No active QR code found" });
+      }
+      res.json(activeQrCode);
+    } catch (error) {
+      logger.error("Error fetching active QR code:", error as any);
+      res.status(500).json({ message: "Failed to fetch active QR code" });
+    }
+  });
+
+  app.post("/api/branches/:id/qr-codes", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot create QR codes for other branches" });
+      }
+
+      // Generate a unique QR code
+      const qrCode = randomUUID().replace(/-/g, '');
+      
+      const newQrCode = await storage.createBranchQRCode({
+        branchId: id,
+        qrCode: qrCode,
+        isActive: true,
+        createdBy: user.id
+      });
+
+      res.status(201).json(newQrCode);
+    } catch (error) {
+      logger.error("Error creating QR code:", error as any);
+      res.status(500).json({ message: "Failed to create QR code" });
+    }
+  });
+
+  app.put("/api/branches/:id/qr-codes/:qrId/deactivate", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id, qrId } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch QR codes" });
+      }
+
+      const deactivatedQrCode = await storage.deactivateBranchQRCode(qrId, user.id);
+      if (!deactivatedQrCode) {
+        return res.status(404).json({ message: "QR code not found" });
+      }
+
+      res.json(deactivatedQrCode);
+    } catch (error) {
+      logger.error("Error deactivating QR code:", error as any);
+      res.status(500).json({ message: "Failed to deactivate QR code" });
+    }
+  });
+
+  app.post("/api/branches/:id/qr-codes/regenerate", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot regenerate QR codes for other branches" });
+      }
+
+      const newQrCode = await storage.regenerateBranchQRCode(id, user.id);
+      res.json(newQrCode);
+    } catch (error) {
+      logger.error("Error regenerating QR code:", error as any);
+      res.status(500).json({ message: "Failed to regenerate QR code" });
+    }
+  });
+
+  // Public QR code lookup route for customer access
+  app.get("/api/qr/:code", async (req, res) => {
+    try {
+      const { code } = req.params;
+      const qrCodeRecord = await storage.getBranchQRCodeByCode(code);
+      
+      if (!qrCodeRecord || !qrCodeRecord.isActive) {
+        return res.status(404).json({ message: "QR code not found or inactive" });
+      }
+
+      const branch = await storage.getBranch(qrCodeRecord.branchId);
+      if (!branch) {
+        return res.status(404).json({ message: "Associated branch not found" });
+      }
+
+      res.json({
+        qrCode: qrCodeRecord,
+        branch: {
+          id: branch.id,
+          name: branch.name,
+          code: branch.code,
+          address: branch.address,
+          phone: branch.phone
+        }
+      });
+    } catch (error) {
+      logger.error("Error looking up QR code:", error as any);
+      res.status(500).json({ message: "Failed to lookup QR code" });
+    }
+  });
+
+  app.put(
+    "/api/admin/branches/:id/service-cities",
+    requireAdminOrSuperAdmin,
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const user = req.user as User;
+        if (user.role !== "super_admin" && user.branchId !== id) {
+          return res.status(403).json({ message: "Cannot modify other branches" });
+        }
+        const { cityIds } = z.object({ cityIds: z.array(z.string()) }).parse(req.body);
+        const updated = await storage.setBranchServiceCities(id, cityIds);
+        res.json({ cityIds: updated });
+      } catch (error) {
+        res.status(400).json({ message: "Failed to update service cities" });
+      }
+    },
+  );
+
+  // Security settings (Admin or Super Admin)
+  app.get("/api/security-settings", requireAdminOrSuperAdmin, async (_req, res) => {
+    try {
+      const settings = await storage.getSecuritySettings();
+      res.json(settings);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch security settings" });
+    }
+  });
+
+  app.put("/api/security-settings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const validated = insertSecuritySettingsSchema.parse(req.body);
+      const updated = await storage.updateSecuritySettings(validated);
+      res.json(updated);
+    } catch (error) {
+      logger.error("Error updating security settings:", error as any);
+      res.status(400).json({ message: "Invalid security settings data" });
+    }
+  });
+
+  // Products route
+  app.get(
+    "/api/products",
+    async (req, res, next) => {
+      res.set("Cache-Control", "no-store");
+      app.set("etag", false);
+      const branchCode = req.query.branchCode as string | undefined;
+      if (!branchCode) return next();
+      try {
+        const branch = await storage.getBranchByCode(branchCode);
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        const categoryId = req.query.categoryId as string;
+        const search = req.query.search as string | undefined;
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        const offset = req.query.offset ? Number(req.query.offset) : undefined;
+        const itemType = req.query.itemType as ItemType | undefined;
+        const result = categoryId
+          ? await storage.getProductsByCategory(
+              categoryId,
+              branch.id,
+              search,
+              limit,
+              offset,
+              itemType,
+            )
+          : await storage.getProducts(
+              branch.id,
+              search,
+              limit,
+              offset,
+              itemType,
+            );
+        console.debug("[products] branch resolved via branchCode", {
+          branchCode,
+          branchId: branch.id,
+          productCount: result.items.length,
+        });
+        res.status(200).json(result);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch products" });
+      }
+    },
+    requireAuth,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      app.set("etag", false);
+      try {
+        const categoryId = req.query.categoryId as string;
+        const search = req.query.search as string | undefined;
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        const offset = req.query.offset ? Number(req.query.offset) : undefined;
+        const itemType = req.query.itemType as ItemType | undefined;
+        const user = req.user as UserWithBranch;
+        const branchId =
+          user.branchId ??
+          (user.role === "super_admin"
+            ? (req.query.branchId as string | undefined)
+            : undefined);
+        if (!branchId)
+          return res.status(400).json({ message: "branchId is required" });
+
+        const result = categoryId
+          ? await storage.getProductsByCategory(
+              categoryId,
+              branchId,
+              search,
+              limit,
+              offset,
+              itemType,
+            )
+          : await storage.getProducts(
+              branchId,
+              search,
+              limit,
+              offset,
+              itemType,
+            );
+
+        console.debug("[products] branch resolved via authentication", {
+          branchCode: req.query.branchCode,
+          branchId,
+          productCount: result.items.length,
+        });
+        res.status(200).json(result);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch products" });
+      }
+    },
+  );
+
+  app.get(
+    "/api/product-categories",
+    async (req, res, next) => {
+      const branchCode = req.query.branchCode as string | undefined;
+      if (!branchCode) return next();
+      try {
+        const branch = await storage.getBranchByCode(branchCode);
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        const categories = await storage.getProductCategories(branch.id);
+        res.json(categories);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch product categories" });
+      }
+    },
+    requireAuth,
+    async (req, res) => {
+      try {
+        const userId = (req.user as UserWithBranch).id;
+        const categories = await storage.getCategoriesByType("product", userId);
+        res.json(categories);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch product categories" });
+      }
+    },
+  );
+
+  app.post("/api/products", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.branchId ?? (user.role === "super_admin" ? req.body.branchId : undefined);
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId is required" });
+      }
+      const validatedData = insertProductSchema.parse(req.body);
+      const newProduct = await storage.createProduct({ ...validatedData, branchId });
+      res.json(newProduct);
+    } catch (error) {
+      logger.error("Error creating product:", error as any);
+      res.status(500).json({ message: "Failed to create product" });
+    }
+  });
+
+  app.put("/api/products/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.branchId ?? (user.role === "super_admin" ? req.body.branchId : undefined);
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId is required" });
+      }
+      const validatedData = insertProductSchema.partial().parse(req.body);
+      const updatedProduct = await storage.updateProduct(id, validatedData, branchId);
+      if (!updatedProduct) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+      res.json(updatedProduct);
+    } catch (error) {
+      logger.error("Error updating product:", error as any);
+      res.status(500).json({ message: "Failed to update product" });
+    }
+  });
+
+  app.get("/api/products/:id/services", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const categoryId = req.query.categoryId as string | undefined;
+      const product = await storage.getProduct(req.params.id);
+      if (!product?.clothingItemId) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+      const services = await storage.getServicesForClothingItem(
+        product.clothingItemId,
+        user.id,
+        user.branchId!,
+        categoryId,
+      );
+      res.json(services);
+    } catch (error) {
+      logger.error("Error fetching product services:", error as any);
+      res.status(500).json({ message: "Failed to fetch services" });
+    }
+  });
+  // Clothing Items routes - with public access via branchCode
+  app.get(
+    "/api/clothing-items",
+    async (req, res, next) => {
+      const branchCode = req.query.branchCode as string | undefined;
+      console.log("[clothing-items] branchCode:", branchCode);
+      if (!branchCode) {
+        console.log("[clothing-items] No branchCode, calling next()");
+        return next();
+      }
+      console.log("[clothing-items] Processing public request for branchCode:", branchCode);
+      try {
+        const branch = await storage.getBranchByCode(branchCode);
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        const categoryId = req.query.categoryId as string;
+        const search = req.query.search as string | undefined;
+        
+        // Get clothing items for this branch
+        const allItems = await db.select().from(clothingItems);
+        let items = allItems;
+        
+        if (categoryId && categoryId !== "all") {
+          items = items.filter(item => item.categoryId === categoryId);
+        }
+
+        if (search) {
+          const term = search.toLowerCase();
+          items = items.filter((item) =>
+            item.name.toLowerCase().includes(term) ||
+            item.description?.toLowerCase().includes(term),
+          );
+        }
+
+        res.json(items);
+      } catch (error) {
+        logger.error("Error fetching clothing items (public):", error as any);
+        res.status(500).json({ message: "Failed to fetch clothing items" });
+      }
+    },
+    requireAuth,
+    async (req, res) => {
+        try {
+          const categoryId = req.query.categoryId as string;
+          const search = req.query.search as string;
+          const user = req.user as UserWithBranch;
+          const userId = user.id;
+
+          // Super admin can see all items, regular users see their branch items
+          let items: ClothingItem[] = [];
+          if (user.role === 'super_admin') {
+            // For super admin, get all items from all users
+            const allItems = await db.select().from(clothingItems);
+            items = categoryId && categoryId !== "all" 
+              ? allItems.filter(item => item.categoryId === categoryId)
+              : allItems;
+          } else {
+            items = categoryId
+              ? await storage.getClothingItemsByCategory(categoryId, userId)
+              : await storage.getClothingItems(userId);
+          }
+
+          if (search) {
+            const term = search.toLowerCase();
+            items = items.filter((item) =>
+              item.name.toLowerCase().includes(term) ||
+              item.description?.toLowerCase().includes(term),
+            );
+          }
+
+          res.json(items);
+        } catch (error) {
+          logger.error("Error fetching clothing items:", error as any);
+          res.status(500).json({ message: "Failed to fetch clothing items" });
+        }
+    },
+  );
+
+  app.get("/api/clothing-items/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.user as UserWithBranch).id;
+      const item = await storage.getClothingItem(req.params.id, userId);
+      if (!item) {
+        return res.status(404).json({ message: "Clothing item not found" });
+      }
+      res.json(item);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch clothing item" });
+    }
+  });
+
+  app.post("/api/clothing-items", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const validatedData = insertClothingItemSchema.parse(req.body);
+      const userId = (req.user as UserWithBranch).id;
+      const category = await storage.getCategory(validatedData.categoryId, userId);
+      if (!category) {
+        return res.status(400).json({ message: "Invalid category" });
+      }
+      if (category.type !== 'item') {
+        return res.status(400).json({ message: "Invalid category type" });
+      }
+      const newItem = await storage.createClothingItem({ ...validatedData, userId });
+      res.json(newItem);
+    } catch (error: any) {
+      logger.error("Error creating clothing item:", error as any);
+      if (error?.code === "23503") {
+        return res.status(400).json({ message: "Invalid category" });
+      }
+      res.status(500).json({ message: "Failed to create clothing item" });
+    }
+  });
+
+  app.put("/api/clothing-items/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validatedData = insertClothingItemSchema.partial().parse(req.body);
+      const userId = (req.user as UserWithBranch).id;
+      const updatedItem = await storage.updateClothingItem(id, validatedData, userId);
+      if (!updatedItem) {
+        return res.status(404).json({ message: "Clothing item not found" });
+      }
+      res.json(updatedItem);
+    } catch (error) {
+      logger.error("Error updating clothing item:", error as any);
+      res.status(500).json({ message: "Failed to update clothing item" });
+    }
+  });
+
+  app.delete("/api/clothing-items/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = (req.user as UserWithBranch).id;
+      const deleted = await storage.deleteClothingItem(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Clothing item not found" });
+      }
+      res.json({ message: "Clothing item deleted successfully" });
+    } catch (error) {
+      logger.error("Error deleting clothing item:", error as any);
+      res.status(500).json({ message: "Failed to delete clothing item" });
+    }
+  });
+
+  // Clothing item services - with public access via branchCode
+  app.get(
+    "/api/clothing-items/:id/services",
+    async (req, res, next) => {
+      const branchCode = req.query.branchCode as string | undefined;
+      if (!branchCode) return next();
+      try {
+        const branch = await storage.getBranchByCode(branchCode);
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        const categoryId = req.query.categoryId as string | undefined;
+        
+        // Get services for this clothing item and branch - using simplified approach
+        // Get all services from DB directly for public access
+        const rows = await db
+          .select({
+            id: laundryServices.id,
+            name: laundryServices.name,
+            description: laundryServices.description,
+            categoryId: laundryServices.categoryId,
+            price: laundryServices.price,
+            userId: laundryServices.userId,
+            itemPrice: sql<string>`COALESCE(${itemServicePrices.price}, ${laundryServices.price})`,
+          })
+          .from(laundryServices)
+          .leftJoin(
+            itemServicePrices,
+            and(
+              eq(itemServicePrices.serviceId, laundryServices.id),
+              eq(itemServicePrices.clothingItemId, req.params.id),
+              eq(itemServicePrices.branchId, branch.id),
+            ),
+          )
+          .where(
+            categoryId && categoryId !== "all" 
+              ? eq(laundryServices.categoryId, categoryId)
+              : undefined
+          );
+        
+        const services = rows;
+        res.json(services);
+      } catch (error) {
+        logger.error("Error fetching item services (public):", error as any);
+        res.status(500).json({ message: "Failed to fetch services" });
+      }
+    },
+    requireAuth,
+    async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const categoryId = req.query.categoryId as string | undefined;
+      const services = await storage.getServicesForClothingItem(
+        req.params.id,
+        user.id,
+        user.branchId!,
+        categoryId,
+      );
+      res.json(services);
+    } catch (error) {
+      logger.error("Error fetching item services:", error as any);
+      res.status(500).json({ message: "Failed to fetch services" });
+    }
+  });
+
+  // Laundry Services routes
+  app.get("/api/laundry-services", requireAuth, async (req, res) => {
+    try {
+      const categoryId = req.query.categoryId as string;
+      const search = req.query.search as string;
+      const userId = (req.user as UserWithBranch).id;
+
+      let services = categoryId
+        ? await storage.getLaundryServicesByCategory(categoryId, userId)
+        : await storage.getLaundryServices(userId);
+
+      if (search) {
+        const term = search.toLowerCase();
+        services = services.filter((service) =>
+          service.name.toLowerCase().includes(term) ||
+          service.description?.toLowerCase().includes(term),
+        );
+      }
+
+      res.json(services);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch laundry services" });
+    }
+  });
+
+  app.get("/api/laundry-services/:id", requireAuth, async (req, res) => {
+    try {
+      const userId = (req.user as UserWithBranch).id;
+      const service = await storage.getLaundryService(req.params.id, userId);
+      if (!service) {
+        return res.status(404).json({ message: "Laundry service not found" });
+      }
+      res.json(service);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch laundry service" });
+    }
+  });
+
+  app.post("/api/laundry-services", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const validatedData = insertLaundryServiceSchema.parse(req.body);
+      const userId = (req.user as UserWithBranch).id;
+      const category = await storage.getCategory(validatedData.categoryId, userId);
+      if (!category || category.type !== "service") {
+        return res.status(400).json({ message: "Invalid category" });
+      }
+      const newService = await storage.createLaundryService({ ...validatedData, userId });
+      res.json(newService);
+    } catch (error: any) {
+      logger.error("Error creating laundry service:", error as any);
+      if (error?.code === "23503") {
+        return res.status(400).json({ message: "Invalid category" });
+      }
+      res.status(500).json({ message: "Failed to create laundry service" });
+    }
+  });
+
+  app.put("/api/laundry-services/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const validatedData = insertLaundryServiceSchema.partial().parse(req.body);
+      const userId = (req.user as UserWithBranch).id;
+      const updatedService = await storage.updateLaundryService(id, validatedData, userId);
+      if (!updatedService) {
+        return res.status(404).json({ message: "Laundry service not found" });
+      }
+      res.json(updatedService);
+    } catch (error) {
+      logger.error("Error updating laundry service:", error as any);
+      res.status(500).json({ message: "Failed to update laundry service" });
+    }
+  });
+
+  app.delete("/api/laundry-services/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = (req.user as UserWithBranch).id;
+      const deleted = await storage.deleteLaundryService(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Laundry service not found" });
+      }
+      res.json({ message: "Laundry service deleted successfully" });
+    } catch (error) {
+      logger.error("Error deleting laundry service:", error as any);
+      res.status(500).json({ message: "Failed to delete laundry service" });
+    }
+  });
+
+  // Item-service price management
+  app.post("/api/item-service-prices", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const body = { ...req.body, branchId: req.body.branchId ?? user.branchId };
+      const data = insertItemServicePriceSchema.parse(body);
+      const record = await storage.createItemServicePrice(data);
+      res.json(record);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({
+          message: error.message,
+          errors: error.errors,
+        });
+      }
+      logger.error("Error upserting item service price:", error as any);
+      res.status(500).json({ message: "Failed to upsert item service price" });
+    }
+  });
+
+  app.put("/api/item-service-prices", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const body = { ...req.body, branchId: req.body.branchId ?? user.branchId };
+      const data = insertItemServicePriceSchema.parse(body);
+        const updated = await storage.updateItemServicePrice(
+          data.clothingItemId,
+          data.serviceId,
+          data.branchId!,
+          data.price.toString(),
+        );
+      if (!updated) {
+        return res.status(404).json({ message: "Item service price not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      logger.error("Error updating item service price:", error as any);
+      res.status(500).json({ message: "Failed to update item service price" });
+    }
+  });
+
+  app.delete("/api/item-service-prices", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { clothingItemId, serviceId, branchId } = req.body as {
+        clothingItemId: string;
+        serviceId: string;
+        branchId?: string;
+      };
+      const deleted = await storage.deleteItemServicePrice(
+        clothingItemId,
+        serviceId,
+        branchId ?? user.branchId!,
+      );
+      res.json({ success: deleted });
+    } catch (error) {
+      logger.error("Error deleting item service price:", error as any);
+      res.status(500).json({ message: "Failed to delete item service price" });
+    }
+  });
+
+  app.get("/api/item-prices", requireAuth, async (req, res) => {
+    try {
+      const clothingItemId = req.query.clothingItemId as string;
+      const serviceId = req.query.serviceId as string;
+      if (!clothingItemId || !serviceId) {
+        return res
+          .status(400)
+          .json({ message: "Missing clothingItemId or serviceId" });
+      }
+      const user = req.user as UserWithBranch;
+      const price = await storage.getItemServicePrice(
+        clothingItemId,
+        serviceId,
+        user.id,
+        user.branchId!,
+      );
+      if (price == null) {
+        return res.status(404).json({ message: "Price not found" });
+      }
+      res.json({ price });
+    } catch (error) {
+      logger.error("Error fetching item price:", error as any);
+      res.status(500).json({ message: "Failed to fetch item price" });
+    }
+  });
+
+  // Packages routes
+  async function attachClothingItemNames(pkgs: any[]) {
+    const ids = pkgs
+      .flatMap((p) =>
+        (p.packageItems || []).map((i: any) => i.clothingItemId).filter(Boolean),
+      ) as string[];
+    if (ids.length === 0) return pkgs;
+    const clothing = await db
+      .select({ id: clothingItems.id, name: clothingItems.name })
+      .from(clothingItems)
+      .where(inArray(clothingItems.id, ids));
+    const map = new Map(clothing.map((c) => [c.id, c.name]));
+    return pkgs.map((p) => ({
+      ...p,
+      packageItems: (p.packageItems || []).map((i: any) => ({
+        ...i,
+        clothingItem:
+          i.clothingItemId && map.has(i.clothingItemId)
+            ? { id: i.clothingItemId, name: map.get(i.clothingItemId) }
+            : undefined,
+      })),
+    }));
+  }
+
+  app.get("/api/packages", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? (req.query.branchId as string | undefined)
+          : user.branchId;
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId required" });
+      }
+      let pkgs = await storage.getPackages(branchId);
+      pkgs = await attachClothingItemNames(pkgs);
+      res.json(pkgs);
+    } catch (error) {
+      logger.error(error);
+      res
+        .status(500)
+        .json({ message: "Failed to fetch packages", error: String(error) });
+    }
+  });
+
+  app.get("/api/packages/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? (req.query.branchId as string | undefined)
+          : user.branchId;
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId required" });
+      }
+      const pkg = await storage.getPackage(req.params.id, branchId);
+      if (!pkg) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      const [withNames] = await attachClothingItemNames([pkg]);
+      res.json(withNames);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch package" });
+    }
+  });
+
+  app.post("/api/packages", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const data =
+        user.role === "super_admin"
+          ? req.body
+          : { ...req.body, branchId: user.branchId };
+      const { packageItems, ...pkgData } = insertPackageSchema.parse(data);
+      let pkg = await storage.createPackage({
+        ...pkgData,
+        packageItems: packageItems?.map((i) => ({
+          ...i,
+          paidCredits: i.paidCredits ?? 0,
+        })),
+      });
+      [pkg] = await attachClothingItemNames([pkg]);
+      res.status(201).json(pkg);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid package data" });
+    }
+  });
+
+  app.put("/api/packages/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const data =
+        user.role === "super_admin"
+          ? req.body
+          : { ...req.body, branchId: user.branchId };
+      const { packageItems, ...pkgData } = insertPackageSchema
+        .partial()
+        .parse(data);
+      if (!pkgData.branchId) {
+        return res.status(400).json({ message: "branchId required" });
+      }
+      let pkg = await storage.updatePackage(
+        req.params.id,
+        {
+          ...pkgData,
+          packageItems: packageItems?.map((i) => ({
+            ...i,
+            paidCredits: i.paidCredits ?? 0,
+          })),
+        },
+        pkgData.branchId,
+      );
+      if (!pkg) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      [pkg] = await attachClothingItemNames([pkg]);
+      res.json(pkg);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid package data" });
+    }
+  });
+
+  app.delete("/api/packages/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? (req.query.branchId as string | undefined)
+          : user.branchId;
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId required" });
+      }
+      const deleted = await storage.deletePackage(req.params.id, branchId);
+      if (!deleted) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      res.json({ message: "Package deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete package" });
+    }
+  });
+
+  app.post("/api/packages/:id/assign", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin"
+          ? (req.query.branchId as string | undefined)
+          : user.branchId;
+      if (!branchId) {
+        return res.status(400).json({ message: "branchId required" });
+      }
+      const { customerId, startsAt, expiresAt, paymentMethod } = z
+        .object({
+          customerId: z.string(),
+          startsAt: z.string().datetime().optional(),
+          expiresAt: z.string().datetime().optional(),
+          paymentMethod: z.string().default("cash"), // Matches insertPaymentSchema paymentMethod
+        })
+        .parse(req.body);
+      const pkg = await storage.getPackage(req.params.id, branchId);
+      if (!pkg) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      const balance = (pkg.packageItems || []).reduce(
+        (sum, item) => sum + (item.credits ?? 0),
+        0,
+      );
+      const startDate = startsAt ? new Date(startsAt) : new Date();
+      const expiryDate = expiresAt
+        ? new Date(expiresAt)
+        : pkg.expiryDays
+        ? new Date(startDate.getTime() + pkg.expiryDays * 24 * 60 * 60 * 1000)
+        : null;
+      
+      // Convert price to number for validation, then to string for storage
+      const packagePrice = Number(pkg.price);
+      
+      // Check for existing package assignment to prevent duplicates
+      const existingAssignments = await storage.getCustomerPackagesWithUsage(customerId);
+      const duplicateAssignment = existingAssignments.find(
+        (cp: any) => cp.packageId === req.params.id && 
+        Math.abs(new Date(cp.startsAt).getTime() - startDate.getTime()) < 60000 // Within 1 minute
+      );
+      
+      if (duplicateAssignment) {
+        return res.status(409).json({ 
+          message: "Package already assigned recently", 
+          existingAssignment: duplicateAssignment 
+        });
+      }
+      
+      // Perform atomic operations: both assignment and payment must succeed
+      let record: any;
+      try {
+        // First assign the package
+        record = await storage.assignPackageToCustomer(
+          req.params.id,
+          customerId,
+          balance,
+          startDate,
+          expiryDate,
+        );
+
+        // Only create payment record if price > 0
+        if (packagePrice > 0) {
+          // Validate payment data using proper schema
+          const paymentData = insertPaymentSchema.parse({
+            customerId,
+            amount: packagePrice.toFixed(2), // Convert to string with 2 decimal places
+            paymentMethod,
+            notes: `Package purchase: ${pkg.nameEn || 'Package'} (Package ID: ${pkg.id})`,
+            receivedBy: user.username || "System",
+          });
+          
+          await storage.createPayment(paymentData);
+        }
+      } catch (error) {
+        logger.error("Error in package assignment/payment:", error as any);
+        
+        // If payment fails but assignment succeeded, try to roll back assignment
+        if (record) {
+          try {
+            // Note: In a real implementation with database transactions, 
+            // this would be automatically rolled back
+            logger.warn("Package assignment succeeded but payment failed - manual cleanup may be required");
+          } catch (rollbackError) {
+            logger.error("Failed to rollback package assignment:", rollbackError as any);
+          }
+        }
+        
+        return res.status(500).json({ 
+          message: "Failed to assign package or record payment",
+          error: error instanceof Error ? error.message : "Unknown error"
+        });
+      }
+
+      res.status(200).json({
+        ...record,
+        paymentRecorded: packagePrice > 0,
+        packagePrice: packagePrice.toFixed(2)
+      });
+    } catch (error) {
+      res.status(400).json({ message: "Invalid data" });
+    }
+  });
+
+  // Transactions routes
+  app.post("/api/transactions", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!user.branchId) {
+        return res.status(400).json({ message: "User branch not set" });
+      }
+
+      const {
+        customerId,
+        customerName,
+        customerPhone,
+        loyaltyPointsEarned = 0,
+        loyaltyPointsRedeemed = 0,
+        promisedReadyOption,
+        promisedReadyDate,
+        ...transactionData
+      } = req.body;
+      const validatedData = insertTransactionSchema.parse(transactionData);
+
+      let orderId = validatedData.orderId;
+      if (!orderId) {
+        const orderData = insertOrderSchema.parse({
+          customerId,
+          customerName: customerName || "Walk-in",
+          customerPhone: customerPhone || "",
+          items: validatedData.items,
+          subtotal: validatedData.subtotal,
+          tax: validatedData.tax,
+          total: validatedData.total,
+          paymentMethod: validatedData.paymentMethod,
+          status: "handed_over",
+          sellerName: validatedData.sellerName,
+          promisedReadyOption,
+          promisedReadyDate,
+        });
+        const order = await storage.createOrder({ ...orderData, branchId: user.branchId });
+        orderId = order.id;
+      }
+
+      const transaction = await storage.createTransaction({
+        ...validatedData,
+        branchId: user.branchId,
+        orderId,
+      });
+
+      if (customerId) {
+        const customer = await storage.getCustomer(customerId, user.branchId);
+        if (customer) {
+          const newPoints = customer.loyaltyPoints + (loyaltyPointsEarned - loyaltyPointsRedeemed);
+          await storage.updateCustomer(customerId, { loyaltyPoints: newPoints });
+          if (loyaltyPointsEarned > 0) {
+            await storage.createLoyaltyHistory({
+              customerId,
+              change: loyaltyPointsEarned,
+              description: `Earned from transaction ${transaction.id}`,
+            });
+          }
+          if (loyaltyPointsRedeemed > 0) {
+            await storage.createLoyaltyHistory({
+              customerId,
+              change: -loyaltyPointsRedeemed,
+              description: `Redeemed in transaction ${transaction.id}`,
+            });
+          }
+        }
+      }
+      let packages = [] as any[];
+      if (customerId) {
+        try {
+          packages = await storage.getCustomerPackagesWithUsage(customerId);
+          // Note: Do not trust client-provided packageUsage for financial data
+          // packageUsage should be computed server-side during order creation
+          logger.info({ customerId }, "Loaded customer packages for transaction display");
+        } catch (error) {
+          logger.error({ err: error, customerId }, "Failed to fetch customer packages");
+        }
+      }
+
+      res.json({ ...transaction, packages });
+    } catch (error) {
+      logger.error("Transaction creation error:", error as any);
+      res.status(400).json({ message: "Failed to create transaction" });
+    }
+  });
+
+  app.get("/api/transactions", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const transactions = await storage.getTransactions(user.branchId || undefined);
+      res.json(transactions);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch transactions" });
+    }
+  });
+
+  app.get("/api/transactions/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const transaction = await storage.getTransaction(req.params.id, user.branchId || undefined);
+      if (!transaction) {
+        return res.status(404).json({ message: "Transaction not found" });
+      }
+      let packages = [] as any[];
+      if (transaction.orderId) {
+        const order = await storage.getOrder(transaction.orderId, user.branchId || undefined);
+        if (order?.customerId) {
+          try {
+            packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+            // Use stored packageUsages from order for accurate per-transaction credit display
+            if (order.packageUsages) {
+              packages = applyPackageUsageModification(packages, Array.isArray(order.packageUsages) ? order.packageUsages : []);
+            }
+          } catch (error) {
+            logger.error(
+              { err: error, orderId: order.id, customerId: order.customerId },
+              "Failed to fetch customer packages",
+            );
+          }
+        }
+      }
+      res.json({ ...transaction, packages });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch transaction" });
+    }
+  });
+
+  // Customer Management Routes
+  app.get("/api/customers", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const q = (req.query.q as string | undefined)?.trim();
+      const includeInactive = req.query.includeInactive === "true";
+      const page = parseInt(req.query.page as string) || 1;
+      const pageSize = parseInt(req.query.pageSize as string) || 20;
+      if (q) {
+        const byPhone = await storage.getCustomerByPhone(q);
+        if (
+          byPhone &&
+          (!branchId || byPhone.branchId === branchId) &&
+          (includeInactive || byPhone.isActive)
+        ) {
+          const data = page > 1 ? [] : [byPhone];
+          return res.json({ data, total: 1 });
+        }
+        const byNickname = await storage.getCustomerByNickname(q);
+        if (
+          byNickname &&
+          (!branchId || byNickname.branchId === branchId) &&
+          (includeInactive || byNickname.isActive)
+        ) {
+          const data = page > 1 ? [] : [byNickname];
+          return res.json({ data, total: 1 });
+        }
+      }
+      const { items, total } = await storage.getCustomers(
+        q,
+        includeInactive,
+        branchId,
+        pageSize,
+        (page - 1) * pageSize,
+      );
+      res.json({ data: items, total });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customers" });
+    }
+  });
+
+  app.get("/api/customers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomer(req.params.id, branchId);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      res.json(customer);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer" });
+    }
+  });
+
+  app.get("/api/customers/:id/packages", requireAuth, async (req, res) => {
+    try {
+      const packages = await storage.getCustomerPackagesWithUsage(req.params.id);
+      res.json(packages);
+    } catch (error) {
+      logger.error({ err: error, customerId: req.params.id }, "Failed to fetch customer packages");
+      res.status(500).json({ message: "Failed to fetch customer packages" });
+    }
+  });
+
+  app.get("/api/customers/phone/:phoneNumber", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomerByPhone(req.params.phoneNumber);
+      if (!customer || (branchId && customer.branchId !== branchId)) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      res.json(customer);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer" });
+    }
+  });
+
+  app.get("/api/customers/nickname/:nickname", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomerByNickname(req.params.nickname);
+      if (!customer || (branchId && customer.branchId !== branchId)) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      res.json(customer);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer" });
+    }
+  });
+
+  app.post("/api/customers", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!user.branchId) {
+        return res.status(400).json({ message: "User branch not set" });
+      }
+      const customerData = insertCustomerSchema.parse(req.body);
+      const customer = await storage.createCustomer(customerData, user.branchId);
+      res.status(201).json(customer);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid customer data" });
+    }
+  });
+
+  app.patch("/api/customers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const data = insertCustomerSchema.partial().parse(req.body);
+      const existing = await storage.getCustomer(req.params.id, branchId);
+      if (!existing) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const customer = await storage.updateCustomer(req.params.id, data);
+      res.json(customer);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update customer" });
+    }
+  });
+
+  app.put("/api/customers/:id/password", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const { password, notify } = z
+        .object({ password: z.string().min(8), notify: z.boolean().optional() })
+        .parse(req.body);
+
+      const existing = await storage.getCustomer(req.params.id, branchId);
+      if (!existing) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 10);
+      const updated = await storage.updateCustomerPassword(req.params.id, passwordHash);
+
+      if (notify && updated) {
+        if (updated.phoneNumber) {
+          await notificationService.sendSMS(
+            updated.phoneNumber,
+            `Your password has been reset. New password: ${password}`,
+          );
+        }
+        if (updated.email) {
+          await notificationService.sendEmail(
+            updated.email,
+            "Password Reset",
+            `Your password has been reset. Your new password is: ${password}`,
+          );
+        }
+      }
+
+      res.json({ message: "Password updated" });
+    } catch (error) {
+      logger.error("Error updating customer password:", error as any);
+      res.status(500).json({ message: "Failed to update password" });
+    }
+  });
+
+  app.delete("/api/customers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const existing = await storage.getCustomer(req.params.id, branchId);
+      if (!existing) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const deleted = await storage.deleteCustomer(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      res.json({ message: "Customer deactivated" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to deactivate customer" });
+    }
+  });
+
+  // Order Management Routes
+  app.get("/api/orders", requireAuth, async (req, res) => {
+    try {
+      const { status, sortBy, sortOrder, branchId, includeDelivery } = req.query as Record<string, string>;
+      const user = req.user as UserWithBranch;
+      const sortField = sortBy === "balanceDue" ? "balanceDue" : "createdAt";
+      const orderDirection = sortOrder === "asc" ? "asc" : "desc";
+      
+      // Use branchId from query if provided (for admin queries), otherwise use user's branch
+      const targetBranchId = branchId || (user.branchId || undefined);
+      
+      let orders;
+      if (status && typeof status === 'string') {
+        orders = await storage.getOrdersByStatus(
+          status,
+          targetBranchId,
+          sortField,
+          orderDirection,
+        );
+      } else {
+        orders = await storage.getOrders(
+          targetBranchId,
+          sortField,
+          orderDirection,
+        );
+      }
+      
+      // Include delivery enrichment if requested
+      if (includeDelivery === "true") {
+        orders = await Promise.all(orders.map(async (order) => {
+          try {
+            const deliveryOrder = await storage.getDeliveryOrderByOrderId(order.id);
+            if (deliveryOrder) {
+              // Enrich with pickup and delivery address information
+              let pickupAddress, deliveryAddress;
+              if (deliveryOrder.pickupAddressId) {
+                pickupAddress = await storage.getCustomerAddress(deliveryOrder.pickupAddressId);
+              }
+              if (deliveryOrder.deliveryAddressId) {
+                deliveryAddress = await storage.getCustomerAddress(deliveryOrder.deliveryAddressId);
+              }
+              
+              return {
+                ...order,
+                deliveryOrder: {
+                  ...deliveryOrder,
+                  pickupAddress: pickupAddress ? {
+                    label: pickupAddress.label || "Pickup Address",
+                    address: pickupAddress.address
+                  } : undefined,
+                  deliveryAddress: deliveryAddress ? {
+                    label: deliveryAddress.label || "Delivery Address", 
+                    address: deliveryAddress.address
+                  } : undefined
+                }
+              };
+            }
+            return order;
+          } catch (error) {
+            logger.error("Failed to enrich order with delivery data:", error);
+            return order;
+          }
+        }));
+      }
+      
+      res.json(orders);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch orders" });
+    }
+  });
+
+  app.get("/api/orders/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const order = await storage.getOrder(req.params.id, user.branchId || undefined);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+      let packages = [] as any[];
+      if (order.customerId) {
+        try {
+          packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+          // Use stored packageUsages for accurate per-transaction credit display  
+          if (order.packageUsages) {
+            packages = applyPackageUsageModification(packages, Array.isArray(order.packageUsages) ? order.packageUsages : []);
+          }
+        } catch (error) {
+          logger.error(
+            { err: error, orderId: order.id, customerId: order.customerId },
+            "Failed to fetch customer packages",
+          );
+        }
+      }
+      res.json({ ...order, packages });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch order" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/orders", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { includeDelivery } = req.query as Record<string, string>;
+      let orders = await storage.getOrdersByCustomer(
+        req.params.customerId,
+        user.branchId || undefined,
+      );
+
+      if (req.query.unpaid === "true") {
+        orders = orders.filter((o) => Number(o.remaining) > 0);
+      }
+
+      // Include delivery enrichment if requested
+      if (includeDelivery === "true") {
+        orders = await Promise.all(orders.map(async (order) => {
+          try {
+            const deliveryOrder = await storage.getDeliveryOrderByOrderId(order.id);
+            if (deliveryOrder) {
+              // Enrich with pickup and delivery address information
+              let pickupAddress, deliveryAddress;
+              if (deliveryOrder.pickupAddressId) {
+                pickupAddress = await storage.getCustomerAddress(deliveryOrder.pickupAddressId);
+              }
+              if (deliveryOrder.deliveryAddressId) {
+                deliveryAddress = await storage.getCustomerAddress(deliveryOrder.deliveryAddressId);
+              }
+              
+              return {
+                ...order,
+                deliveryOrder: {
+                  ...deliveryOrder,
+                  pickupAddress: pickupAddress ? {
+                    label: pickupAddress.label || "Pickup Address",
+                    address: pickupAddress.address
+                  } : undefined,
+                  deliveryAddress: deliveryAddress ? {
+                    label: deliveryAddress.label || "Delivery Address", 
+                    address: deliveryAddress.address
+                  } : undefined
+                }
+              };
+            }
+            return order;
+          } catch (error) {
+            logger.error("Failed to enrich customer order with delivery data:", error);
+            return order;
+          }
+        }));
+      }
+
+      const mapped = orders.map((o: any) => ({
+        id: o.id,
+        orderNumber: o.orderNumber,
+        createdAt: o.createdAt,
+        subtotal: o.subtotal,
+        paid: o.paid,
+        remaining: o.remaining,
+        // Include delivery status in summary if available
+        deliveryOrder: o.deliveryOrder ? {
+          deliveryStatus: o.deliveryOrder.deliveryStatus,
+          deliveryMode: o.deliveryOrder.deliveryMode,
+          deliveryFee: o.deliveryOrder.deliveryFee
+        } : undefined
+      }));
+
+      const page = parseInt(req.query.page as string);
+      const pageSize = parseInt(req.query.pageSize as string) || 10;
+      if (page) {
+        const start = (page - 1) * pageSize;
+        const data = mapped.slice(start, start + pageSize);
+        res.json({ data, total: mapped.length });
+      } else {
+        res.json(mapped);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer orders" });
+    }
+  });
+
+  app.post("/api/orders", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!user.branchId) {
+        return res.status(400).json({ message: "User branch not set" });
+      }
+      const {
+        loyaltyPointsEarned = 0,
+        loyaltyPointsRedeemed = 0,
+        cartItems,
+        customerId,
+        branchCode,
+        ...data
+      } = req.body;
+
+      if (!Array.isArray(cartItems) || cartItems.length === 0) {
+        return res.status(400).json({ message: "cartItems required" });
+      }
+      if (!customerId) {
+        return res.status(400).json({ message: "customerId required" });
+      }
+      if (!branchCode) {
+        return res.status(400).json({ message: "branchCode required" });
+      }
+
+      const branch = await storage.getBranchByCode(branchCode);
+      if (!branch) {
+        return res.status(404).json({ message: "Branch not found" });
+      }
+      if (user.branchId !== branch.id) {
+        return res.status(403).json({ message: "Branch mismatch" });
+      }
+
+      // Compute packageUsages server-side for security (don't trust client)
+      const packageComputeResult = await computePackageUsage(customerId, cartItems, storage);
+      let pkgUsages: any = null;
+
+      if (packageComputeResult) {
+        try {
+          pkgUsages = packageUsagesSchema.parse(packageComputeResult.packageUsages);
+          
+          // Update customer package balances with used credits
+          for (const credit of packageComputeResult.usedCredits) {
+            await storage.updateCustomerPackageBalance(
+              credit.customerPackageId,
+              -credit.quantity, // Negative to deduct credits
+              credit.serviceId,
+              credit.clothingItemId
+            );
+          }
+          logger.info({ customerId, pkgUsages }, "Applied server-computed package usages");
+        } catch (schemaError) {
+          logger.error({ schemaError, packageUsages: packageComputeResult.packageUsages }, "Invalid computed packageUsages schema");
+          pkgUsages = null;
+        }
+      }
+
+      const orderData = insertOrderSchema.parse({
+        ...data,
+        items: cartItems,
+        customerId,
+      });
+
+      const order = await storage.createOrder({ ...orderData, branchId: branch.id, packageUsages: pkgUsages });
+
+      // If payment method is pay_later, update customer balance
+      if (order.paymentMethod === 'pay_later' && order.customerId) {
+        try {
+          const customer = await storage.getCustomer(order.customerId, user.branchId);
+          if (customer) {
+            const orderAmount = parseFloat(order.total);
+            const updatedBalance = parseFloat(customer.balanceDue) + orderAmount;
+
+            await storage.updateCustomer(order.customerId, {
+              balanceDue: updatedBalance.toString()
+            });
+          }
+        } catch (error) {
+          logger.error("Error updating customer balance:", error as any);
+          // Continue with order creation even if balance update fails
+        }
+      }
+
+      if (order.customerId) {
+        try {
+          const customer = await storage.getCustomer(order.customerId, user.branchId);
+          if (customer) {
+            const newPoints = customer.loyaltyPoints + (loyaltyPointsEarned - loyaltyPointsRedeemed);
+            await storage.updateCustomer(order.customerId, { loyaltyPoints: newPoints });
+            if (loyaltyPointsEarned > 0) {
+              await storage.createLoyaltyHistory({
+                customerId: order.customerId,
+                change: loyaltyPointsEarned,
+                description: `Earned from order ${order.id}`,
+              });
+            }
+            if (loyaltyPointsRedeemed > 0) {
+              await storage.createLoyaltyHistory({
+                customerId: order.customerId,
+                change: -loyaltyPointsRedeemed,
+                description: `Redeemed in order ${order.id}`,
+              });
+            }
+          }
+        } catch (error) {
+          logger.error("Error updating loyalty points:", error as any);
+          // Continue with order creation even if loyalty points fail
+        }
+      }
+
+      if (order.customerId && pkgUsages) {
+        try {
+          let pkgs: any[] = [];
+          try {
+            pkgs = await storage.getCustomerPackagesWithUsage(order.customerId);
+          } catch (error) {
+            logger.error(
+              { err: error, customerId: order.customerId },
+              "Failed to fetch customer packages for usage validation",
+            );
+            // Continue without package usage but don't fail the order
+            pkgs = [];
+          }
+          
+          const pkg = pkgs.find((p: any) => p.id === pkgUsages.packageId);
+          if (pkg) {
+            let validPackageUsage = true;
+            for (const item of pkgUsages.items || []) {
+              const pkgItem = pkg.items?.find(
+                (i: any) =>
+                  i.serviceId === item.serviceId &&
+                  i.clothingItemId === item.clothingItemId,
+              );
+              if (!pkgItem || pkgItem.balance < item.quantity) {
+                logger.error("Insufficient package credits for item:", item as any);
+                validPackageUsage = false;
+                break;
+              }
+            }
+            
+            if (validPackageUsage) {
+              for (const item of pkgUsages.items || []) {
+                const price = await storage.getItemServicePrice(
+                  item.clothingItemId,
+                  item.serviceId,
+                  user.id,
+                  user.branchId!,
+                );
+                await storage.updateCustomerPackageBalance(
+                  pkgUsages.packageId,
+                  -(price ?? 0) * item.quantity,
+                  item.serviceId,
+                  item.clothingItemId,
+                );
+              }
+            }
+          } else {
+            logger.error("Package not found:", pkgUsages.packageId as any);
+          }
+        } catch (error) {
+          logger.error("Error processing package usage:", error as any);
+          // Continue with order creation even if package usage fails
+        }
+      }
+
+      let packages = [] as any[];
+      if (order.customerId) {
+        try {
+          packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+          packages = applyPackageUsageModification(packages, pkgUsages);
+        } catch (error) {
+          logger.error(
+            { err: error, customerId: order.customerId },
+            "Failed to fetch customer packages",
+          );
+        }
+      }
+
+      res.status(201).json({ ...order, packages });
+    } catch (error) {
+      logger.error("Error creating order:", error as any);
+      res.status(400).json({ message: "Invalid order data" });
+    }
+  });
+
+  app.patch("/api/orders/:id", requireAuth, async (req, res) => {
+    try {
+      const order = await storage.updateOrder(req.params.id, req.body);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+      res.json(order);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update order" });
+    }
+  });
+
+  app.patch("/api/orders/:id/status", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { status, notify } = req.body as { status: string; notify?: boolean };
+      const order = await storage.updateOrderStatus(req.params.id, status);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+
+      if (notify) {
+        const channels: ("sms" | "email")[] = [];
+        if (order.customerPhone) {
+          const sent = await notificationService.sendSMS(
+            order.customerPhone,
+            `Order ${order.orderNumber} status ${status}`,
+          );
+          if (sent) channels.push("sms");
+        }
+        if (order.customerId) {
+          const customer = await storage.getCustomer(
+            order.customerId,
+            user.branchId || undefined,
+          );
+          if (customer?.email) {
+            const sent = await notificationService.sendEmail(
+              customer.email,
+              "Order Status Updated",
+              `Order ${order.orderNumber} status ${status}`,
+            );
+            if (sent) channels.push("email");
+          }
+        }
+        await Promise.all(
+          channels.map((type) =>
+            storage.createNotification({ orderId: order.id, type }),
+          ),
+        );
+      }
+
+      res.json(order);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update order status" });
+    }
+  });
+
+  app.post("/api/orders/:id/print", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const record = await storage.recordOrderPrint(req.params.id, user.id);
+      res.status(201).json(record);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to record order print" });
+    }
+  });
+
+  app.get("/api/orders/:id/prints", requireAuth, async (req, res) => {
+    try {
+      const history = await storage.getOrderPrintHistory(req.params.id);
+      res.json(history);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch order print history" });
+    }
+  });
+
+
+  // Payment Management Routes
+  app.get("/api/payments", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const payments = await storage.getPayments(user.branchId || undefined);
+      res.json(payments);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch payments" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/payments", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const payments = await storage.getPaymentsByCustomer(
+        req.params.customerId,
+        user.branchId || undefined
+      );
+      const page = parseInt(req.query.page as string);
+      const pageSize = parseInt(req.query.pageSize as string) || 10;
+      if (page) {
+        const start = (page - 1) * pageSize;
+        const data = payments.slice(start, start + pageSize);
+        res.json({ data, total: payments.length });
+      } else {
+        res.json(payments);
+      }
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer payments" });
+    }
+  });
+
+  app.get(
+    "/api/customers/:customerId/loyalty-history",
+    requireAuth,
+    async (req, res) => {
+      try {
+        const history = await storage.getLoyaltyHistory(req.params.customerId);
+        const page = parseInt(req.query.page as string);
+        const pageSize = parseInt(req.query.pageSize as string) || 10;
+        if (page) {
+          const start = (page - 1) * pageSize;
+          const data = history.slice(start, start + pageSize);
+          res.json({ data, total: history.length });
+        } else {
+          res.json(history);
+        }
+      } catch (error) {
+        res.status(500).json({ message: "Failed to fetch loyalty history" });
+      }
+    }
+  );
+
+  const handleCreatePayment = async (payment: InsertPayment, user: UserWithBranch, res: any) => {
+    if (payment.orderId) {
+      const order = await storage.getOrder(payment.orderId, user.branchId || undefined);
+      if (!order) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+    }
+    const newPayment = await storage.createPayment(payment);
+
+    // Update customer balance when payment is received
+    await storage.updateCustomerBalance(
+      payment.customerId,
+      -parseFloat(newPayment.amount),
+      user.branchId || undefined,
+    );
+
+    res.status(201).json(newPayment);
+  };
+
+  app.post("/api/customers/:customerId/payments", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const data = insertPaymentSchema
+        .omit({ customerId: true })
+        .parse(req.body);
+      await handleCreatePayment({ ...data, customerId: req.params.customerId }, user, res);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid payment data" });
+    }
+  });
+
+  app.post("/api/payments", requireAuth, async (req, res) => {
+    console.warn(
+      "POST /api/payments is deprecated. Use POST /api/customers/:customerId/payments instead."
+    );
+    try {
+      const user = req.user as UserWithBranch;
+      const paymentData = insertPaymentSchema.parse(req.body);
+      await handleCreatePayment(paymentData, user, res);
+    } catch (error) {
+      res.status(400).json({ message: "Invalid payment data" });
+    }
+  });
+
+  app.post("/api/receipts/email", requireAuth, async (req, res) => {
+    try {
+      const { email, html } = req.body as { email?: string; html?: string };
+      if (!email || !html) {
+        return res.status(400).json({ message: "Email and receipt content required" });
+      }
+      await notificationService.sendEmail(email, "Your Receipt", html);
+      res.json({ message: "Receipt emailed successfully" });
+    } catch (error) {
+      logger.error("Error sending receipt email:", error as any);
+      res.status(500).json({ message: "Failed to send receipt email" });
+    }
+  });
+
+  async function getReportSummary(user: UserWithBranch) {
+    const branchId = user.branchId || undefined;
+    const [transactions, orders, customersResult, payments, laundryServices] =
+      await Promise.all([
+        storage.getTransactions(branchId),
+        storage.getOrders(branchId),
+        storage.getCustomers(undefined, false, branchId),
+        storage.getPayments(branchId),
+        storage.getLaundryServices(user.id),
+      ]);
+    return {
+      transactions,
+      orders,
+      customers: customersResult.items,
+      payments,
+      laundryServices,
+    };
+  }
+
+  app.get("/api/report/summary", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const summary = await getReportSummary(user);
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch report summary" });
+    }
+  });
+
+  app.get("/api/report/summary/stream", requireAuth, async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    const user = req.user as UserWithBranch;
+
+    const sendSummary = async () => {
+      try {
+        const summary = await getReportSummary(user);
+        res.write(`data: ${JSON.stringify(summary)}\n\n`);
+      } catch (error) {
+        // ignore errors
+      }
+    };
+
+    const interval = setInterval(sendSummary, 30000);
+    await sendSummary();
+
+    req.on("close", () => {
+      clearInterval(interval);
+    });
+  });
+
+  // Reports routes
+  app.get("/api/reports/orders", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "daily";
+      const user = req.user as UserWithBranch;
+      const summary = await storage.getSalesSummary(range, user.branchId || undefined);
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch order reports" });
+    }
+  });
+
+  app.get("/api/reports/top-services", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "daily";
+      const user = req.user as UserWithBranch;
+      const services = await storage.getTopServices(range, user.branchId || undefined);
+      res.json({ services });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch top services" });
+    }
+  });
+
+  app.get("/api/reports/top-products", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "daily";
+      const user = req.user as UserWithBranch;
+      const products = await storage.getTopProducts(range, user.branchId || undefined);
+      res.json({ products });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch top products" });
+    }
+  });
+
+  app.get("/api/order-logs", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const status = req.query.status as string | undefined;
+      const logs = await storage.getOrderLogs(status);
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch order logs" });
+    }
+  });
+
+  // Delivery Management API Routes
+
+  // Branch Delivery Settings Routes
+  app.get("/api/branches/:id/delivery-settings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      // Authorization check - users can only access their own branch settings unless super admin
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch settings" });
+      }
+      
+      const settings = await storage.getBranchDeliverySettings(id);
+      res.json(settings);
+    } catch (error) {
+      logger.error("Error fetching delivery settings:", error as any);
+      res.status(500).json({ message: "Failed to fetch delivery settings" });
+    }
+  });
+
+  app.put("/api/branches/:id/delivery-settings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      // Authorization check
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch settings" });
+      }
+      
+      const settings = await storage.updateBranchDeliverySettings(id, req.body);
+      res.json(settings);
+    } catch (error) {
+      logger.error("Error updating delivery settings:", error as any);
+      res.status(500).json({ message: "Failed to update delivery settings" });
+    }
+  });
+
+  // Service Cities Routes
+  app.get("/api/branches/:id/service-cities", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch service cities" });
+      }
+      
+      const branch = await storage.getBranch(id);
+      const cities = branch?.serviceCityIds || [];
+      res.json(cities);
+    } catch (error) {
+      logger.error("Error fetching service cities:", error as any);
+      res.status(500).json({ message: "Failed to fetch service cities" });
+    }
+  });
+
+  // Delivery Items Routes
+  app.get("/api/branches/:id/delivery-items", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch delivery items" });
+      }
+      
+      const items = await storage.getBranchDeliveryItems(id);
+      res.json(items);
+    } catch (error) {
+      logger.error("Error fetching delivery items:", error as any);
+      res.status(500).json({ message: "Failed to fetch delivery items" });
+    }
+  });
+
+  app.put("/api/branches/:id/delivery-items/:clothingItemId/:serviceId", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id, clothingItemId, serviceId } = req.params;
+      const { isAvailable, deliveryPrice, estimatedProcessingTime } = req.body;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch delivery items" });
+      }
+      
+      const item = await storage.updateBranchDeliveryItem(id, clothingItemId, serviceId, {
+        isAvailable,
+        deliveryPrice,
+        estimatedProcessingTime,
+      });
+      res.json(item);
+    } catch (error) {
+      logger.error("Error updating delivery item:", error as any);
+      res.status(500).json({ message: "Failed to update delivery item" });
+    }
+  });
+
+  // Delivery Packages Routes
+  app.get("/api/branches/:id/delivery-packages", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch delivery packages" });
+      }
+      
+      const packages = await storage.getBranchDeliveryPackages(id);
+      res.json(packages);
+    } catch (error) {
+      logger.error("Error fetching delivery packages:", error as any);
+      res.status(500).json({ message: "Failed to fetch delivery packages" });
+    }
+  });
+
+  app.put("/api/branches/:id/delivery-packages/:packageId", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id, packageId } = req.params;
+      const { isAvailable, deliveryDiscount } = req.body;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch delivery packages" });
+      }
+      
+      const pkg = await storage.updateBranchDeliveryPackage(id, packageId, {
+        isAvailable,
+        deliveryDiscount,
+      });
+      res.json(pkg);
+    } catch (error) {
+      logger.error("Error updating delivery package:", error as any);
+      res.status(500).json({ message: "Failed to update delivery package" });
+    }
+  });
+
+  // Payment Methods Routes
+  app.get("/api/branches/:id/payment-methods", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch payment methods" });
+      }
+      
+      const paymentMethods = await storage.getBranchPaymentMethods(id);
+      res.json(paymentMethods);
+    } catch (error) {
+      logger.error("Error fetching payment methods:", error as any);
+      res.status(500).json({ message: "Failed to fetch payment methods" });
+    }
+  });
+
+  app.put("/api/branches/:id/payment-methods/:paymentMethod", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id, paymentMethod } = req.params;
+      const { isEnabled, processingFee, minAmount, maxAmount } = req.body;
+      const user = req.user as User;
+      
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch payment methods" });
+      }
+      
+      const method = await storage.updateBranchPaymentMethod(id, paymentMethod as any, {
+        isEnabled,
+        processingFee,
+        minAmount,
+        maxAmount,
+      });
+      res.json(method);
+    } catch (error) {
+      logger.error("Error updating payment method:", error as any);
+      res.status(500).json({ message: "Failed to update payment method" });
+    }
+  });
+
+  const httpServer = createServer(app);
+
+
+  return httpServer;
+}

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <!-- Load Replit dev banner only in development -->
+    <script type="module">
+      if (import.meta.env.DEV) {
+        const script = document.createElement("script");
+        script.src = "https://replit.com/public/js/replit-dev-banner.js";
+        document.body.appendChild(script);
+      }
+    </script>
+  </body>
+</html>

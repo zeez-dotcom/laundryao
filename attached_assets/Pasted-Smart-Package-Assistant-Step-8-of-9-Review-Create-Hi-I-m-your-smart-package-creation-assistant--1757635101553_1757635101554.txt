@@ -1,0 +1,76 @@
+Smart Package Assistant
+×
+Step 8 of 9
+Review & Create
+Hi! I'm your smart package creation assistant. Let's build a great package for your customers! 🎯
+
+First, what would you like to name this package?
+gg
+Great! "gg" is a good package name. Now, please provide a brief description of this package.
+gg
+Perfect! Now let's select which clothing item this package will cover. Choose from the options below:
+Dishdasha (Wool)
+Excellent choice! Loading available services for Dishdasha (Wool)...
+Now select which laundry service this package will include for Dishdasha (Wool):
+Normal Wash & Iron - 0.750 KWD
+Fetching actual pricing data...
+Getting real-time pricing...
+Perfect! The actual cost for Dishdasha (Wool) + Normal Wash & Iron is 0.750 KWD.
+
+Now, what should be the package price? (Enter amount in KWD):
+22.5
+Package price set to 22.500 KWD. Now, how many credits (uses) should customers get for this price?
+30
+Perfect! Let me analyze the financial impact of this package:
+Financial Impact Analysis
+Work Value (1 uses):
+22.500 KWD
+Package Price:
+22.500 KWD
+💰 Customer Saves:
+0.000 KWD
+📉 Company Revenue Loss::
+0.000 KWD
+Cost per Credit:
+0.750 KWD
+Break-even at:
+30 uses
+I want to adjust the credit amount
+Sure! Enter the new number of credits:
+32
+Perfect! Let me analyze the financial impact of this package:
+Financial Impact Analysis
+Work Value (30 uses):
+24.000 KWD
+Package Price:
+22.500 KWD
+💰 Customer Saves:
+1.500 KWD
+📉 Company Revenue Loss::
+1.500 KWD
+Cost per Credit:
+0.703 KWD
+Break-even at:
+30 uses
+⚠️ This package offers significant customer savings. Consider if this aligns with your pricing strategy.
+Looks good, let's proceed
+Perfect! Here's your complete package summary:
+Package Summary
+Name:
+gg
+Description:
+gg
+Item:
+Dishdasha (Wool)
+Service:
+Normal Wash & Iron
+Price:
+22.500 KWD
+Credits:
+32 uses
+Financial Impact:
+Customer saves 1.500 KWD, Company loses 1.500 KWD
+Create the package
+Sorry, there was an error creating the package. Please try again.
+Create the package
+Sorry, there was an error creating the package. Please try again.
