@@ -698,6 +698,61 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/customer/orders", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      let orders = await storage.getOrdersByCustomer(customerId);
+      orders = orders
+        .sort((a: any, b: any) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        )
+        .slice(0, 10);
+      const mapped = orders.map((o: any) => ({
+        id: o.id,
+        orderNumber: o.orderNumber,
+        createdAt: o.createdAt,
+        subtotal: o.subtotal,
+        paid: o.paid,
+        remaining: o.remaining,
+      }));
+      res.json(mapped);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch orders" });
+    }
+  });
+
+  app.get("/customer/orders/:id/receipt", async (req, res) => {
+    const customerId = (req.session as any).customerId as string | undefined;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const order = await storage.getOrder(req.params.id);
+      if (!order || order.customerId !== customerId) {
+        return res.status(404).json({ message: "Order not found" });
+      }
+      let packages: any[] = [];
+      if (order.customerId) {
+        try {
+          packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+          if (order.packageUsages) {
+            packages = applyPackageUsageModification(
+              packages,
+              Array.isArray(order.packageUsages) ? order.packageUsages : [],
+            );
+          }
+        } catch (error) {
+          logger.error(
+            { err: error, orderId: order.id, customerId: order.customerId },
+            "Failed to fetch customer packages",
+          );
+        }
+      }
+      res.json({ ...order, packages });
+    } catch {
+      res.status(500).json({ message: "Failed to fetch order" });
+    }
+  });
+
   // Customer addresses for ordering interface
   app.get("/api/customers/:customerId/addresses", async (req, res) => {
     const sessionCustomerId = (req.session as any).customerId as string | undefined;

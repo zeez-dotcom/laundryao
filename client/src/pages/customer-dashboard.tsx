@@ -1,7 +1,9 @@
 import { CustomerAuthProvider, useCustomerAuth } from "@/context/CustomerAuthContext";
 import { EnhancedPackageDisplay } from "@/components/EnhancedPackageDisplay";
+import { CustomerOrders } from "@/components/customer-orders";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { AuthProvider } from "@/context/AuthContext";
 
 function DashboardContent() {
   const { isAuthenticated, isLoading: authLoading } = useCustomerAuth();
@@ -25,16 +27,19 @@ function DashboardContent() {
   }
 
   return (
-    <div className="p-4">
+    <div className="p-4 space-y-4">
       <EnhancedPackageDisplay packages={packages} onUsePackage={() => {}} />
+      <CustomerOrders />
     </div>
   );
 }
 
 export default function CustomerDashboardPage() {
   return (
-    <CustomerAuthProvider>
-      <DashboardContent />
-    </CustomerAuthProvider>
+    <AuthProvider>
+      <CustomerAuthProvider>
+        <DashboardContent />
+      </CustomerAuthProvider>
+    </AuthProvider>
   );
 }
