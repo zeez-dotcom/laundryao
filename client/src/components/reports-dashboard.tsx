@@ -10,6 +10,7 @@ import { Transaction } from "@shared/schema";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { OrderLogsTable } from "./order-logs-table";
+import { useCurrency } from "@/lib/currency";
 
 export function ReportsDashboard() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
@@ -17,6 +18,7 @@ export function ReportsDashboard() {
     to: new Date()
   });
   const [serviceFilter, setServiceFilter] = useState("all");
+  const { formatCurrency } = useCurrency();
 
   // Fetch transactions with pagination based on date range
   const { data: transactions = [] } = useQuery({
@@ -176,7 +178,7 @@ export function ReportsDashboard() {
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${totalRevenue.toFixed(2)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(totalRevenue)}</div>
               <p className="text-xs text-muted-foreground">
                 From {totalOrders} orders
               </p>
@@ -202,7 +204,7 @@ export function ReportsDashboard() {
               <Calendar className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${averageOrderValue.toFixed(2)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(averageOrderValue)}</div>
               <p className="text-xs text-muted-foreground">
                 Per transaction
               </p>
@@ -254,9 +256,9 @@ export function ReportsDashboard() {
                         <p className="text-sm text-gray-600">{data.count} items processed</p>
                       </div>
                       <div className="text-right">
-                        <div className="font-bold text-lg">${data.revenue.toFixed(2)}</div>
+                        <div className="font-bold text-lg">{formatCurrency(data.revenue)}</div>
                         <div className="text-sm text-gray-600">
-                          ${(data.revenue / data.count).toFixed(2)} avg
+                          {formatCurrency(data.revenue / data.count)} avg
                         </div>
                       </div>
                     </div>
@@ -282,7 +284,7 @@ export function ReportsDashboard() {
                           <p className="text-sm text-gray-600">{data.count} items processed</p>
                         </div>
                         <div className="text-right">
-                          <div className="font-bold text-lg">${data.revenue.toFixed(2)}</div>
+                          <div className="font-bold text-lg">{formatCurrency(data.revenue)}</div>
                         </div>
                       </div>
                     ))}
@@ -306,7 +308,7 @@ export function ReportsDashboard() {
                       <span className="font-medium">
                         {format(new Date(date), 'MMM dd, yyyy')}
                       </span>
-                      <span className="font-bold">${revenue.toFixed(2)}</span>
+                      <span className="font-bold">{formatCurrency(revenue)}</span>
                     </div>
                   ))}
                 </div>
@@ -331,11 +333,11 @@ export function ReportsDashboard() {
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Total:</span>
-                          <span className="font-bold">${data.amount.toFixed(2)}</span>
+                          <span className="font-bold">{formatCurrency(data.amount)}</span>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-sm text-gray-600">Average:</span>
-                          <span className="font-medium">${(data.amount / data.count).toFixed(2)}</span>
+                          <span className="font-medium">{formatCurrency(data.amount / data.count)}</span>
                         </div>
                       </div>
                     </div>
@@ -364,7 +366,7 @@ export function ReportsDashboard() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="font-bold text-lg">${parseFloat(transaction.total).toFixed(2)}</div>
+                        <div className="font-bold text-lg">{formatCurrency(transaction.total)}</div>
                         <div className="text-sm text-gray-600">
                           {((transaction.items as any[]) || []).length} items
                         </div>

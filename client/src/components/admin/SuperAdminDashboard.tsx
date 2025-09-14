@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { GlobalReportsComponent } from "./GlobalReportsComponent";
+import { useCurrency } from "@/lib/currency";
 
 type Branch = {
   id: string;
@@ -35,6 +36,7 @@ type Branch = {
 export function SuperAdminDashboard() {
   const [selectedBranch, setSelectedBranch] = useState<string>("all");
   const { user } = useAuthContext();
+  const { formatCurrency } = useCurrency();
 
   const { data: branches = [], isLoading: branchesLoading } = useQuery<Branch[]>({
     queryKey: ["/api/branches"],
@@ -107,7 +109,7 @@ export function SuperAdminDashboard() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              ${globalStats?.totalRevenue?.toLocaleString() || "0"}
+              {formatCurrency(globalStats?.totalRevenue || 0)}
             </div>
             <p className="text-xs text-muted-foreground">
               +{globalStats?.revenueGrowth || 0}% from last month

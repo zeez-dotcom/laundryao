@@ -14,6 +14,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useQueryClient } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
+import { useCurrency, type Currency } from "@/lib/currency";
 import { SecuritySettings } from "./security-settings";
 import { ProfileSettings } from "./profile-settings";
 import { PackageList } from "./package-list";
@@ -23,12 +24,14 @@ import type { InsertBranch } from "@shared/schema";
 
 export function SettingsPanel() {
   const { t } = useTranslation();
+  const { currency: systemCurrency, setCurrency, getAllCurrencies } = useCurrency();
   const { branch, isAdmin, isSuperAdmin } = useAuthContext();
   const queryClient = useQueryClient();
+  const currencies = getAllCurrencies();
   const [settings, setSettings] = useState({
     email: "info@mainstore.com",
     taxRate: "8.5",
-    currency: "USD",
+    currency: systemCurrency,
 
     // Receipt Settings
     receiptHeaderEn: "Thank you for your business!",
@@ -131,6 +134,7 @@ export function SettingsPanel() {
           queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
         }
       }
+      setCurrency(settings.currency as Currency);
       toast({
         title: t.settingsSaved,
         description: t.preferencesUpdated,
@@ -150,7 +154,7 @@ export function SettingsPanel() {
     setSettings({
       email: "info@mainstore.com",
       taxRate: "8.5",
-      currency: "USD",
+      currency: systemCurrency,
       receiptHeaderEn: "Thank you for your business!",
       receiptHeaderAr: "",
       receiptFooterEn: "Visit us again soon",
@@ -168,6 +172,7 @@ export function SettingsPanel() {
       logoUrl: "",
     });
     setLogoPreview("");
+    setCurrency(systemCurrency);
     toast({
       title: t.settingsReset,
       description: t.settingsRestored
@@ -252,10 +257,14 @@ export function SettingsPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="USD">{t.usDollar}</SelectItem>
-                          <SelectItem value="EUR">{t.euro}</SelectItem>
-                          <SelectItem value="GBP">{t.britishPound}</SelectItem>
-                          <SelectItem value="CAD">{t.canadianDollar}</SelectItem>
+                          {currencies.map(curr => (
+                            <SelectItem key={curr.code} value={curr.code}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{curr.name}</span>
+                                <span className="ml-2 text-gray-500">{curr.symbol}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
