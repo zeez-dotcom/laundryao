@@ -196,6 +196,16 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
     remaining: string;
   }
 
+  interface CustomerPackage {
+    id: string;
+    nameEn: string;
+    nameAr: string | null;
+    balance: number;
+    totalCredits: number;
+    startsAt: string;
+    expiresAt: string | null;
+  }
+
   const { data: customerOrders = [] } = useQuery<CustomerOrder[]>({
     queryKey: ["/api/customers", reportCustomer?.id, "orders"],
     enabled: !!reportCustomer && isReportDialogOpen,
@@ -226,6 +236,23 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
       return res.json();
     },
   });
+
+  const { data: packageHistory = [], isLoading: packagesLoading } =
+    useQuery<CustomerPackage[]>({
+      queryKey: ["/api/customers", historyCustomer?.id, "packages"],
+      enabled: !!historyCustomer?.id && isHistoryDialogOpen,
+      queryFn: async () => {
+        if (!historyCustomer) return [];
+        const res = await fetch(
+          `/api/customers/${historyCustomer.id}/packages`,
+          {
+            credentials: "include",
+          },
+        );
+        if (!res.ok) throw new Error("Failed to fetch package history");
+        return res.json();
+      },
+    });
 
   const { data: loyaltyHistory = [] } = useQuery<LoyaltyHistory[]>({
     queryKey: ["/api/customers", historyCustomer?.id, "loyalty"],
@@ -887,6 +914,7 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
             <TabsList>
               <TabsTrigger value="payments">{t.payments}</TabsTrigger>
               <TabsTrigger value="orders">{t.orders}</TabsTrigger>
+              <TabsTrigger value="packages">{t.packages}</TabsTrigger>
               <TabsTrigger value="loyalty">{t.loyalty}</TabsTrigger>
             </TabsList>
             <TabsContent value="payments">
@@ -986,6 +1014,62 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
                     <Button variant="outline" size="sm" onClick={handleOrdersExportCSV}>
                       {t.exportCSV}
                     </Button>
+                  </div>
+                </>
+              )}
+            </TabsContent>
+            <TabsContent value="packages">
+              {packagesLoading ? (
+                <p className="text-sm text-gray-500">{t.loading}</p>
+              ) : packageHistory.length === 0 ? (
+                <p className="text-sm text-gray-500">No packages found.</p>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <div className="min-w-full text-sm">
+                      <div className="grid grid-cols-5 text-left font-medium">
+                        <div className="p-2">Name</div>
+                        <div className="p-2">Used</div>
+                        <div className="p-2">Remaining</div>
+                        <div className="p-2">Purchased</div>
+                        <div className="p-2">Expires</div>
+                      </div>
+                      <List
+                        height={256}
+                        itemCount={packageHistory.length}
+                        itemSize={() => 40}
+                        width="100%"
+                      >
+                        {({ index, style }: { index: number; style: CSSProperties }) => {
+                          const p = packageHistory[index];
+                          return (
+                            <div style={style} className="grid grid-cols-5 border-t">
+                              <div className="p-2">
+                                <div>{p.nameEn}</div>
+                                <div
+                                  className="text-sm text-right text-gray-500"
+                                  dir="rtl"
+                                >
+                                  {p.nameAr || p.nameEn}
+                                </div>
+                              </div>
+                              <div className="p-2">
+                                {p.totalCredits - p.balance}
+                              </div>
+                              <div className="p-2">{p.balance}</div>
+                              <div className="p-2">
+                                {format(new Date(p.startsAt), "MMM dd, yyyy")}
+                              </div>
+                              <div className="p-2">
+                                {p.expiresAt
+                                  ? format(new Date(p.expiresAt), "MMM dd, yyyy")
+                                  : ""}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      </List>
+                    </div>
                   </div>
                 </>
               )}
