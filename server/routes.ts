@@ -41,6 +41,7 @@ import {
   requireAuth,
   requireSuperAdmin,
   requireAdminOrSuperAdmin,
+  requireCustomerOrAdmin,
   getSession,
 } from "./auth";
 import { seedSuperAdmin } from "./seed-superadmin";
@@ -687,7 +688,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/customer/packages", async (req, res) => {
+  app.get("/customer/packages", requireCustomerOrAdmin, async (req, res) => {
     const customerId = (req.session as any).customerId as string | undefined;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
@@ -3015,16 +3016,6 @@ export async function registerRoutes(
       res.json(customer);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch customer" });
-    }
-  });
-
-  app.get("/api/customers/:id/packages", requireAuth, async (req, res) => {
-    try {
-      const packages = await storage.getCustomerPackagesWithUsage(req.params.id);
-      res.json(packages);
-    } catch (error) {
-      logger.error({ err: error, customerId: req.params.id }, "Failed to fetch customer packages");
-      res.status(500).json({ message: "Failed to fetch customer packages" });
     }
   });
 
