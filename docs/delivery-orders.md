@@ -4,6 +4,12 @@
 
 Create a new delivery order for a customer.
 
+## Lifecycle
+
+Delivery orders move through the following statuses:
+
+`request` → `accepted` → `driver_enroute` → `picked_up` → `started_processing` → `ready` → `out_for_delivery` → `completed`
+
 ## Consumer
 
 Customers create delivery orders through the public web form. The request must
@@ -53,7 +59,7 @@ user is a super admin. Query parameters:
 - `branchId` – specify branch (super admin only)
 
 ```
-GET /api/delivery-orders?status=pending
+GET /api/delivery-orders?status=driver_enroute
 ```
 
 ```json
@@ -61,7 +67,7 @@ GET /api/delivery-orders?status=pending
   {
     "id": "do1",
     "orderId": "o1",
-    "deliveryStatus": "pending",
+    "deliveryStatus": "driver_enroute",
     "order": { "id": "o1", "orderNumber": "ABC-0001" }
   }
 ]
@@ -90,13 +96,14 @@ PATCH /api/delivery-orders/o1/assign
 
 ## PATCH /api/delivery-orders/:id/status
 
-Update the delivery status (`pending`, `assigned`, `picked_up`, `in_transit`,
-`delivered`, `cancelled`). Invalid transitions return `400`.
+Update the delivery status (`request`, `accepted`, `driver_enroute`,
+`picked_up`, `started_processing`, `ready`, `out_for_delivery`, `completed`).
+Invalid transitions return `400`.
 
 ```
 PATCH /api/delivery-orders/o1/status
 {
-  "status": "in_transit"
+  "status": "out_for_delivery"
 }
 ```
 
@@ -104,7 +111,7 @@ PATCH /api/delivery-orders/o1/status
 {
   "id": "do1",
   "orderId": "o1",
-  "deliveryStatus": "in_transit",
+  "deliveryStatus": "out_for_delivery",
   "order": { "id": "o1", "orderNumber": "ABC-0001" }
 }
 ```
