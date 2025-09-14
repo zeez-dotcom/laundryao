@@ -64,6 +64,7 @@ import {
   ne,
   asc,
   gt,
+  gte,
   lte,
   isNull,
 } from "drizzle-orm";
@@ -241,7 +242,13 @@ export interface IStorage {
   
   // Transactions
   createTransaction(transaction: InsertTransaction & { branchId: string }): Promise<Transaction>;
-  getTransactions(branchId?: string): Promise<Transaction[]>;
+  getTransactions(
+    branchId?: string,
+    start?: Date,
+    end?: Date,
+    limit?: number,
+    offset?: number
+  ): Promise<Transaction[]>;
   getTransaction(id: string, branchId?: string): Promise<Transaction | undefined>;
 
   // Packages
@@ -986,8 +993,32 @@ export class MemStorage {
     return transaction;
   }
 
-  async getTransactions(branchId?: string): Promise<Transaction[]> {
-    return Array.from(this.transactions.values()).filter(t => !branchId || t.branchId === branchId);
+  async getTransactions(
+    branchId?: string,
+    start?: Date,
+    end?: Date,
+    limit?: number,
+    offset?: number
+  ): Promise<Transaction[]> {
+    let txs = Array.from(this.transactions.values()).filter(
+      (t) => !branchId || t.branchId === branchId
+    );
+    if (start) {
+      txs = txs.filter((t) => new Date(t.createdAt) >= start);
+    }
+    if (end) {
+      txs = txs.filter((t) => new Date(t.createdAt) <= end);
+    }
+    txs.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    if (typeof offset === "number") {
+      txs = txs.slice(offset);
+    }
+    if (typeof limit === "number") {
+      txs = txs.slice(0, limit);
+    }
+    return txs;
   }
 
   async getTransaction(id: string, branchId?: string): Promise<Transaction | undefined> {
@@ -2440,11 +2471,34 @@ export class DatabaseStorage implements IStorage {
     return newTransaction;
   }
 
-  async getTransactions(branchId?: string): Promise<Transaction[]> {
+  async getTransactions(
+    branchId?: string,
+    start?: Date,
+    end?: Date,
+    limit?: number,
+    offset?: number
+  ): Promise<Transaction[]> {
+    const conditions = [] as any[];
     if (branchId) {
-      return await db.select().from(transactions).where(eq(transactions.branchId, branchId));
+      conditions.push(eq(transactions.branchId, branchId));
     }
-    return await db.select().from(transactions);
+    if (start) {
+      conditions.push(gte(transactions.createdAt, start));
+    }
+    if (end) {
+      conditions.push(lte(transactions.createdAt, end));
+    }
+    let query = db.select().from(transactions).orderBy(desc(transactions.createdAt));
+    if (conditions.length) {
+      query = query.where(and(...conditions));
+    }
+    if (typeof limit === "number") {
+      query = query.limit(limit);
+    }
+    if (typeof offset === "number") {
+      query = query.offset(offset);
+    }
+    return await query;
   }
 
   async getTransaction(id: string, branchId?: string): Promise<Transaction | undefined> {
