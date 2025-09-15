@@ -19,40 +19,44 @@ function createApp(storage: any) {
   app.post('/api/orders', requireAuth, async (req, res) => {
     try {
       const user = req.user as any;
-      const { packageUsage, cartItems, customerId, branchCode, ...data } = req.body;
+      const { packageUsages, cartItems, customerId, branchCode, ...data } = req.body;
       if (!Array.isArray(cartItems) || cartItems.length === 0 || !customerId || !branchCode) {
         return res.status(400).json({ message: 'Missing required fields' });
       }
       const orderData = insertOrderSchema.parse({ ...data, items: cartItems, customerId });
-      if (packageUsage) {
+      if (Array.isArray(packageUsages)) {
         const pkgs = await storage.getCustomerPackagesWithUsage(customerId);
-        const pkg = pkgs.find((p: any) => p.id === packageUsage.packageId);
-        if (!pkg) {
-          return res.status(400).json({ message: 'Invalid package' });
-        }
-        for (const item of packageUsage.items || []) {
-          const pkgItem = pkg.items?.find(
-            (i: any) =>
-              i.serviceId === item.serviceId &&
-              i.clothingItemId === item.clothingItemId,
-          );
-          if (!pkgItem || pkgItem.balance < item.quantity) {
-            return res.status(400).json({ message: 'Insufficient package credits' });
+        for (const usage of packageUsages) {
+          const pkg = pkgs.find((p: any) => p.id === usage.packageId);
+          if (!pkg) {
+            return res.status(400).json({ message: 'Invalid package' });
+          }
+          for (const item of usage.items || []) {
+            const pkgItem = pkg.items?.find(
+              (i: any) =>
+                i.serviceId === item.serviceId &&
+                i.clothingItemId === item.clothingItemId,
+            );
+            if (!pkgItem || pkgItem.balance < item.quantity) {
+              return res.status(400).json({ message: 'Insufficient package credits' });
+            }
           }
         }
-        for (const item of packageUsage.items || []) {
-          const price = await storage.getItemServicePrice(
-            item.clothingItemId,
-            item.serviceId,
-            user.id,
-            user.branchId,
-          );
-          await storage.updateCustomerPackageBalance(
-            packageUsage.packageId,
-            -(price ?? 0) * item.quantity,
-            item.serviceId,
-            item.clothingItemId,
-          );
+        for (const usage of packageUsages) {
+          for (const item of usage.items || []) {
+            const price = await storage.getItemServicePrice(
+              item.clothingItemId,
+              item.serviceId,
+              user.id,
+              user.branchId,
+            );
+            await storage.updateCustomerPackageBalance(
+              usage.packageId,
+              -(price ?? 0) * item.quantity,
+              item.serviceId,
+              item.clothingItemId,
+            );
+          }
         }
       }
       const order = await storage.createOrder({ ...orderData, branchId: user.branchId });
@@ -159,7 +163,7 @@ test('accepts ISO string dates for pickup fields', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 1, price: 1, total: 1 }],
-      customerId: 'c1',
+      customerId: '11111111-1111-1111-1111-111111111111',
       branchCode: 'b1',
       customerName: 'Alice',
       customerPhone: '123',
@@ -186,7 +190,7 @@ test('pay-later order remaining decreases with payments', async () => {
       {
         id: 'o1',
         orderNumber: '001',
-        customerId: 'c1',
+        customerId: '11111111-1111-1111-1111-111111111111',
         createdAt: new Date().toISOString(),
         subtotal: '100.00',
         total: '100.00',
@@ -240,7 +244,7 @@ test('defaults promised ready fields', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 1, price: 1, total: 1 }],
-      customerId: 'c1',
+      customerId: '11111111-1111-1111-1111-111111111111',
       branchCode: 'b1',
       customerName: 'Bob',
       customerPhone: '456',
@@ -276,7 +280,7 @@ test('stores provided promised ready fields', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 1, price: 1, total: 1 }],
-      customerId: 'c1',
+      customerId: '11111111-1111-1111-1111-111111111111',
       branchCode: 'b1',
       customerName: 'Carol',
       customerPhone: '789',
@@ -325,7 +329,7 @@ test('deducts package credits when provided', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 2, price: 1, total: 2 }],
-      customerId: 'cust1',
+      customerId: '22222222-2222-2222-2222-222222222222',
       branchCode: 'b1',
       customerName: 'Ann',
       customerPhone: '123',
@@ -335,7 +339,9 @@ test('deducts package credits when provided', async () => {
       paymentMethod: 'cash',
       status: 'start_processing',
       sellerName: 'Bob',
-      packageUsage: { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 2 }] },
+      packageUsages: [
+        { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 2 }] },
+      ],
     });
   assert.equal(res.status, 200);
   assert.deepEqual(updated, { id: 'cp1', change: -2, serviceId: 's1', clothingItemId: 'c1' });
@@ -372,7 +378,7 @@ test('accepts package usage with clothing item', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 2, price: 1, total: 2 }],
-      customerId: 'cust1',
+      customerId: '22222222-2222-2222-2222-222222222222',
       branchCode: 'b1',
       customerName: 'Ann',
       customerPhone: '123',
@@ -382,7 +388,9 @@ test('accepts package usage with clothing item', async () => {
       paymentMethod: 'cash',
       status: 'start_processing',
       sellerName: 'Bob',
-      packageUsage: { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'ci1', quantity: 2 }] },
+      packageUsages: [
+        { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'ci1', quantity: 2 }] },
+      ],
     });
   assert.equal(res.status, 200);
   assert.deepEqual(updated, { id: 'cp1', change: -2, serviceId: 's1', clothingItemId: 'ci1' });
@@ -412,7 +420,7 @@ test('rejects package usage when service-product pair is invalid', async () => {
     .post('/api/orders')
     .send({
       cartItems: [{ id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 1, price: 1, total: 1 }],
-      customerId: 'c1',
+      customerId: '11111111-1111-1111-1111-111111111111',
       branchCode: 'b1',
       customerName: 'Alice',
       customerPhone: '123',
@@ -422,21 +430,81 @@ test('rejects package usage when service-product pair is invalid', async () => {
       paymentMethod: 'cash',
       status: 'start_processing',
       sellerName: 'Bob',
-      packageUsage: { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c2', quantity: 1 }] },
+      packageUsages: [
+        { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c2', quantity: 1 }] },
+      ],
     });
   assert.equal(res.status, 400);
 });
 
-test('GET /api/orders returns packages with used counts', async () => {
+test('processes usage from multiple packages', async () => {
+  const updates: any[] = [];
+  const storage: any = {
+    createOrder: async (data: any) => ({ id: 'o1', ...data }),
+    getCustomerPackagesWithUsage: async () => [
+      {
+        id: 'cp1',
+        items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 5, totalCredits: 5 }],
+      },
+      {
+        id: 'cp2',
+        items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 5, totalCredits: 5 }],
+      },
+    ],
+    updateCustomerPackageBalance: async (
+      id: string,
+      change: number,
+      serviceId?: string,
+      clothingItemId?: string,
+    ) => {
+      updates.push({ id, change, serviceId, clothingItemId });
+    },
+    getItemServicePrice: async () => 1,
+  };
+  const app = createApp(storage);
+
+  const res = await request(app)
+    .post('/api/orders')
+    .send({
+      cartItems: [
+        { id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 3, price: 1, total: 3 },
+      ],
+      customerId: '22222222-2222-2222-2222-222222222222',
+      branchCode: 'b1',
+      customerName: 'Ann',
+      customerPhone: '123',
+      subtotal: '3',
+      tax: '0',
+      total: '3',
+      paymentMethod: 'cash',
+      status: 'start_processing',
+      sellerName: 'Bob',
+      packageUsages: [
+        { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 2 }] },
+        { packageId: 'cp2', items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 1 }] },
+      ],
+    });
+  assert.equal(res.status, 200);
+  assert.deepEqual(updates, [
+    { id: 'cp1', change: -2, serviceId: 's1', clothingItemId: 'c1' },
+    { id: 'cp2', change: -1, serviceId: 's1', clothingItemId: 'c1' },
+  ]);
+});
+
+test('GET /api/orders returns packages with used counts for multiple packages', async () => {
   const storage: any = {
     getOrders: async () => [
       {
         id: 'o1',
-        customerId: 'cust1',
+        customerId: '22222222-2222-2222-2222-222222222222',
         packageUsages: [
           {
             packageId: 'cp1',
             items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 2 }],
+          },
+          {
+            packageId: 'cp2',
+            items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 1 }],
           },
         ],
       },
@@ -446,11 +514,16 @@ test('GET /api/orders returns packages with used counts', async () => {
         id: 'cp1',
         items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 5, totalCredits: 5 }],
       },
+      {
+        id: 'cp2',
+        items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 5, totalCredits: 5 }],
+      },
     ],
   };
   const app = createOrdersListApp(storage);
   const res = await request(app).get('/api/orders');
   assert.equal(res.status, 200);
   assert.equal(res.body[0].packages[0].items[0].used, 2);
+  assert.equal(res.body[0].packages[1].items[0].used, 1);
 });
 
