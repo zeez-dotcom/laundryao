@@ -358,6 +358,7 @@ export default function POS() {
             
             <LaundryCartSidebar
               cartSummary={cartSummary}
+              getCartSummary={getCartSummary}
               paymentMethod={paymentMethod}
               selectedCustomer={selectedCustomer}
               onUpdateQuantity={updateQuantity}

@@ -14,6 +14,7 @@ vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 vi.mock("@/lib/currency", () => ({ useCurrency: () => ({ formatCurrency: (n: any) => n }) }));
 vi.mock("@/lib/tax", () => ({ getTaxRate: () => 0 }));
 vi.mock("@/components/customer-dialog", () => ({ CustomerDialog: () => <div /> }));
+vi.mock("@/components/CouponInput", () => ({ CouponInput: () => <div /> }));
 
 function renderWithClient(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -82,6 +83,8 @@ describe("LaundryCartSidebar", () => {
         nameEn: "Test Package",
         balance: 5,
         totalCredits: 5,
+        startsAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
         items: [
           { serviceId: "svc1", clothingItemId: "ci1", serviceName: "Wash", balance: 3, totalCredits: 3 },
         ],
