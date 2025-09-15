@@ -165,6 +165,9 @@ export function DeliveryOrders() {
     { value: "delivered", label: t.delivered },
   ];
 
+  const safeDrivers: Driver[] = Array.isArray(drivers) ? drivers : [];
+  const safeOrders: DeliveryOrder[] = Array.isArray(orders) ? orders : [];
+
   return (
     <div className="p-4 space-y-4 overflow-auto">
       <div className="flex gap-4">
@@ -188,7 +191,7 @@ export function DeliveryOrders() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="">{t.all}</SelectItem>
-            {drivers.map((d) => (
+            {safeDrivers.map((d) => (
               <SelectItem key={d.id} value={d.id}>
                 {d.name}
               </SelectItem>
@@ -199,6 +202,8 @@ export function DeliveryOrders() {
 
       {isLoading ? (
         <div>{t.loading}</div>
+      ) : safeOrders.length === 0 ? (
+        <div className="text-center text-sm text-muted-foreground">{t.noOrdersFound}</div>
       ) : (
         <Table>
           <TableHeader>
@@ -214,7 +219,7 @@ export function DeliveryOrders() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {orders.map((order) => (
+            {safeOrders.map((order) => (
               <TableRow key={order.id}>
                 <TableCell>{order.orderNumber}</TableCell>
                 <TableCell>
@@ -228,7 +233,7 @@ export function DeliveryOrders() {
                 <TableCell>{order.deliveryAddress}</TableCell>
                 <TableCell>{formatCurrency(order.total)}</TableCell>
                 <TableCell>
-                  {statusOptions.find((s) => s.value === order.status)?.label}
+                  {statusOptions.find((s) => s.value === order.status)?.label || order.status}
                 </TableCell>
                 <TableCell>{order.driverName || "-"}</TableCell>
                 <TableCell>

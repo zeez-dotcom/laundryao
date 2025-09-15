@@ -49,9 +49,11 @@ export function DeliveryOrderRequests() {
     return <div>Loading...</div>;
   }
 
+  const safeRequests: DeliveryRequest[] = Array.isArray(requests) ? requests : [];
+
   return (
     <div className="p-4 space-y-4 overflow-auto">
-      {requests.map((request) => (
+      {safeRequests.map((request) => (
         <Card key={request.id}>
           <CardHeader>
             <CardTitle>
@@ -78,7 +80,7 @@ export function DeliveryOrderRequests() {
           </CardContent>
         </Card>
       ))}
-      {requests.length === 0 && (
+      {safeRequests.length === 0 && (
         <p className="text-center text-gray-500">No requests</p>
       )}
     </div>
