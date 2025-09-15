@@ -142,14 +142,19 @@ export function useLaundryCart() {
     setCouponError(null);
   }, []);
 
-  const getCartSummary = useCallback((): LaundryCartSummary & { 
-    coupon?: AppliedCoupon; 
-    discountAmount?: number; 
-    totalBeforeDiscount?: number; 
+  const getCartSummary = useCallback((
+    packageUsage?: {
+      items: { serviceId: string; clothingItemId: string; quantity: number }[];
+    }
+  ): LaundryCartSummary & {
+    coupon?: AppliedCoupon;
+    discountAmount?: number;
+    totalBeforeDiscount?: number;
+    creditedAmount?: number;
   } => {
     const subtotal = cartItems.reduce((sum, item) => sum + item.total, 0);
     const taxRate = getTaxRate();
-    
+
     let discountAmount = 0;
     let applicableSubtotal = subtotal;
 
@@ -164,8 +169,31 @@ export function useLaundryCart() {
     }
 
     const discountedSubtotal = subtotal - discountAmount;
-    const tax = discountedSubtotal * taxRate;
-    const total = discountedSubtotal + tax;
+
+    // Calculate package credits if provided
+    let creditedAmount = 0;
+    if (packageUsage?.items && packageUsage.items.length > 0) {
+      const usageMap = new Map<string, number>();
+      for (const u of packageUsage.items) {
+        const key = `${u.serviceId}:${u.clothingItemId}`;
+        usageMap.set(key, (usageMap.get(key) || 0) + u.quantity);
+      }
+
+      for (const item of cartItems) {
+        const key = `${item.service.id}:${item.clothingItem.id}`;
+        const available = usageMap.get(key) || 0;
+        if (available > 0) {
+          const creditQty = Math.min(available, item.quantity);
+          const price = parseFloat(item.service.itemPrice ?? item.service.price);
+          creditedAmount += creditQty * price;
+          usageMap.set(key, available - creditQty);
+        }
+      }
+    }
+
+    const creditedSubtotal = Math.max(discountedSubtotal - creditedAmount, 0);
+    const tax = Math.max(creditedSubtotal * taxRate, 0);
+    const total = Math.max(creditedSubtotal + tax, 0);
     const itemCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
     return {
@@ -176,7 +204,10 @@ export function useLaundryCart() {
       itemCount,
       coupon: appliedCoupon || undefined,
       discountAmount: Math.round(discountAmount * 100) / 100,
-      totalBeforeDiscount: appliedCoupon ? Math.round((subtotal + (subtotal * taxRate)) * 100) / 100 : undefined
+      totalBeforeDiscount: appliedCoupon
+        ? Math.round((subtotal + subtotal * taxRate) * 100) / 100
+        : undefined,
+      creditedAmount: Math.round(creditedAmount * 100) / 100,
     };
   }, [cartItems, appliedCoupon]);
 

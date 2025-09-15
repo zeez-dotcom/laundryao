@@ -30,11 +30,23 @@ type AppliedCoupon = {
 };
 
 interface LaundryCartSidebarProps {
-  cartSummary: LaundryCartSummary & { 
-    coupon?: AppliedCoupon; 
-    discountAmount?: number; 
-    totalBeforeDiscount?: number; 
+  cartSummary: LaundryCartSummary & {
+    coupon?: AppliedCoupon;
+    discountAmount?: number;
+    totalBeforeDiscount?: number;
+    creditedAmount?: number;
   };
+  getCartSummary?: (
+    usage?: {
+      items: { serviceId: string; clothingItemId: string; quantity: number }[];
+    }
+  ) =>
+    LaundryCartSummary & {
+      coupon?: AppliedCoupon;
+      discountAmount?: number;
+      totalBeforeDiscount?: number;
+      creditedAmount?: number;
+    };
   paymentMethod: "cash" | "card" | "pay_later";
   selectedCustomer: Customer | null;
   onUpdateQuantity: (id: string, quantity: number) => void;
@@ -69,6 +81,7 @@ interface LaundryCartSidebarProps {
 
 export function LaundryCartSidebar({
   cartSummary,
+  getCartSummary = () => cartSummary,
   paymentMethod,
   selectedCustomer,
   onUpdateQuantity,
@@ -113,11 +126,12 @@ export function LaundryCartSidebar({
     setRedeemPoints(0);
     setPackageUsage(null);
   }, [selectedCustomer, cartSummary.total]);
+  const adjustedSummary = getCartSummary(packageUsage || undefined);
 
   const maxRedeemable = selectedCustomer
-    ? Math.min(selectedCustomer.loyaltyPoints, Math.floor(cartSummary.total * 10))
+    ? Math.min(selectedCustomer.loyaltyPoints, Math.floor(adjustedSummary.total * 10))
     : 0;
-  const finalTotal = Math.max(cartSummary.total - redeemPoints * 0.1, 0);
+  const finalTotal = Math.max(adjustedSummary.total - redeemPoints * 0.1, 0);
   const { data: customerPackages = [] } = useQuery<any[]>({
     queryKey: ["/api/customers", selectedCustomer?.id, "packages"],
     enabled: !!selectedCustomer?.id,
@@ -289,7 +303,7 @@ export function LaundryCartSidebar({
             couponError={couponError}
             onApplyCoupon={onApplyCoupon}
             onRemoveCoupon={onRemoveCoupon}
-            discountAmount={cartSummary.discountAmount}
+            discountAmount={adjustedSummary.discountAmount}
           />
 
           {/* Summary */}
@@ -301,7 +315,7 @@ export function LaundryCartSidebar({
             {taxRate > 0 && (
               <div className="flex justify-between">
                 <span className="text-gray-600">Tax ({(taxRate * 100).toString()}%):</span>
-                <span className="font-medium">{formatCurrency(cartSummary.tax)}</span>
+                <span className="font-medium">{formatCurrency(adjustedSummary.tax)}</span>
               </div>
             )}
             {selectedCustomer && maxRedeemable > 0 && (
@@ -332,10 +346,16 @@ export function LaundryCartSidebar({
                 <span>-{formatCurrency(redeemPoints * 0.1)}</span>
               </div>
             )}
-            {cartSummary.discountAmount && cartSummary.discountAmount > 0 && (
+            {adjustedSummary.creditedAmount && adjustedSummary.creditedAmount > 0 && (
+              <div className="flex justify-between text-green-600">
+                <span>Package Credit:</span>
+                <span>-{formatCurrency(adjustedSummary.creditedAmount)}</span>
+              </div>
+            )}
+            {adjustedSummary.discountAmount && adjustedSummary.discountAmount > 0 && (
               <div className="flex justify-between text-green-600">
                 <span>Coupon Discount:</span>
-                <span>-{formatCurrency(cartSummary.discountAmount)}</span>
+                <span>-{formatCurrency(adjustedSummary.discountAmount)}</span>
               </div>
             )}
           <div className="flex justify-between text-lg font-bold border-t border-gray-200 pt-3">
