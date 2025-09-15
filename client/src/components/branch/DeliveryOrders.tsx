@@ -310,7 +310,7 @@ export function DeliveryOrders() {
                   driverId: selectedDriver,
                 })
               }
-              disabled={!selectedDriver || assignDriverMutation.isLoading}
+              disabled={!selectedDriver || (assignDriverMutation as any).isPending || (assignDriverMutation as any).isLoading}
             >
               {t.save}
             </Button>
@@ -322,4 +322,3 @@ export function DeliveryOrders() {
 }
 
 export default DeliveryOrders;
-

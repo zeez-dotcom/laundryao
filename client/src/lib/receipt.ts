@@ -1,7 +1,7 @@
 export interface BranchInfo {
   name?: string;
-  address?: string;
-  phone?: string;
+  address?: string | null;
+  phone?: string | null;
   tagline?: string | null;
 }
 

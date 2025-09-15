@@ -21,8 +21,10 @@ function CategoryManager() {
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [formData, setFormData] = useState<InsertCategory>({
     name: "",
+    nameAr: "",
     type: "clothing",
     description: "",
+    descriptionAr: "",
     isActive: true,
   });
 
@@ -93,8 +95,10 @@ function CategoryManager() {
   const resetForm = () => {
     setFormData({
       name: "",
+      nameAr: "",
       type: "clothing",
       description: "",
+      descriptionAr: "",
       isActive: true,
     });
     setEditingCategory(null);
@@ -105,8 +109,10 @@ function CategoryManager() {
     setEditingCategory(category);
     setFormData({
       name: category.name,
+      nameAr: (category as any).nameAr || "",
       type: category.type,
       description: category.description || "",
+      descriptionAr: (category as any).descriptionAr || "",
       isActive: category.isActive,
     });
     setIsDialogOpen(true);
@@ -150,18 +156,30 @@ function CategoryManager() {
             </DialogHeader>
             <form onSubmit={handleSubmit}>
               <div className="grid gap-4 py-4">
-                <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="name" className="text-right">
-                  {t.name}
+              <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                {t.name}
+              </Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="col-span-3"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="nameAr" className="text-right">
+                  {t.name} (Arabic)
                 </Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="col-span-3"
-                    required
-                  />
-                </div>
+                <Input
+                  id="nameAr"
+                  dir="rtl"
+                  value={formData.nameAr || ""}
+                  onChange={(e) => setFormData({ ...formData, nameAr: e.target.value })}
+                  className="col-span-3"
+                />
+              </div>
                 <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="type" className="text-right">
                   {t.type}
@@ -179,18 +197,31 @@ function CategoryManager() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="description" className="text-right">
-                    {t.description}
-                  </Label>
-                  <Textarea
-                    id="description"
-                    value={formData.description || ""}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    className="col-span-3"
-                    placeholder={t.optionalDescription}
-                  />
-                </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="description" className="text-right">
+                  {t.description}
+                </Label>
+                <Textarea
+                  id="description"
+                  value={formData.description || ""}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="col-span-3"
+                  placeholder={t.optionalDescription}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="descriptionAr" className="text-right">
+                  {t.description} (Arabic)
+                </Label>
+                <Textarea
+                  id="descriptionAr"
+                  dir="rtl"
+                  value={formData.descriptionAr || ""}
+                  onChange={(e) => setFormData({ ...formData, descriptionAr: e.target.value })}
+                  className="col-span-3"
+                  placeholder={t.optionalDescription}
+                />
+              </div>
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={resetForm}>
@@ -218,11 +249,18 @@ function CategoryManager() {
                   key={category.id}
                   className="flex items-center justify-between p-3 border rounded-lg"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{category.name}</span>
-                    <Badge variant={category.isActive ? "default" : "secondary"}>
-                      {category.isActive ? t.active : t.inactive}
-                    </Badge>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{category.name}</span>
+                      <Badge variant={category.isActive ? "default" : "secondary"}>
+                        {category.isActive ? t.active : t.inactive}
+                      </Badge>
+                    </div>
+                    {(category as any).nameAr && (
+                      <div className="text-sm text-gray-700 text-right" dir="rtl">
+                        {(category as any).nameAr}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
@@ -267,11 +305,18 @@ function CategoryManager() {
                   key={category.id}
                   className="flex items-center justify-between p-3 border rounded-lg"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{category.name}</span>
-                    <Badge variant={category.isActive ? "default" : "secondary"}>
-                      {category.isActive ? t.active : t.inactive}
-                    </Badge>
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{category.name}</span>
+                      <Badge variant={category.isActive ? "default" : "secondary"}>
+                        {category.isActive ? t.active : t.inactive}
+                      </Badge>
+                    </div>
+                    {(category as any).nameAr && (
+                      <div className="text-sm text-gray-700 text-right" dir="rtl">
+                        {(category as any).nameAr}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button

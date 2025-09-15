@@ -173,7 +173,7 @@ export default function POS() {
       // Find or create single walk-in customer for this branch
       try {
         // First try to find existing walk-in customer
-        const findResponse = await fetch(`/api/customers?phoneNumber=0000000000&branchCode=${branch.code}`, {
+        const findResponse = await fetch(`/api/customers?phoneNumber=0000000000&branchCode=${branch?.code ?? ""}`, {
           credentials: "include",
         });
         
@@ -250,9 +250,16 @@ export default function POS() {
         id: item.id,
         serviceId: item.service.id,
         clothingItemId: item.clothingItem.id,
+        // Keep legacy 'name' for compatibility, but provide structured bilingual fields
         name: item.clothingItem.name,
-        clothingItem: item.clothingItem.name,
-        service: item.service.name,
+        clothingItem: {
+          name: item.clothingItem.name,
+          nameAr: (item.clothingItem as any).nameAr,
+        },
+        service: {
+          name: item.service.name,
+          nameAr: (item.service as any).nameAr,
+        },
         quantity: item.quantity,
         price,
         total: chargedTotal,

@@ -34,7 +34,9 @@ import { useToast } from "@/hooks/use-toast";
 
 interface ServicePayload {
   name: string;
+  nameAr?: string;
   description?: string;
+  descriptionAr?: string;
   price: string;
   categoryId: string;
 }
@@ -106,7 +108,9 @@ export function ServicesSection() {
     resolver: zodResolver(insertLaundryServiceSchema),
     defaultValues: {
       name: "",
+      nameAr: "",
       description: "",
+      descriptionAr: "",
       price: "",
       categoryId: "",
     },
@@ -198,7 +202,7 @@ export function ServicesSection() {
   const handleAddService = () => {
     setAddingService(true);
     setEditingService(null);
-    serviceForm.reset({ name: "", description: "", price: "", categoryId: "" });
+    serviceForm.reset({ name: "", nameAr: "", description: "", descriptionAr: "", price: "", categoryId: "" });
   };
 
   const handleEditService = (service: LaundryService) => {
@@ -206,7 +210,9 @@ export function ServicesSection() {
     setAddingService(false);
     serviceForm.reset({
       name: service.name,
+      nameAr: (service as any).nameAr || "",
       description: service.description || "",
+      descriptionAr: (service as any).descriptionAr || "",
       price: service.price,
       categoryId: service.categoryId,
     });
@@ -224,11 +230,16 @@ export function ServicesSection() {
     priceMutation.mutate(data);
   };
 
-  const filteredServices = services.filter(
-    (service) =>
-      service.name.toLowerCase().includes(serviceSearch.toLowerCase()) ||
-      service.categoryId.toLowerCase().includes(serviceSearch.toLowerCase()),
-  );
+  const filteredServices = services.filter((service: any) => {
+    const term = serviceSearch.toLowerCase();
+    return (
+      service.name?.toLowerCase().includes(term) ||
+      service.description?.toLowerCase?.().includes(term) ||
+      service.nameAr?.toLowerCase?.().includes(term) ||
+      service.descriptionAr?.toLowerCase?.().includes(term) ||
+      service.categoryId?.toLowerCase().includes(term)
+    );
+  });
 
   return (
     <>
@@ -278,6 +289,18 @@ export function ServicesSection() {
                 />
                 <FormField
                   control={serviceForm.control}
+                  name="nameAr"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Service Name (Arabic)</FormLabel>
+                      <FormControl>
+                        <Input placeholder="مثال: غسيل وطي" dir="rtl" {...field} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={serviceForm.control}
                   name="description"
                   render={({ field }) => (
                     <FormItem>
@@ -287,6 +310,18 @@ export function ServicesSection() {
                           placeholder="Service description..."
                           {...field}
                         />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={serviceForm.control}
+                  name="descriptionAr"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description (Arabic)</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="وصف الخدمة..." dir="rtl" {...field} />
                       </FormControl>
                     </FormItem>
                   )}
@@ -378,12 +413,36 @@ export function ServicesSection() {
                     />
                     <FormField
                       control={serviceForm.control}
+                      name="nameAr"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Service Name (Arabic)</FormLabel>
+                          <FormControl>
+                            <Input dir="rtl" {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={serviceForm.control}
                       name="description"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Description</FormLabel>
                           <FormControl>
                             <Textarea {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={serviceForm.control}
+                      name="descriptionAr"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description (Arabic)</FormLabel>
+                          <FormControl>
+                            <Textarea dir="rtl" {...field} />
                           </FormControl>
                         </FormItem>
                       )}
@@ -454,9 +513,19 @@ export function ServicesSection() {
                       <h3 className="font-semibold text-gray-900 mb-1">
                         {service.name}
                       </h3>
-                      <p className="text-sm text-gray-600 mb-2">
-                        {service.description}
-                      </p>
+                      {(service as any).nameAr && (
+                        <div className="text-sm text-gray-700 text-right mb-1" dir="rtl">
+                          {(service as any).nameAr}
+                        </div>
+                      )}
+                      {service.description && (
+                        <p className="text-sm text-gray-600 mb-1">{service.description}</p>
+                      )}
+                      {(service as any).descriptionAr && (
+                        <div className="text-xs text-gray-600 text-right mb-2" dir="rtl">
+                          {(service as any).descriptionAr}
+                        </div>
+                      )}
                       <div className="flex items-center justify-between">
                         <div className="flex flex-col">
                           <span className="text-lg font-bold text-pos-primary">

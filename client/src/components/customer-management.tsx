@@ -1050,7 +1050,7 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
                                   className="text-sm text-right text-gray-500"
                                   dir="rtl"
                                 >
-                                  {p.nameAr || p.nameEn}
+                                  {p.nameAr || ""}
                                 </div>
                               </div>
                               <div className="p-2">

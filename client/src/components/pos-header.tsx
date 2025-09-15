@@ -1,4 +1,4 @@
-import { Shirt, Store, User, LogOut, ShoppingCart, Settings } from "lucide-react";
+import { Shirt, Store, User, LogOut, ShoppingCart, Settings, Sun, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthContext } from "@/context/AuthContext";
@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { LanguageSelector } from "@/components/language-selector";
 import { Link } from "wouter";
 import { useTranslation } from "@/lib/i18n";
+import { useTheme } from "@/theme";
 
 interface POSHeaderProps {
   cartItemCount?: number;
@@ -19,6 +20,7 @@ export function POSHeader({ cartItemCount = 0, onToggleCart }: POSHeaderProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { t } = useTranslation();
+  const { theme, toggleTheme } = useTheme();
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
@@ -78,6 +80,22 @@ export function POSHeader({ cartItemCount = 0, onToggleCart }: POSHeaderProps) {
             
             {/* Language Selector */}
             <LanguageSelector />
+
+            {/* Theme toggle (icon-only) */}
+            <Button
+              aria-label="Toggle theme"
+              variant="ghost"
+              size="sm"
+              className="h-9 w-9 p-0 hover:bg-blue-700 text-white hover:text-white"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+            >
+              {theme === 'dark' ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </Button>
             
             {/* Admin Access */}
             {user &&

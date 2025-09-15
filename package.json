@@ -14,7 +14,7 @@
     "start": "node dist/server/index.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc",
-    "test": "vitest run && node --import tsx --test server/*.test.ts",
+    "test": "vitest run --pool=vmThreads && node --import tsx --test server/*.test.ts",
     "validate:srs": "node scripts/validate-srs.js",
     "db:psql": "psql \"$DATABASE_URL\" -f",
     "db:migrate:add-completed": "psql \"$DATABASE_URL\" -f migrations/0016_add_completed_status.sql",

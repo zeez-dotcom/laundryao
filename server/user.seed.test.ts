@@ -66,7 +66,8 @@ test('new users are seeded with default data', async () => {
               if (table === categories) return insertedCategories;
               if (table === clothingItems) return insertedClothing;
               if (table === laundryServices) return insertedLaundry;
-              if (table === users) return [{ branchId: null }];
+              // Provide a branchId so that price rows are generated during seeding
+              if (table === users) return [{ branchId: 'b1' }];
               return [];
             },
           }),
@@ -104,4 +105,3 @@ test('new users are seeded with default data', async () => {
     (db as any).select = originalSelect;
   }
 });
-

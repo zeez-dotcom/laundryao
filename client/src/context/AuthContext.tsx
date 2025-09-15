@@ -22,7 +22,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { data: user, isLoading, error } = useQuery<AuthUser>({
+  const { data: user, isLoading, error } = useQuery<AuthUser | null>({
     queryKey: ["/api/auth/user"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     retry: false,
@@ -30,19 +30,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refetchOnWindowFocus: false,
   });
 
+  // Normalize null (from 401) to undefined to keep consumer API consistent
+  const normalizedUser: AuthUser | undefined = user ?? undefined;
+
   const value: AuthContextValue = {
-    user,
-    branch: user?.branch || null,
+    user: normalizedUser,
+    branch: normalizedUser?.branch || null,
     isLoading,
-    isAuthenticated: !!user && !error,
+    isAuthenticated: !!normalizedUser && !error,
     isAdmin:
-      user?.role === "admin" ||
-      user?.role === "super_admin" ||
-      user?.role === "delivery_admin",
-    isSuperAdmin: user?.role === "super_admin",
-    isDeliveryAdmin: user?.role === "delivery_admin",
-    isDispatcher: user?.role === "dispatcher",
-    isDriver: user?.role === "driver",
+      normalizedUser?.role === "admin" ||
+      normalizedUser?.role === "super_admin" ||
+      normalizedUser?.role === "delivery_admin",
+    isSuperAdmin: normalizedUser?.role === "super_admin",
+    isDeliveryAdmin: normalizedUser?.role === "delivery_admin",
+    isDispatcher: normalizedUser?.role === "dispatcher",
+    isDriver: normalizedUser?.role === "driver",
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -57,4 +60,3 @@ export function useAuthContext() {
 }
 
 export default AuthContext;
-

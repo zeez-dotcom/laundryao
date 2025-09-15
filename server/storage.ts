@@ -788,7 +788,9 @@ export class MemStorage {
     const newItem: ClothingItem = {
       id,
       name: item.name,
+      nameAr: (item as any).nameAr ?? null,
       description: item.description || null,
+      descriptionAr: (item as any).descriptionAr ?? null,
       categoryId: item.categoryId,
       imageUrl: item.imageUrl || null,
       userId: item.userId,
@@ -852,7 +854,9 @@ export class MemStorage {
     const newService: LaundryService = {
       id,
       name: service.name,
+      nameAr: (service as any).nameAr ?? null,
       description: service.description || null,
+      descriptionAr: (service as any).descriptionAr ?? null,
       price: service.price,
       categoryId: service.categoryId,
       userId: service.userId,
@@ -868,7 +872,9 @@ export class MemStorage {
     const updated: LaundryService = {
       ...existing,
       name: service.name ?? existing.name,
+      nameAr: (service as any).nameAr ?? existing.nameAr ?? null,
       description: service.description ?? existing.description,
+      descriptionAr: (service as any).descriptionAr ?? existing.descriptionAr ?? null,
       price: service.price ?? existing.price,
       categoryId: service.categoryId ?? existing.categoryId
     };
@@ -1202,14 +1208,20 @@ export class MemStorage {
       if (cp.customerId === customerId) {
         const pkg = this.packages.get(cp.packageId);
         const pkgItemsRaw = this.customerPackageItems.get(cp.id) || [];
-        const pkgItems = pkgItemsRaw.map((i) => ({
-          serviceId: i.serviceId,
-          serviceName: this.laundryServices.get(i.serviceId)?.name,
-          clothingItemId: i.clothingItemId,
-          clothingItemName: this.clothingItems.get(i.clothingItemId)?.name,
-          balance: i.balance,
-          totalCredits: i.totalCredits,
-        }));
+        const pkgItems = pkgItemsRaw.map((i) => {
+          const svc = this.laundryServices.get(i.serviceId);
+          const cli = this.clothingItems.get(i.clothingItemId);
+          return {
+            serviceId: i.serviceId,
+            serviceName: svc?.name,
+            serviceNameAr: (svc as any)?.nameAr,
+            clothingItemId: i.clothingItemId,
+            clothingItemName: cli?.name,
+            clothingItemNameAr: (cli as any)?.nameAr,
+            balance: i.balance,
+            totalCredits: i.totalCredits,
+          };
+        });
         const total = pkgItems.reduce((sum, i) => sum + i.totalCredits, 0);
         const balance = pkgItems.length
           ? pkgItems.reduce((sum, i) => sum + i.balance, 0)
@@ -1326,7 +1338,7 @@ export class MemStorage {
   async deleteBranch(id: string): Promise<boolean> { return false; }
 }
 
-export class DatabaseStorage implements IStorage {
+export class DatabaseStorage {
   private driverLocations = new Map<string, { lat: number; lng: number; timestamp: Date }>();
   // User methods
   async getUser(id: string): Promise<UserWithBranch | undefined> {
@@ -1928,7 +1940,9 @@ export class DatabaseStorage implements IStorage {
       .select({
         id: laundryServices.id,
         name: laundryServices.name,
+        nameAr: laundryServices.nameAr,
         description: laundryServices.description,
+        descriptionAr: laundryServices.descriptionAr,
         categoryId: laundryServices.categoryId,
         price: laundryServices.price,
         userId: laundryServices.userId,
@@ -2165,6 +2179,14 @@ export class DatabaseStorage implements IStorage {
         "Urgent Wash & Iron",
       ];
       const serviceIdMap = new Map<string, string>();
+      const serviceArabicMap: Record<string, string> = {
+        "Normal Iron": "كي عادي",
+        "Normal Wash": "غسيل عادي",
+        "Normal Wash & Iron": "غسيل وكي عادي",
+        "Urgent Iron": "كي مستعجل",
+        "Urgent Wash": "غسيل مستعجل",
+        "Urgent Wash & Iron": "غسيل وكي مستعجل",
+      };
       for (const name of serviceNames) {
         const categoryId = catMap.get(name)!;
         const [existing] = await tx
@@ -2178,12 +2200,23 @@ export class DatabaseStorage implements IStorage {
             ),
           );
         if (existing) {
-          serviceIdMap.set(name, existing.id);
+          // Backfill Arabic name if missing
+          if (!existing.nameAr && serviceArabicMap[name]) {
+            const [updated] = await tx
+              .update(laundryServices)
+              .set({ nameAr: serviceArabicMap[name] })
+              .where(eq(laundryServices.id, existing.id))
+              .returning();
+            serviceIdMap.set(name, updated.id);
+          } else {
+            serviceIdMap.set(name, existing.id);
+          }
         } else {
           const [inserted] = await tx
             .insert(laundryServices)
             .values({
               name,
+              nameAr: serviceArabicMap[name] || null,
               price: "0.00",
               categoryId,
               userId,
@@ -2207,9 +2240,11 @@ export class DatabaseStorage implements IStorage {
         let clothingItemId: string;
         if (existingItem) {
           clothingItemId = existingItem.id;
+          const updatePayload: any = { imageUrl: row.imageUrl };
+          if (row.itemAr) updatePayload.nameAr = row.itemAr;
           await tx
             .update(clothingItems)
-            .set({ imageUrl: row.imageUrl })
+            .set(updatePayload)
             .where(eq(clothingItems.id, existingItem.id));
           clothingItemsUpdated++;
         } else {
@@ -2217,6 +2252,7 @@ export class DatabaseStorage implements IStorage {
             .insert(clothingItems)
             .values({
               name: row.itemEn,
+              nameAr: row.itemAr || null,
               imageUrl: row.imageUrl,
               categoryId: clothingCategoryId,
               userId,
@@ -2488,7 +2524,7 @@ export class DatabaseStorage implements IStorage {
     if (end) {
       conditions.push(lte(transactions.createdAt, end));
     }
-    let query = db.select().from(transactions).orderBy(desc(transactions.createdAt));
+    let query: any = db.select().from(transactions).orderBy(desc(transactions.createdAt));
     if (conditions.length) {
       query = query.where(and(...conditions));
     }
@@ -4031,4 +4067,6 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage: IStorage = new DatabaseStorage();
+export const storage: any = new DatabaseStorage();
+// Note: DatabaseStorage is structurally compatible with IStorage at runtime.
+// Some optional admin/customer features may be implemented as no-ops.

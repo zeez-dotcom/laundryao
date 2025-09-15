@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuthContext } from "@/context/AuthContext";
 import { useCurrency } from "@/lib/currency";
 import { apiRequest } from "@/lib/queryClient";
-import { OrderStatus, DeliveryStatus, DeliveryMode, Order, DeliveryOrder } from "@shared/schema";
+import { OrderStatus, DeliveryStatus, DeliveryMode, Order } from "@shared/schema";
 import {
   Package,
   Clock,
@@ -156,20 +156,30 @@ const nextDeliveryStatusMap: Record<DeliveryStatus, DeliveryStatus | null> = {
   cancelled: null,
 };
 
+type DeliveryAddressLite = { label: string; address: string };
+type DeliveryOrderLite = {
+  deliveryMode?: DeliveryMode;
+  deliveryStatus: DeliveryStatus;
+  deliveryFee?: number;
+  deliveryAddress?: DeliveryAddressLite;
+  deliveryInstructions?: string | null;
+};
+type OrderWithDelivery = Order & { deliveryOrder?: DeliveryOrderLite };
+
 export function OrderManagementDashboard() {
   const { user, branch } = useAuthContext();
   const { formatCurrency } = useCurrency();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithDelivery | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [orderTypeFilter, setOrderTypeFilter] = useState<string>("all"); // all, regular, delivery
   const [searchQuery, setSearchQuery] = useState("");
   const [isStatusUpdateDialogOpen, setIsStatusUpdateDialogOpen] = useState(false);
   const [updateNotes, setUpdateNotes] = useState("");
 
-  const { data: orders = [], isLoading } = useQuery<Order[]>({
+  const { data: orders = [], isLoading } = useQuery<OrderWithDelivery[]>({
     queryKey: ["/api/orders", branch?.id, statusFilter, orderTypeFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -223,7 +233,7 @@ export function OrderManagementDashboard() {
     return matchesSearch && matchesType;
   });
 
-  const handleStatusUpdate = (order: Order) => {
+  const handleStatusUpdate = (order: OrderWithDelivery) => {
     const nextStatus = nextStatusMap[order.status];
     if (!nextStatus) {
       toast({
@@ -278,9 +288,9 @@ export function OrderManagementDashboard() {
   const getDeliveryIcon = (mode?: DeliveryMode) => {
     if (!mode) return null;
     return mode === "driver_pickup" ? (
-      <Car className="h-4 w-4 text-blue-600" title="Driver Pickup" />
+      <Car className="h-4 w-4 text-blue-600" />
     ) : (
-      <ShoppingCart className="h-4 w-4 text-green-600" title="Customer Cart" />
+      <ShoppingCart className="h-4 w-4 text-green-600" />
     );
   };
 
@@ -405,7 +415,7 @@ export function OrderManagementDashboard() {
                       </div>
                       <div className="flex items-center gap-2">
                         <Package className="h-4 w-4" />
-                        {order.items.length} items - {formatCurrency(Number(order.total))}
+                        {(order.items as any[])?.length || 0} items - {formatCurrency(Number(order.total))}
                       </div>
                     </div>
 
@@ -487,7 +497,7 @@ export function OrderManagementDashboard() {
                           <div>
                             <Label>Order Items</Label>
                             <div className="mt-2 space-y-2">
-                              {order.items.map((item, index) => (
+                              {(order.items as any[]).map((item: any, index: number) => (
                                 <div key={index} className="flex justify-between items-center p-2 bg-muted rounded">
                                   <div>
                                     <div className="font-medium">{item.clothingItem?.nameEn || 'Item'}</div>
@@ -514,9 +524,9 @@ export function OrderManagementDashboard() {
                                   <div>
                                     <Label>Delivery Mode</Label>
                                     <div className="flex items-center gap-2 mt-1">
-                                      {getDeliveryIcon(order.deliveryOrder.deliveryMode)}
+                                      {getDeliveryIcon(order.deliveryOrder?.deliveryMode)}
                                       <span className="capitalize">
-                                        {order.deliveryOrder.deliveryMode.replace('_', ' ')}
+                                        {order.deliveryOrder?.deliveryMode?.replace('_', ' ') || ''}
                                       </span>
                                     </div>
                                   </div>

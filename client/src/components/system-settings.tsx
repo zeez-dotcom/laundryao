@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useCurrency, Currency } from "@/lib/currency";
 import { useTranslation, Language } from "@/lib/i18n";
-import { Settings, DollarSign, Globe, Store, Percent } from "lucide-react";
+import { Settings, DollarSign, Globe, Store, Percent, Wrench } from "lucide-react";
 
 export function SystemSettings() {
   const { toast } = useToast();
@@ -39,6 +39,30 @@ export function SystemSettings() {
   };
 
   const currencies = getAllCurrencies();
+  const [backfillLoading, setBackfillLoading] = useState(false);
+
+  const runBackfill = async () => {
+    try {
+      setBackfillLoading(true);
+      const res = await fetch('/api/admin/backfill-bilingual', { method: 'POST', credentials: 'include' });
+      if (!res.ok) {
+        let message = 'Backfill failed';
+        try {
+          const body = await res.json();
+          if (body?.message) message = body.message;
+        } catch {}
+        if (res.status === 403) message = 'Admin access required to run backfill';
+        if (res.status === 401) message = 'Please sign in and try again';
+        throw new Error(message);
+      }
+      const data = await res.json();
+      toast({ title: 'Backfill completed', description: `Items: ${data.clothingItemsUpdated}, Services: ${data.servicesUpdated}, Categories: ${data.categoriesUpdated}` });
+    } catch (e: any) {
+      toast({ title: 'Backfill error', description: e.message, variant: 'destructive' });
+    } finally {
+      setBackfillLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -165,6 +189,24 @@ export function SystemSettings() {
                 />
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Data Maintenance */}
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />
+              Data Maintenance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-gray-600">
+              Split any "English//Arabic" names and descriptions into bilingual fields.
+            </p>
+            <Button onClick={runBackfill} disabled={backfillLoading} variant="outline">
+              {backfillLoading ? 'Running…' : 'Backfill Bilingual Names'}
+            </Button>
           </CardContent>
         </Card>
       </div>

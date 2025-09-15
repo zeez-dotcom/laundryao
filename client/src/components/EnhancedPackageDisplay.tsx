@@ -44,7 +44,9 @@ export function EnhancedPackageDisplay({
   isPackageUsageDisabled = false,
   cartItems = []
 }: EnhancedPackageDisplayProps) {
-  const [expandedPackages, setExpandedPackages] = useState<Set<string>>(new Set());
+  const [expandedPackages, setExpandedPackages] = useState<Set<string>>(
+    () => new Set(packages.map((p) => p.id))
+  );
   const { formatCurrency } = useCurrency();
 
   const togglePackageExpanded = (packageId: string) => {
@@ -161,7 +163,7 @@ export function EnhancedPackageDisplay({
               }`}
               data-testid={`package-card-${pkg.id}`}
             >
-              <Collapsible>
+              <Collapsible open={isExpanded}>
                 <CollapsibleTrigger asChild>
                   <CardHeader 
                     className="pb-3 cursor-pointer hover:bg-gray-50/50 transition-colors"

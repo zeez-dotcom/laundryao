@@ -34,6 +34,7 @@ function createApp() {
         subtotal: o.subtotal,
         paid: o.paid,
         remaining: o.remaining,
+        isDeliveryRequest: o.isDeliveryRequest,
       }));
       res.json(mapped);
     } catch {

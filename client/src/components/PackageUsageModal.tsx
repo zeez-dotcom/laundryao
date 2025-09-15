@@ -95,6 +95,9 @@ export function PackageUsageModal({ open, onClose, packages, cartSummary, onAppl
               >
                 <div className="flex flex-col items-start text-left">
                   <span>{p.nameEn}</span>
+                  {p.nameAr && (
+                    <span className="text-xs text-gray-600" dir="rtl">{p.nameAr}</span>
+                  )}
                   {p.startsAt && p.expiresAt && (
                     <span className="text-xs text-gray-500">
                       {format(new Date(p.startsAt), "MMM d")} -

@@ -34,7 +34,9 @@ import { useToast } from "@/hooks/use-toast";
 
 interface ClothingItemPayload {
   name: string;
+  nameAr?: string;
   description?: string;
+  descriptionAr?: string;
   categoryId: string;
   imageUrl?: string;
 }
@@ -76,7 +78,9 @@ export function ClothingItemsSection() {
     resolver: zodResolver(insertClothingItemSchema),
     defaultValues: {
       name: "",
+      nameAr: "",
       description: "",
+      descriptionAr: "",
       categoryId: "",
       imageUrl: "",
     },
@@ -173,7 +177,9 @@ export function ClothingItemsSection() {
     setEditingClothing(null);
     clothingForm.reset({
       name: "",
+      nameAr: "",
       description: "",
+      descriptionAr: "",
       categoryId: "",
       imageUrl: "",
     });
@@ -184,7 +190,9 @@ export function ClothingItemsSection() {
     setAddingClothing(false);
     clothingForm.reset({
       name: item.name,
+      nameAr: (item as any).nameAr || "",
       description: item.description || "",
+      descriptionAr: (item as any).descriptionAr || "",
       categoryId: item.categoryId,
       imageUrl: item.imageUrl || "",
     });
@@ -202,11 +210,16 @@ export function ClothingItemsSection() {
     priceMutation.mutate(data);
   };
 
-  const filteredClothing = clothingItems.filter(
-    (item) =>
-      item.name.toLowerCase().includes(clothingSearch.toLowerCase()) ||
-      item.categoryId.toLowerCase().includes(clothingSearch.toLowerCase()),
-  );
+  const filteredClothing = clothingItems.filter((item: any) => {
+    const term = clothingSearch.toLowerCase();
+    return (
+      item.name?.toLowerCase().includes(term) ||
+      item.description?.toLowerCase?.().includes(term) ||
+      item.nameAr?.toLowerCase?.().includes(term) ||
+      item.descriptionAr?.toLowerCase?.().includes(term) ||
+      item.categoryId?.toLowerCase().includes(term)
+    );
+  });
 
   return (
     <>
@@ -256,6 +269,18 @@ export function ClothingItemsSection() {
                 />
                 <FormField
                   control={clothingForm.control}
+                  name="nameAr"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Name (Arabic)</FormLabel>
+                      <FormControl>
+                        <Input placeholder="مثال: بنطال، قميص" dir="rtl" {...field} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={clothingForm.control}
                   name="description"
                   render={({ field }) => (
                     <FormItem>
@@ -265,6 +290,18 @@ export function ClothingItemsSection() {
                           placeholder="Brief description..."
                           {...field}
                         />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={clothingForm.control}
+                  name="descriptionAr"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description (Arabic)</FormLabel>
+                      <FormControl>
+                        <Textarea placeholder="وصف مختصر..." dir="rtl" {...field} />
                       </FormControl>
                     </FormItem>
                   )}
@@ -355,12 +392,36 @@ export function ClothingItemsSection() {
                     />
                     <FormField
                       control={clothingForm.control}
+                      name="nameAr"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Name (Arabic)</FormLabel>
+                          <FormControl>
+                            <Input dir="rtl" {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
                       name="description"
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Description</FormLabel>
                           <FormControl>
                             <Textarea {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
+                      name="descriptionAr"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Description (Arabic)</FormLabel>
+                          <FormControl>
+                            <Textarea dir="rtl" {...field} />
                           </FormControl>
                         </FormItem>
                       )}
@@ -433,9 +494,19 @@ export function ClothingItemsSection() {
                       <h3 className="font-semibold text-gray-900 mb-1">
                         {item.name}
                       </h3>
-                      <p className="text-sm text-gray-600 mb-2">
-                        {item.description}
-                      </p>
+                      {(item as any).nameAr && (
+                        <div className="text-sm text-gray-700 mb-1 text-right" dir="rtl">
+                          {(item as any).nameAr}
+                        </div>
+                      )}
+                      {item.description && (
+                        <p className="text-sm text-gray-600 mb-1">{item.description}</p>
+                      )}
+                      {(item as any).descriptionAr && (
+                        <div className="text-xs text-gray-600 text-right mb-2" dir="rtl">
+                          {(item as any).descriptionAr}
+                        </div>
+                      )}
                       <span className="inline-block bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded capitalize">
                         {item.categoryId}
                       </span>

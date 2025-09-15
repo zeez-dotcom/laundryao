@@ -70,13 +70,13 @@ interface LaundryCartSidebarProps {
   isVisible: boolean;
   onClose: () => void;
   // Coupon functionality
-  appliedCoupon: AppliedCoupon | null;
-  couponCode: string;
-  isCouponLoading: boolean;
-  couponError: string | null;
-  onApplyCoupon: (code: string, branchId: string) => Promise<{ success: boolean; error?: string; coupon?: AppliedCoupon }>;
-  onRemoveCoupon: () => void;
-  setCouponCode: (code: string) => void;
+  appliedCoupon?: AppliedCoupon | null;
+  couponCode?: string;
+  isCouponLoading?: boolean;
+  couponError?: string | null;
+  onApplyCoupon?: (code: string, branchId: string) => Promise<{ success: boolean; error?: string; coupon?: AppliedCoupon }>;
+  onRemoveCoupon?: () => void;
+  setCouponCode?: (code: string) => void;
 }
 
 export function LaundryCartSidebar({
@@ -93,10 +93,10 @@ export function LaundryCartSidebar({
   isVisible,
   onClose,
   // Coupon props
-  appliedCoupon,
-  couponCode,
-  isCouponLoading,
-  couponError,
+  appliedCoupon = null,
+  couponCode = "",
+  isCouponLoading = false,
+  couponError = null,
   onApplyCoupon,
   onRemoveCoupon,
   setCouponCode
@@ -295,16 +295,23 @@ export function LaundryCartSidebar({
       {cartSummary.items.length > 0 && (
         <div className="border-t border-gray-200 p-4 space-y-4">
           {/* Coupon Section */}
-          <CouponInput
-            couponCode={couponCode}
-            setCouponCode={setCouponCode}
-            appliedCoupon={appliedCoupon}
-            isCouponLoading={isCouponLoading}
-            couponError={couponError}
-            onApplyCoupon={onApplyCoupon}
-            onRemoveCoupon={onRemoveCoupon}
-            discountAmount={adjustedSummary.discountAmount}
-          />
+          {(() => {
+            const safeSet = setCouponCode || (() => {});
+            const safeApply = onApplyCoupon || (async () => ({ success: false }));
+            const safeRemove = onRemoveCoupon || (() => {});
+            return (
+              <CouponInput
+                couponCode={couponCode}
+                setCouponCode={safeSet}
+                appliedCoupon={appliedCoupon}
+                isCouponLoading={isCouponLoading}
+                couponError={couponError}
+                onApplyCoupon={safeApply}
+                onRemoveCoupon={safeRemove}
+                discountAmount={adjustedSummary.discountAmount}
+              />
+            );
+          })()}
 
           {/* Summary */}
           <div className="space-y-1 text-sm">

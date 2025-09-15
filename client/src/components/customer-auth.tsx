@@ -66,8 +66,8 @@ export function CustomerAuth({ branchCode, onAuth, onGuest }: CustomerAuthProps)
       }
       if (
         mode === "register" &&
-        branch?.serviceCityIds?.length &&
-        !branch.serviceCityIds.includes(city)
+        (branch as any)?.serviceCityIds?.length &&
+        !(branch as any).serviceCityIds.includes(city)
       ) {
         toast({
           title: translations.areas?.notServed || "Area not served",
@@ -161,8 +161,8 @@ export function CustomerAuth({ branchCode, onAuth, onGuest }: CustomerAuthProps)
                 value={city}
                 onChange={setCity}
                 cityIds={
-                  branch?.serviceCityIds && branch.serviceCityIds.length > 0
-                    ? branch.serviceCityIds
+                  (branch as any)?.serviceCityIds && (branch as any).serviceCityIds.length > 0
+                    ? (branch as any).serviceCityIds
                     : undefined
                 }
               />

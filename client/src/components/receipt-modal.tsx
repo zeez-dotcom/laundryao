@@ -91,7 +91,8 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
 
     return pkgs
       .map((pkg: any) => {
-        const usage = usageMap.get(pkg.id);
+        // Match usage to the base package id, not the customer-package id
+        const usage = usageMap.get((pkg as any).packageId ?? pkg.id);
         if (!usage) return null;
         const usedMap = new Map(
           usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
@@ -99,18 +100,18 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
         let pkgUsed = 0;
         const items = pkg.items?.map((item: any) => {
           const key = `${item.serviceId}:${item.clothingItemId}`;
-          const used = usedMap.get(key) || 0;
-          pkgUsed += used;
+          const used = Number(usedMap.get(key) || 0);
+          pkgUsed += Number(used);
           const balanceNum =
             typeof item.balance === 'string'
               ? parseFloat(item.balance)
               : item.balance || 0;
-          return { ...item, used, balance: balanceNum - used };
+          return { ...item, used, balance: balanceNum - Number(used) };
         });
         const balanceNum =
           typeof pkg.balance === 'string' ? parseFloat(pkg.balance) : pkg.balance || 0;
         if (pkgUsed <= 0) return null;
-        return { ...pkg, items, used: pkgUsed, balance: balanceNum - pkgUsed };
+        return { ...pkg, items, used: Number(pkgUsed), balance: balanceNum - Number(pkgUsed) };
       })
       .filter(Boolean);
   }, [receiptData]);
@@ -221,7 +222,8 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
     const enMatch = text.match(/[A-Za-z0-9&() ]+/g);
     const clean = (s: string) => s.replace(/^[\s\-()]+|[\s\-()]+$/g, "").trim();
     const en = enMatch ? clean(enMatch.join(" ")) : "";
-    const ar = arMatch ? clean(arMatch.join(" ")) : en;
+    // Do NOT fallback Arabic to English; leave blank if not present to avoid duplication
+    const ar = arMatch ? clean(arMatch.join(" ")) : "";
     return { en, ar };
   };
 
@@ -253,8 +255,9 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
     item: any,
     creditPool: Map<string, number>
   ): { creditsUsed: number; totalQuantity: number } => {
-    const serviceId = item.service?.id;
-    const clothingItemId = item.clothingItem?.id;
+    // Support both nested objects and flat id fields from stored order items
+    const serviceId = item.service?.id || item.serviceId;
+    const clothingItemId = item.clothingItem?.id || item.clothingItemId;
     const itemQuantity = item.quantity || 0;
     
     if (!serviceId || !clothingItemId || itemQuantity === 0) {
@@ -421,7 +424,7 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
     }
   };
 
-  const items = (receiptData.items as any[]) || [];
+  const items = (Array.isArray((receiptData as any).items) ? (receiptData.items as any[]) : []) || [];
   const date = new Date(receiptData.createdAt);
   const isPayLater = receiptData.paymentMethod === 'pay_later';
   const identifier = receiptData.orderNumber || receiptData.id.slice(-6).toUpperCase();
@@ -432,19 +435,43 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   // Pre-calculate credit usage and totals
   let subtotalBeforeCredits = 0;
   let totalCreditsValue = 0;
-  const creditUsages = items.map((item) => {
-    const itemPrice =
-      typeof item.price === 'number' ? item.price : parseFloat(item.price) || 0;
-    const itemQuantity = item.quantity || 0;
-    const itemTotal = itemPrice * itemQuantity;
-    subtotalBeforeCredits += itemTotal;
-    const usage = allocateCreditsForItem(item, creditPool);
-    totalCreditsValue += usage.creditsUsed * itemPrice;
-    return usage;
-  });
-  const netSubtotal = subtotalBeforeCredits - totalCreditsValue;
-  const taxAmount = taxRate > 0 ? netSubtotal * taxRate : 0;
-  const finalTotal = netSubtotal + taxAmount;
+  let taxAmount = 0;
+  let netSubtotal = 0;
+  let finalTotalComputed = 0;
+
+  const hasItems = items.length > 0;
+  const creditUsages = hasItems
+    ? items.map((item) => {
+        const itemPrice =
+          typeof item.price === 'number' ? item.price : parseFloat(item.price) || 0;
+        const itemQuantity = item.quantity || 0;
+        const itemTotal = itemPrice * itemQuantity;
+        subtotalBeforeCredits += itemTotal;
+        const usage = allocateCreditsForItem(item, creditPool);
+        totalCreditsValue += usage.creditsUsed * itemPrice;
+        return usage;
+      })
+    : [];
+
+  if (hasItems) {
+    netSubtotal = subtotalBeforeCredits - totalCreditsValue;
+    taxAmount = taxRate > 0 ? netSubtotal * taxRate : 0;
+    finalTotalComputed = netSubtotal + taxAmount;
+  }
+
+  // Fallback to server-computed totals for historical orders without item breakdown
+  const parseNum = (v: any) => (typeof v === 'number' ? v : parseFloat(v) || 0);
+  const displaySubtotal = hasItems ? netSubtotal : parseNum((receiptData as any).subtotal);
+  const displayTax = hasItems ? taxAmount : parseNum((receiptData as any).tax);
+  const displayTotal = hasItems ? finalTotalComputed : parseNum((receiptData as any).total);
+
+  // Backfill a simple Package Credits line when it can be inferred
+  // If items exist but we couldn't compute credit allocation, infer from server subtotal difference
+  const inferredPackageCredits = hasItems
+    ? Math.max(0, subtotalBeforeCredits - displaySubtotal)
+    : 0;
+  const packageCreditsToDisplay =
+    totalCreditsValue > 0 ? totalCreditsValue : inferredPackageCredits;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -613,36 +640,45 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
           {/* Items */}
           <div className="space-y-2">
             {items.map((item, index) => {
-              const serviceName =
-                typeof item.service === "string"
+              // Prefer structured bilingual objects when available
+              const svc =
+                item && item.service && typeof item.service === 'object'
                   ? item.service
-                  : item.service?.name;
-              const clothingItem =
-                typeof item.name === "string"
-                  ? item.name
-                  : typeof item.clothingItem === "string"
-                    ? item.clothingItem
-                    : item.clothingItem?.name;
-              const clothing = splitBilingualText(clothingItem || "");
-              const service = splitBilingualText(serviceName || "");
-              const englishLine =
-                [clothing.en, service.en].filter(Boolean).join(" - ") +
-                ` × ${item.quantity}`;
-              const arabicLine =
-                [clothing.ar, service.ar].filter(Boolean).join(" - ") +
-                ` × ${item.quantity}`;
+                  : typeof item?.service === 'string'
+                    ? { name: item.service }
+                    : {};
+
+              const cli =
+                item && item.clothingItem && typeof item.clothingItem === 'object'
+                  ? item.clothingItem
+                  : typeof item?.clothingItem === 'string'
+                    ? { name: item.clothingItem }
+                    : typeof item?.name === 'string'
+                      ? { name: item.name }
+                      : {};
+
+              // Derive bilingual names from structured fields or split combined strings
+              let serviceEn = svc.name || '';
+              let serviceAr = svc.nameAr || '';
+              if (!serviceAr && serviceEn) {
+                const parts = splitBilingualText(serviceEn);
+                serviceEn = parts.en;
+                serviceAr = parts.ar;
+              }
+              let clothingEn = cli.name || '';
+              let clothingAr = cli.nameAr || '';
+              if (!clothingAr && clothingEn) {
+                const parts = splitBilingualText(clothingEn);
+                clothingEn = parts.en;
+                clothingAr = parts.ar;
+              }
+
+              const englishLine = [clothingEn, serviceEn].filter(Boolean).join(' - ') + ` × ${item.quantity}`;
+              const arabicLine = [clothingAr, serviceAr].filter(Boolean).join(' - ') + ` × ${item.quantity}`;
+
               const creditUsage = creditUsages[index];
-              const totalPrice =
-                (typeof item.price === 'number'
-                  ? item.price
-                  : parseFloat(item.price) || 0) * (item.quantity || 0);
-              return renderBilingualItemRow(
-                englishLine,
-                arabicLine,
-                totalPrice,
-                index,
-                creditUsage
-              );
+              const totalPrice = (typeof item.price === 'number' ? item.price : parseFloat(item.price) || 0) * (item.quantity || 0);
+              return renderBilingualItemRow(englishLine, arabicLine, totalPrice, index, creditUsage);
             })}
           </div>
 
@@ -650,24 +686,24 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
             {renderBilingualRow(
               tEn.subtotal,
               tAr.subtotal,
-              formatCurrency(subtotalBeforeCredits)
+              formatCurrency(hasItems ? subtotalBeforeCredits : displaySubtotal)
             )}
-            {totalCreditsValue > 0 &&
+            {packageCreditsToDisplay > 0 &&
               renderBilingualRow(
                 "Package Credits",
                 "أرصدة الباقة",
-                formatCurrency(-totalCreditsValue)
+                formatCurrency(-packageCreditsToDisplay)
               )}
             {taxRate > 0 &&
               renderBilingualRow(
                 tEn.tax,
                 tAr.tax,
-                formatCurrency(taxAmount)
+                formatCurrency(displayTax)
               )}
             {renderBilingualRow(
               tEn.total,
               tAr.total,
-              formatCurrency(finalTotal),
+              formatCurrency(displayTotal),
               'font-bold border-t pt-1'
             )}
           </div>
@@ -679,33 +715,36 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                   <div className="flex font-semibold">
                     <p className="flex-1">{pkg.nameEn}</p>
                     <p className="flex-1 text-right" dir="rtl">
-                      {pkg.nameAr || pkg.nameEn}
+                      {pkg.nameAr || ""}
                     </p>
                   </div>
                   {pkg.items && pkg.items.length > 0 && (
                     <div className="pl-2 space-y-1">
                       {pkg.items.map((item: any) => {
-                        const label = item.clothingItemName
-                          ? `${item.serviceName} – ${item.clothingItemName}`
-                          : item.serviceName;
+                        const serviceNameEn = item.serviceName || '';
+                        const serviceNameAr = item.serviceNameAr || '';
+                        const clothingNameEn = item.clothingItemName || '';
+                        const clothingNameAr = item.clothingItemNameAr || '';
+                        const labelEn = clothingNameEn ? `${serviceNameEn} – ${clothingNameEn}` : serviceNameEn;
+                        const labelAr = clothingNameAr ? `${serviceNameAr} – ${clothingNameAr}` : serviceNameAr;
                         const key = `${item.serviceId || item.serviceName}-${item.clothingItemId || item.clothingItemName}`;
                         return (
                           <Fragment key={key}>
                             <div className="flex">
-                              <p className="flex-1 font-medium">{label}</p>
+                              <p className="flex-1 font-medium">{labelEn}</p>
                               <p className="flex-1 text-right font-medium" dir="rtl">
-                                {label}
+                                {labelAr}
                               </p>
                             </div>
                             {renderBilingualRow(
                               "Used",
-                              "Used",
+                              "المستخدم",
                               item.used,
                               "text-sm pl-2",
                             )}
                             {renderBilingualRow(
                               "Remaining",
-                              "Remaining",
+                              "المتبقي",
                               `${item.balance}/${item.totalCredits}`,
                               "text-sm pl-2",
                             )}
@@ -715,19 +754,24 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                     </div>
                   )}
                   {renderBilingualRow(
+                    "Valid from",
+                    "ساري من",
+                    pkg.startsAt ? format(new Date(pkg.startsAt), "MMM dd, yyyy") : "",
+                  )}
+                  {renderBilingualRow(
                     "Credits used",
-                    "Credits used",
+                    "الأرصدة المستخدمة",
                     pkg.used,
                   )}
                   {renderBilingualRow(
                     "Credits remaining",
-                    "Credits remaining",
+                    "الأرصدة المتبقية",
                     `${pkg.balance}/${pkg.totalCredits}`,
                   )}
                   {pkg.expiresAt &&
                     renderBilingualRow(
                       "Expires on",
-                      "Expires on",
+                      "تاريخ الانتهاء",
                       format(new Date(pkg.expiresAt), "MMM dd, yyyy"),
                     )}
                 </Fragment>
@@ -755,10 +799,10 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                     </div>
                     <div className="flex">
                       <p className="text-lg font-bold text-red-600 flex-1">
-                        {formatCurrency(finalTotal)}
+                        {formatCurrency(displayTotal)}
                       </p>
                       <p className="text-lg font-bold text-red-600 flex-1 text-right" dir="rtl">
-                        {formatCurrency(finalTotal)}
+                        {formatCurrency(displayTotal)}
                       </p>
                     </div>
                     <div className="flex">

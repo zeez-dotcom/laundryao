@@ -80,11 +80,15 @@ describe("PackageForm", () => {
       id: "p1",
       branchId: "b1",
       nameEn: "Test",
+      nameAr: null,
       descriptionEn: null,
-      price: 0,
+      descriptionAr: null,
+      price: "0",
       maxItems: null,
       expiryDays: null,
       bonusCredits: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
       packageItems: [
         {
           id: "",
@@ -111,4 +115,3 @@ describe("PackageForm", () => {
     });
   });
 });
-

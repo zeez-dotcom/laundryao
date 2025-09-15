@@ -19,6 +19,7 @@ import CustomerOrderingPage from "@/pages/customer-ordering";
 import CustomerDashboardPage from "@/pages/customer-dashboard";
 import DriverDashboard from "@/pages/driver";
 import LoadingScreen from "@/components/common/LoadingScreen";
+import { ThemeProvider } from "@/theme";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuthContext();
@@ -52,10 +53,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
+        <ThemeProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </ThemeProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

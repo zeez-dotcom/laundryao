@@ -7,6 +7,7 @@ import { storage } from "./storage";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
 import type { User } from "@shared/schema";
+// duplicate RequestHandler import removed
 import crypto, { randomUUID } from "node:crypto";
 import logger from "./logger";
 
@@ -47,12 +48,12 @@ export function getAdminSession() {
   
   // Get the environment-specific cookie settings
   const isProduction = process.env.NODE_ENV === 'production';
-  const isReplit = process.env.REPLIT_ENVIRONMENT === 'production' || process.env.REPL_ID;
+  const isReplit = (process.env.REPLIT_ENVIRONMENT === 'production') || Boolean(process.env.REPL_ID);
   
   // Enhanced security cookie configuration for production
   const cookieConfig = {
     sameSite: isProduction ? "strict" as const : "lax" as const, // Stricter in production
-    secure: isProduction || isReplit, // Secure cookies in production and Replit
+    secure: Boolean(isProduction || isReplit), // Secure cookies in production and Replit
   };
   
   return session({
@@ -81,12 +82,12 @@ export function getCustomerSession() {
   
   // Get the environment-specific cookie settings  
   const isProduction = process.env.NODE_ENV === 'production';
-  const isReplit = process.env.REPLIT_ENVIRONMENT === 'production' || process.env.REPL_ID;
+  const isReplit = (process.env.REPLIT_ENVIRONMENT === 'production') || Boolean(process.env.REPL_ID);
   
   // Customer session cookie configuration
   const cookieConfig = {
     sameSite: "lax" as const, // More permissive for customer experience
-    secure: isProduction || isReplit, // Secure cookies in production and Replit
+    secure: Boolean(isProduction || isReplit), // Secure cookies in production and Replit
   };
   
   return session({
@@ -149,8 +150,8 @@ export async function setupAuth(app: Express) {
 
         return done(null, user);
       } catch (error) {
-        logger.error(`Login error:`, error);
-        return done(error);
+        logger.error({ err: error }, "Login error");
+        return done(error as any);
       }
     })
   );
@@ -212,3 +213,27 @@ export const requireCustomerOrAdmin: RequestHandler = (req, res, next) => {
   res.status(401).json({ message: "Login required" });
 };
 
+// Minimal driver token utilities for tests and lightweight endpoints
+// Token format: a simple opaque string containing the driver id
+export function issueDriverToken(driverId: string): string {
+  // Keep it deliberately simple for in-memory tests
+  return driverId;
+}
+
+export const validateDriverToken: RequestHandler = async (req, res, next) => {
+  try {
+    const auth = req.headers["authorization"] || "";
+    const token = Array.isArray(auth) ? auth[0] : auth;
+    const parts = token.split(" ");
+    const opaque = parts.length === 2 ? parts[1] : parts[0];
+    if (!opaque) return res.status(401).json({ message: "Missing token" });
+    const user = await storage.getUser(opaque);
+    if (!user || user.role !== "driver") {
+      return res.status(401).json({ message: "Invalid token" });
+    }
+    (req as any).user = user;
+    next();
+  } catch {
+    res.status(401).json({ message: "Invalid token" });
+  }
+};

@@ -35,6 +35,9 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
     | "input"
     | "confirm"
     | "addCategory"
+    | "postAddItem"
+    | "assignServiceSelect"
+    | "assignPriceConfirm"
   >("type");
   const [selectedType, setSelectedType] = useState<"item" | "service" | null>(
     null,
@@ -56,6 +59,10 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
     "name" | "price" | "category" | "image" | null
   >(null);
   const [addData, setAddData] = useState<any>({});
+  // Workflow state for assigning services to a newly added item
+  const [pendingAssignItemId, setPendingAssignItemId] = useState<string | null>(null);
+  const [pendingAssignItemName, setPendingAssignItemName] = useState<string | null>(null);
+  const [returnToAssignAfterAddService, setReturnToAssignAfterAddService] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [show, setShow] = useState(open);
@@ -91,6 +98,9 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
       setAddMode(null);
       setAddField(null);
       setAddData({});
+      setPendingAssignItemId(null);
+      setPendingAssignItemName(null);
+      setReturnToAssignAfterAddService(false);
     }
   }, [open]);
 
@@ -231,6 +241,64 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
       setFile(null);
       setOptions([]);
       setStep("input");
+    } else if (step === "postAddItem") {
+      if (value === "assign_services") {
+        if (!pendingAssignItemId || !pendingAssignItemName) return;
+        try {
+          const res = await fetch("/api/laundry-services", { credentials: "include" });
+          if (!res.ok) throw new Error();
+          const list = await res.json();
+          setServices(list);
+          setSelectedType("item");
+          setSelectedEntry({ id: pendingAssignItemId, name: pendingAssignItemName });
+          setSelectedField("price");
+          setMessages((m) => [
+            ...m,
+            { role: "assistant", content: `Select a service for ${pendingAssignItemName}` },
+          ]);
+          setOptions([
+            ...list.map((s: any) => ({ label: s.name, value: s.id })),
+            { label: "Add New Service", value: "add_new_service" },
+          ]);
+          setStep("assignServiceSelect");
+        } catch {
+          toast({ title: "Failed to load services", variant: "destructive" });
+        }
+      } else if (value === "add_another_item") {
+        setAddMode("item");
+        setAddField("name");
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Enter name" },
+        ]);
+        setOptions([]);
+        setStep("input");
+      } else {
+        onClose();
+      }
+    } else if (step === "assignServiceSelect") {
+      if (value === "add_new_service") {
+        setReturnToAssignAfterAddService(true);
+        setAddMode("service");
+        setAddField("name");
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Enter name" },
+        ]);
+        setOptions([]);
+        setStep("input");
+      } else {
+        const svc = services.find((s) => s.id === value) || services.find((s) => s.id === value?.toString());
+        if (!svc) return;
+        setSelectedService(svc);
+        setMessages((m) => [
+          ...m,
+          { role: "user", content: svc.name },
+          { role: "assistant", content: `Enter price for ${svc.name} (${pendingAssignItemName})` },
+        ]);
+        setOptions([]);
+        setStep("input");
+      }
     } else if (step === "service") {
       const svc = services.find((s) => s.id === value);
       setSelectedService(svc);
@@ -283,25 +351,45 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
             await queryClient.invalidateQueries({
               queryKey: ["/api/laundry-services"],
             });
-            const confirmRes = await fetch("/api/laundry-services", {
-              credentials: "include",
-            });
-            const list = await confirmRes.json();
-            const exists = list.some((s: any) => s.id === data.id);
-            const message = exists
-              ? "Service added. Add another?"
-              : "Failed to verify service. Add another?";
-            setMessages((m) => [...m, { role: "assistant", content: message }]);
-            toast({
-              title: exists ? "Service added" : "Service addition failed",
-              variant: exists ? undefined : "destructive",
-            });
+            // If we were adding a service during assign workflow, return to assign selection
+            if (returnToAssignAfterAddService && pendingAssignItemId) {
+              try {
+                const confirmRes = await fetch("/api/laundry-services", { credentials: "include" });
+                const list = await confirmRes.json();
+                setServices(list);
+                setMessages((m) => [
+                  ...m,
+                  { role: "assistant", content: `Service added. Select a service for ${pendingAssignItemName}` },
+                ]);
+                setOptions([
+                  ...list.map((s: any) => ({ label: s.name, value: s.id })),
+                  { label: "Add New Service", value: "add_new_service" },
+                ]);
+                setStep("assignServiceSelect");
+              } catch {
+                toast({ title: "Failed to refresh services", variant: "destructive" });
+              }
+            } else {
+              const confirmRes = await fetch("/api/laundry-services", {
+                credentials: "include",
+              });
+              const list = await confirmRes.json();
+              const exists = list.some((s: any) => s.id === data.id);
+              const message = exists
+                ? "Service added. Add another?"
+                : "Failed to verify service. Add another?";
+              setMessages((m) => [...m, { role: "assistant", content: message }]);
+              toast({
+                title: exists ? "Service added" : "Service addition failed",
+                variant: exists ? undefined : "destructive",
+              });
+              setOptions([
+                { label: "Yes", value: "yes" },
+                { label: "No", value: "no" },
+              ]);
+              setStep("confirm");
+            }
           }
-          setOptions([
-            { label: "Yes", value: "yes" },
-            { label: "No", value: "no" },
-          ]);
-          setStep("confirm");
         } catch {
           toast({ title: "Failed to add service", variant: "destructive" });
         }
@@ -311,6 +399,7 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
         setInputValue("");
         setFile(null);
         setImageInputMode(null);
+        setReturnToAssignAfterAddService(false);
       }
     } else if (step === "confirm") {
       if (value === "yes") {
@@ -335,8 +424,44 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
         setAddMode(null);
         setAddField(null);
         setAddData({});
+        setPendingAssignItemId(null);
+        setPendingAssignItemName(null);
+        setReturnToAssignAfterAddService(false);
       } else {
         onClose();
+      }
+    } else if (step === "assignPriceConfirm") {
+      if (value === "yes") {
+        try {
+          const res = await fetch("/api/laundry-services", { credentials: "include" });
+          if (!res.ok) throw new Error();
+          const list = await res.json();
+          setServices(list);
+          setMessages((m) => [
+            ...m,
+            { role: "assistant", content: `Select another service for ${pendingAssignItemName}` },
+          ]);
+          setOptions([
+            ...list.map((s: any) => ({ label: s.name, value: s.id })),
+            { label: "Add New Service", value: "add_new_service" },
+          ]);
+          setStep("assignServiceSelect");
+        } catch {
+          toast({ title: "Failed to load services", variant: "destructive" });
+        }
+      } else {
+        setPendingAssignItemId(null);
+        setPendingAssignItemName(null);
+        setReturnToAssignAfterAddService(false);
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Done. Anything else?" },
+        ]);
+        setOptions([
+          { label: "Yes", value: "yes" },
+          { label: "No", value: "no" },
+        ]);
+        setStep("confirm");
       }
     }
   };
@@ -419,25 +544,20 @@ const handleAddSubmit = async () => {
           await queryClient.invalidateQueries({
             queryKey: ["/api/clothing-items"],
           });
-          const confirmRes = await fetch("/api/clothing-items", {
-            credentials: "include",
-          });
-          const list = await confirmRes.json();
-          const exists = list.some((i: any) => i.id === data.id);
-          const message = exists
-            ? "Item added. Add another?"
-            : "Failed to verify item. Add another?";
-          setMessages((m) => [...m, { role: "assistant", content: message }]);
-          toast({
-            title: exists ? "Item added" : "Item addition failed",
-            variant: exists ? undefined : "destructive",
-          });
+          // Store new item id/name to allow assigning services and setting prices
+          setPendingAssignItemId(data.id);
+          setPendingAssignItemName(data.name);
+          setMessages((m) => [
+            ...m,
+            { role: "assistant", content: `Item added: ${data.name}. What next?` },
+          ]);
+          setOptions([
+            { label: "Assign Services", value: "assign_services" },
+            { label: "Add Another Item", value: "add_another_item" },
+            { label: "Done", value: "done" },
+          ]);
+          setStep("postAddItem");
         }
-        setOptions([
-          { label: "Yes", value: "yes" },
-          { label: "No", value: "no" },
-        ]);
-        setStep("confirm");
       } catch {
         toast({ title: "Failed to add item", variant: "destructive" });
       }
@@ -551,15 +671,32 @@ const handleAddSubmit = async () => {
         return;
       }
       toast({ title: "Updated" });
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: "Update saved. Edit something else?" },
-      ]);
-      setOptions([
-        { label: "Yes", value: "yes" },
-        { label: "No", value: "no" },
-      ]);
-      setStep("confirm");
+      if (
+        selectedType === "item" &&
+        selectedField === "price" &&
+        pendingAssignItemId &&
+        selectedEntry?.id === pendingAssignItemId
+      ) {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Price saved. Add another service price?" },
+        ]);
+        setOptions([
+          { label: "Yes", value: "yes" },
+          { label: "No", value: "no" },
+        ]);
+        setStep("assignPriceConfirm");
+      } else {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Update saved. Edit something else?" },
+        ]);
+        setOptions([
+          { label: "Yes", value: "yes" },
+          { label: "No", value: "no" },
+        ]);
+        setStep("confirm");
+      }
       setInputValue("");
       setFile(null);
       setImageInputMode(null);
@@ -694,4 +831,3 @@ const handleAddSubmit = async () => {
     </div>
   );
 }
-

@@ -701,6 +701,9 @@ export function BranchDeliveryManager() {
                         />
                         <div>
                           <h4 className="font-medium">{pkg.nameEn}</h4>
+                          {pkg.nameAr && (
+                            <div className="text-sm text-gray-600 text-right" dir="rtl">{pkg.nameAr}</div>
+                          )}
                           <p className="text-sm text-gray-600 dark:text-gray-400">
                             {pkg.descriptionEn}
                           </p>

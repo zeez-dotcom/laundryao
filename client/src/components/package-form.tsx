@@ -38,7 +38,9 @@ interface PackageFormProps {
 
 export function PackageForm({ pkg, onClose, branchId, branchCode }: PackageFormProps) {
   const [name, setName] = useState(pkg?.nameEn || "");
+  const [nameAr, setNameAr] = useState<string>(pkg?.nameAr || "");
   const [description, setDescription] = useState(pkg?.descriptionEn || "");
+  const [descriptionAr, setDescriptionAr] = useState<string>(pkg?.descriptionAr || "");
   const [price, setPrice] = useState(pkg?.price?.toString() || "");
   const [maxItems, setMaxItems] = useState(pkg?.maxItems?.toString() || "");
   const [expiryDays, setExpiryDays] = useState(pkg?.expiryDays?.toString() || "");
@@ -89,9 +91,9 @@ export function PackageForm({ pkg, onClose, branchId, branchCode }: PackageFormP
     id: pkg?.id || "preview",
     branchId: branchId || "",
     nameEn: name,
-    nameAr: null,
+    nameAr: nameAr || null,
     descriptionEn: description || null,
-    descriptionAr: null,
+    descriptionAr: descriptionAr || null,
     price: price || "0",
     maxItems: maxItems ? parseInt(maxItems) : null,
     expiryDays: expiryDays ? parseInt(expiryDays) : null,
@@ -113,7 +115,9 @@ export function PackageForm({ pkg, onClose, branchId, branchCode }: PackageFormP
     mutationFn: async () => {
       const payload = {
         nameEn: name,
+        nameAr: nameAr || undefined,
         descriptionEn: description || null,
+        descriptionAr: descriptionAr || undefined,
         price,
         maxItems: maxItems ? parseInt(maxItems) : null,
         expiryDays: expiryDays ? parseInt(expiryDays) : null,
@@ -162,11 +166,26 @@ export function PackageForm({ pkg, onClose, branchId, branchCode }: PackageFormP
       </div>
 
       <div className="space-y-2">
+        <Label htmlFor="nameAr">Name (Arabic)</Label>
+        <Input id="nameAr" dir="rtl" value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
+      </div>
+
+      <div className="space-y-2">
         <Label htmlFor="description">Description</Label>
         <Input
           id="description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="descriptionAr">Description (Arabic)</Label>
+        <Input
+          id="descriptionAr"
+          dir="rtl"
+          value={descriptionAr}
+          onChange={(e) => setDescriptionAr(e.target.value)}
         />
       </div>
 

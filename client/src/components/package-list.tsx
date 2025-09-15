@@ -229,6 +229,9 @@ function PackageListInner() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">{pkg.nameEn}</p>
+                {pkg.nameAr && (
+                  <p className="text-sm text-gray-600 text-right" dir="rtl">{pkg.nameAr}</p>
+                )}
                 <p className="text-sm text-gray-500">
                   {formatCurrency(pkg.price)}
                 </p>

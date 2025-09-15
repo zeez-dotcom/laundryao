@@ -44,7 +44,14 @@ export function PackageCard({ pkg }: PackageCardProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{pkg.nameEn}</CardTitle>
+        <CardTitle>
+          {pkg.nameEn}
+          {pkg.nameAr && (
+            <div className="text-sm font-normal text-gray-600 text-right" dir="rtl">
+              {pkg.nameAr}
+            </div>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         <p className="font-medium">{formatCurrency(pkg.price || 0)}</p>
@@ -78,4 +85,3 @@ export function PackageCard({ pkg }: PackageCardProps) {
 }
 
 export default PackageCard;
-

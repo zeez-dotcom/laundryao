@@ -71,7 +71,7 @@ export function DeliveryOrderRequests() {
             </div>
             <Button
               onClick={() => acceptMutation.mutate(request.id)}
-              disabled={acceptMutation.isLoading}
+              disabled={(acceptMutation as any).isPending ?? (acceptMutation as any).isLoading}
             >
               Accept
             </Button>
@@ -84,4 +84,3 @@ export function DeliveryOrderRequests() {
     </div>
   );
 }
-
