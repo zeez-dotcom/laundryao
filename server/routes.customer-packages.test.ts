@@ -6,7 +6,7 @@ import request from 'supertest';
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://user:pass@localhost/db';
 
-const { requireCustomerOrAdmin } = await import('./auth');
+const { requireCustomerOrAdmin, requireAuth } = await import('./auth');
 const { storage } = await import('./storage');
 const logger = (await import('./logger')).default;
 
@@ -27,6 +27,20 @@ function createApp() {
       res.json(packages);
     } catch (error) {
       logger.error({ err: error, customerId: (req.session as any).customerId }, 'Failed to fetch customer packages');
+      res.status(500).json({ message: 'Failed to fetch customer packages' });
+    }
+  });
+
+  app.get('/api/customers/:customerId/packages', requireAuth, async (req, res) => {
+    try {
+      const customer = await storage.getCustomer(req.params.customerId, 'b1');
+      if (!customer) {
+        return res.status(404).json({ message: 'Customer not found' });
+      }
+      const packages = await storage.getCustomerPackagesWithUsage(req.params.customerId);
+      res.json(packages);
+    } catch (error) {
+      logger.error({ err: error, customerId: req.params.customerId }, 'Failed to fetch customer packages');
       res.status(500).json({ message: 'Failed to fetch customer packages' });
     }
   });
@@ -57,5 +71,24 @@ test('GET /customer/packages as staff returns packages', async () => {
     assert.deepEqual(res.body, mockPackages);
   } finally {
     storage.getCustomerPackagesWithUsage = original;
+  }
+});
+
+test('GET /api/customers/:id/packages returns packages', async () => {
+  const mockPackages = [{ id: 'cp1', balance: 5 }];
+  const origGetPackages = storage.getCustomerPackagesWithUsage;
+  const origGetCustomer = storage.getCustomer;
+  storage.getCustomerPackagesWithUsage = async (id: string) =>
+    id === 'cust1' ? mockPackages : [];
+  storage.getCustomer = async (id: string) =>
+    id === 'cust1' ? ({ id, branchId: 'b1' } as any) : undefined;
+  try {
+    const app = createApp();
+    const res = await request(app).get('/api/customers/cust1/packages');
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, mockPackages);
+  } finally {
+    storage.getCustomerPackagesWithUsage = origGetPackages;
+    storage.getCustomer = origGetCustomer;
   }
 });

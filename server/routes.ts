@@ -3247,6 +3247,28 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/customers/:customerId/packages", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId =
+        user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomer(req.params.customerId, branchId);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const packages = await storage.getCustomerPackagesWithUsage(
+        req.params.customerId,
+      );
+      res.json(packages);
+    } catch (error) {
+      logger.error(
+        { err: error, customerId: req.params.customerId },
+        "Failed to fetch customer packages",
+      );
+      res.status(500).json({ message: "Failed to fetch customer packages" });
+    }
+  });
+
   app.get("/api/customers/phone/:phoneNumber", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
