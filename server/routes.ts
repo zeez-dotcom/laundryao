@@ -224,7 +224,7 @@ function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
  * Uses multiple packages to maximize credit utilization and prevent unnecessary cash charges.
  * This prevents client-side tampering with financial credit data.
  */
-async function computePackageUsage(
+export async function computePackageUsage(
   customerId: string,
   cartItems: any[],
   storage: IStorage
@@ -315,6 +315,47 @@ async function computePackageUsage(
     logger.error({ error, customerId }, "Error computing package usage");
     return null;
   }
+}
+
+const TAX_RATE = 0.085;
+
+export async function computeTotalsWithCredits(
+  cartItems: any[],
+  usedCredits: { serviceId: string; clothingItemId: string; quantity: number }[],
+  storage: IStorage,
+  userId: string,
+  branchId: string
+): Promise<{ subtotal: number; tax: number; total: number }> {
+  const creditMap = new Map<string, number>();
+  for (const credit of usedCredits) {
+    const key = `${credit.serviceId}:${credit.clothingItemId}`;
+    creditMap.set(key, (creditMap.get(key) || 0) + credit.quantity);
+  }
+
+  let subtotal = 0;
+  for (const item of cartItems) {
+    if (!item.serviceId || !item.clothingItemId || typeof item.quantity !== "number") {
+      continue;
+    }
+    const price =
+      (await storage.getItemServicePrice(
+        item.clothingItemId,
+        item.serviceId,
+        userId,
+        branchId,
+      )) ?? 0;
+    const key = `${item.serviceId}:${item.clothingItemId}`;
+    const creditQty = Math.min(creditMap.get(key) || 0, item.quantity);
+    const paidQty = item.quantity - creditQty;
+    subtotal += price * paidQty;
+    item.price = price;
+    item.total = price * paidQty;
+  }
+
+  subtotal = Math.round(subtotal * 100) / 100;
+  const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
+  const total = Math.round((subtotal + tax) * 100) / 100;
+  return { subtotal, tax, total };
 }
 
 export async function registerRoutes(
@@ -3603,7 +3644,7 @@ export async function registerRoutes(
       if (packageComputeResult) {
         try {
           pkgUsages = packageUsagesSchema.parse(packageComputeResult.packageUsages);
-          
+
           // Update customer package balances with used credits
           for (const credit of packageComputeResult.usedCredits) {
             await storage.updateCustomerPackageBalance(
@@ -3619,6 +3660,17 @@ export async function registerRoutes(
           pkgUsages = null;
         }
       }
+
+      const totals = await computeTotalsWithCredits(
+        cartItems,
+        packageComputeResult?.usedCredits || [],
+        storage,
+        user.id,
+        branch.id,
+      );
+      data.subtotal = totals.subtotal.toFixed(2);
+      data.tax = totals.tax.toFixed(2);
+      data.total = totals.total.toFixed(2);
 
       const orderData = insertOrderSchema.parse({
         ...data,
