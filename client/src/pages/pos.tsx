@@ -20,6 +20,7 @@ import { useLaundryCart } from "@/hooks/use-laundry-cart";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, postOrder } from "@/lib/queryClient";
+import { getTaxRate } from "@/lib/tax";
 import { LanguageSelector } from "@/components/language-selector";
 import { useCurrency } from "@/lib/currency";
 import { SystemSettings } from "@/components/system-settings";
@@ -227,19 +228,42 @@ export default function POS() {
       return;
     }
 
-    const finalTotal = Math.max(cartSummary.total - redeemedPoints * 0.1, 0);
-    const pointsEarned = Math.floor(finalTotal);
+    // Map package usage for quick lookup
+    const usageMap = new Map<string, number>();
+    packageUsage?.items.forEach((u) => {
+      const key = `${u.serviceId}:${u.clothingItemId}`;
+      usageMap.set(key, (usageMap.get(key) || 0) + u.quantity);
+    });
 
-    // Convert laundry cart items to order format
-    const orderItems = cartSummary.items.map(item => ({
-      id: item.id,
-      name: item.clothingItem.name,
-      clothingItem: item.clothingItem.name,
-      service: item.service.name,
-      quantity: item.quantity,
-      price: parseFloat(item.service.itemPrice ?? item.service.price),
-      total: item.total
-    }));
+    let creditedAmount = 0;
+    const orderItems = cartSummary.items.map(item => {
+      const price = parseFloat(item.service.itemPrice ?? item.service.price);
+      const key = `${item.service.id}:${item.clothingItem.id}`;
+      const availableCredits = usageMap.get(key) || 0;
+      const creditQty = Math.min(availableCredits, item.quantity);
+      if (creditQty > 0) {
+        creditedAmount += creditQty * price;
+        usageMap.set(key, availableCredits - creditQty);
+      }
+      const chargedTotal = price * (item.quantity - creditQty);
+      return {
+        id: item.id,
+        serviceId: item.service.id,
+        clothingItemId: item.clothingItem.id,
+        name: item.clothingItem.name,
+        clothingItem: item.clothingItem.name,
+        service: item.service.name,
+        quantity: item.quantity,
+        price,
+        total: chargedTotal,
+      };
+    });
+
+    const taxRate = getTaxRate();
+    const newSubtotal = cartSummary.subtotal - creditedAmount;
+    const newTax = Math.max(cartSummary.tax - creditedAmount * taxRate, 0);
+    const finalTotal = Math.max(cartSummary.total - creditedAmount - creditedAmount * taxRate - redeemedPoints * 0.1, 0);
+    const pointsEarned = Math.floor(finalTotal);
 
     const orderData = {
       cartItems: orderItems,
@@ -247,9 +271,9 @@ export default function POS() {
       branchCode: branch.code,
       customerName: customer?.name || "Walk-in",
       customerPhone: customer?.phoneNumber || "",
-      subtotal: cartSummary.subtotal.toString(),
-      tax: cartSummary.tax.toString(),
-      total: finalTotal.toString(),
+      subtotal: newSubtotal.toFixed(2),
+      tax: newTax.toFixed(2),
+      total: finalTotal.toFixed(2),
       paymentMethod,
       status: "start_processing",
       estimatedPickup: new Date(
@@ -266,9 +290,9 @@ export default function POS() {
 
     const transaction = paymentMethod === "pay_later" ? undefined : {
       items: orderItems,
-      subtotal: cartSummary.subtotal.toString(),
-      tax: cartSummary.tax.toString(),
-      total: finalTotal.toString(),
+      subtotal: newSubtotal.toFixed(2),
+      tax: newTax.toFixed(2),
+      total: finalTotal.toFixed(2),
       paymentMethod,
       sellerName: username,
       customerId: customer?.id || "",
