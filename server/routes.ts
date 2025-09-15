@@ -3749,7 +3749,7 @@ export async function registerRoutes(
         }
       }
 
-      if (order.customerId && pkgUsages) {
+      if (order.customerId && Array.isArray(pkgUsages) && pkgUsages.length > 0) {
         try {
           let pkgs: any[] = [];
           try {
@@ -3762,11 +3762,16 @@ export async function registerRoutes(
             // Continue without package usage but don't fail the order
             pkgs = [];
           }
-          
-          const pkg = pkgs.find((p: any) => p.id === pkgUsages.packageId);
-          if (pkg) {
+
+          for (const usage of pkgUsages) {
+            const pkg = pkgs.find((p: any) => p.id === usage.packageId);
+            if (!pkg) {
+              logger.error("Package not found:", usage.packageId as any);
+              continue;
+            }
+
             let validPackageUsage = true;
-            for (const item of pkgUsages.items || []) {
+            for (const item of usage.items || []) {
               const pkgItem = pkg.items?.find(
                 (i: any) =>
                   i.serviceId === item.serviceId &&
@@ -3778,25 +3783,25 @@ export async function registerRoutes(
                 break;
               }
             }
-            
-            if (validPackageUsage) {
-              for (const item of pkgUsages.items || []) {
-                const price = await storage.getItemServicePrice(
-                  item.clothingItemId,
-                  item.serviceId,
-                  user.id,
-                  user.branchId!,
-                );
-                await storage.updateCustomerPackageBalance(
-                  pkgUsages.packageId,
-                  -(price ?? 0) * item.quantity,
-                  item.serviceId,
-                  item.clothingItemId,
-                );
-              }
+
+            if (!validPackageUsage) {
+              continue;
             }
-          } else {
-            logger.error("Package not found:", pkgUsages.packageId as any);
+
+            for (const item of usage.items || []) {
+              const price = await storage.getItemServicePrice(
+                item.clothingItemId,
+                item.serviceId,
+                user.id,
+                user.branchId!,
+              );
+              await storage.updateCustomerPackageBalance(
+                usage.packageId,
+                -(price ?? 0) * item.quantity,
+                item.serviceId,
+                item.clothingItemId,
+              );
+            }
           }
         } catch (error) {
           logger.error("Error processing package usage:", error as any);
