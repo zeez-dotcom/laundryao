@@ -69,46 +69,58 @@ export function DeliveryOrders() {
   });
 
   useEffect(() => {
-    const ws = new WebSocket(`ws://${window.location.host}/ws/delivery-orders`);
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        queryClient.setQueryData<DeliveryOrder[]>(
-          ["/api/delivery-orders", statusFilter, driverFilter],
-          (old) => {
-            if (!old) return old;
-            return old.map((o) =>
-              o.id === data.orderId
-                ? {
-                    ...o,
-                    status: data.deliveryStatus ?? o.status,
-                    driverId: data.driverId ?? o.driverId,
-                  }
-                : o,
-            );
-          },
-        );
-      } catch {
-        queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
-      }
-    };
-    return () => ws.close();
+    let ws: WebSocket | null = null;
+    try {
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws/delivery-orders`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          queryClient.setQueryData<DeliveryOrder[]>(
+            ["/api/delivery-orders", statusFilter, driverFilter],
+            (old) => {
+              if (!old) return old;
+              return old.map((o) =>
+                o.id === data.orderId
+                  ? {
+                      ...o,
+                      status: data.deliveryStatus ?? o.status,
+                      driverId: data.driverId ?? o.driverId,
+                    }
+                  : o,
+              );
+            },
+          );
+        } catch {
+          queryClient.invalidateQueries({ queryKey: ["/api/delivery-orders"] });
+        }
+      };
+    } catch (err) {
+      console.error("WebSocket connection failed for delivery orders:", err);
+    }
+    return () => ws?.close();
   }, [queryClient, statusFilter, driverFilter]);
 
   useEffect(() => {
-    const ws = new WebSocket(`ws://${window.location.host}/ws/driver-location`);
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setDriverLocations((prev) => ({
-          ...prev,
-          [data.driverId]: { lat: data.lat, lng: data.lng },
-        }));
-      } catch {
-        /* ignore */
-      }
-    };
-    return () => ws.close();
+    let ws: WebSocket | null = null;
+    try {
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws/driver-location`);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          setDriverLocations((prev) => ({
+            ...prev,
+            [data.driverId]: { lat: data.lat, lng: data.lng },
+          }));
+        } catch {
+          /* ignore */
+        }
+      };
+    } catch (err) {
+      console.error("WebSocket connection failed for driver location:", err);
+    }
+    return () => ws?.close();
   }, []);
 
   const assignDriverMutation = useMutation({
