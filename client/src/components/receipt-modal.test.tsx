@@ -16,16 +16,17 @@ const authValue = {
   isDriver: false,
 };
 
-const transaction: any = {
-  id: "trx1",
-  items: [
-    {
-      service: "Wash (\u063a\u0633\u064a\u0644)",
-      name: "Shirt (\u0642\u0645\u064a\u0635)",
-      quantity: 2,
-      total: 3,
-    },
-  ],
+  const transaction: any = {
+    id: "trx1",
+    items: [
+      {
+        service: "Wash (\u063a\u0633\u064a\u0644)",
+        name: "Shirt (\u0642\u0645\u064a\u0635)",
+        quantity: 2,
+        price: 1.5,
+        total: 3,
+      },
+    ],
   createdAt: new Date().toISOString(),
   paymentMethod: "cash",
   subtotal: 3,
@@ -210,16 +211,17 @@ describe("ReceiptModal", () => {
     localStorage.clear();
     localStorage.setItem("taxRate", "0");
 
-    const transactionWithCredits: any = {
-      id: "trx3",
-      items: [
-        {
-          service: { id: "svc1", name: "Wash" },
-          clothingItem: { id: "item1", name: "Shirt" },
-          quantity: 2,
-          total: 4,
-        },
-      ],
+      const transactionWithCredits: any = {
+        id: "trx3",
+        items: [
+          {
+            service: { id: "svc1", name: "Wash" },
+            clothingItem: { id: "item1", name: "Shirt" },
+            quantity: 2,
+            price: 2,
+            total: 4,
+          },
+        ],
       createdAt: new Date().toISOString(),
       paymentMethod: "cash",
       subtotal: 4,

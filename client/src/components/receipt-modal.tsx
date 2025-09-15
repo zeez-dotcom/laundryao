@@ -433,12 +433,13 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   let subtotalBeforeCredits = 0;
   let totalCreditsValue = 0;
   const creditUsages = items.map((item) => {
-    const itemTotal = item.total || 0;
+    const itemPrice =
+      typeof item.price === 'number' ? item.price : parseFloat(item.price) || 0;
+    const itemQuantity = item.quantity || 0;
+    const itemTotal = itemPrice * itemQuantity;
     subtotalBeforeCredits += itemTotal;
     const usage = allocateCreditsForItem(item, creditPool);
-    const unitPrice =
-      usage.totalQuantity > 0 ? itemTotal / usage.totalQuantity : 0;
-    totalCreditsValue += usage.creditsUsed * unitPrice;
+    totalCreditsValue += usage.creditsUsed * itemPrice;
     return usage;
   });
   const netSubtotal = subtotalBeforeCredits - totalCreditsValue;
@@ -631,10 +632,14 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                 [clothing.ar, service.ar].filter(Boolean).join(" - ") +
                 ` × ${item.quantity}`;
               const creditUsage = creditUsages[index];
+              const totalPrice =
+                (typeof item.price === 'number'
+                  ? item.price
+                  : parseFloat(item.price) || 0) * (item.quantity || 0);
               return renderBilingualItemRow(
                 englishLine,
                 arabicLine,
-                item.total,
+                totalPrice,
                 index,
                 creditUsage
               );
