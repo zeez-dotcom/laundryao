@@ -182,41 +182,42 @@ function clearRateLimit(key: string): void {
  */
 function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
   if (!packageUsages || !packages.length) {
-    return packages;
+    return [];
   }
 
-  // Build a comprehensive usage map across all packages
-  const usedMap = new Map<string, number>();
-  
-  packageUsages.forEach((packageUsage: any) => {
-    packageUsage.items?.forEach((item: any) => {
-      const key = `${item.serviceId}:${item.clothingItemId}`;
-      const currentUsed = usedMap.get(key) || 0;
-      usedMap.set(key, currentUsed + item.quantity);
-    });
-  });
-
-  // Apply usage to each package based on packageId
   const packageUsageMap = new Map(packageUsages.map((pu: any) => [pu.packageId, pu]));
-  
-  return packages.map((pkg: any) => {
-    const packageUsage = packageUsageMap.get(pkg.id);
-    if (!packageUsage) {
-      return pkg; // No usage for this package
-    }
 
-    const packageUsedMap = new Map(
-      packageUsage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
-    );
+  return packages
+    .map((pkg: any) => {
+      const packageUsage = packageUsageMap.get(pkg.id);
+      if (!packageUsage) {
+        return null;
+      }
 
-    return {
-      ...pkg,
-      items: pkg.items?.map((item: any) => ({
-        ...item,
-        used: packageUsedMap.get(`${item.serviceId}:${item.clothingItemId}`) || 0,
-      })),
-    };
-  });
+      const packageUsedMap = new Map(
+        packageUsage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+      );
+
+      let pkgUsed = 0;
+      const items = pkg.items?.map((item: any) => {
+        const used =
+          packageUsedMap.get(`${item.serviceId}:${item.clothingItemId}`) || 0;
+        pkgUsed += used;
+        return { ...item, used };
+      });
+
+      if (pkgUsed <= 0) {
+        return null;
+      }
+
+      return {
+        ...pkg,
+        items,
+        used: pkgUsed,
+        expiresAt: pkg.expiresAt,
+      };
+    })
+    .filter(Boolean);
 }
 
 /**

@@ -77,35 +77,42 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
 
   // Build packages with usage fallback using order.packageUsage if needed
   const packages = useMemo(() => {
-    const pkgs = (receiptData && receiptData.packages) ? receiptData.packages : [];
-    const hasUsed = pkgs.some((p: any) => p.items?.some((i: any) => typeof i.used === 'number' && i.used > 0));
-    if (!hasUsed) {
-      const usageData = (receiptData as any)?.packageUsage || (receiptData as any)?.packageUsages;
-      if (usageData) {
-        const usageArray = Array.isArray(usageData) ? usageData : [usageData];
-        const usageMap = new Map(
-          usageArray.map((u: any) => [u.packageId, u])
-        );
-        return pkgs.map((pkg: any) => {
-          const usage = usageMap.get(pkg.id);
-          if (!usage) return pkg;
-          const usedMap = new Map(
-            usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
-          );
-          let pkgUsed = 0;
-          const items = pkg.items?.map((item: any) => {
-            const key = `${item.serviceId}:${item.clothingItemId}`;
-            const used = usedMap.get(key) || 0;
-            pkgUsed += used;
-            const balanceNum = typeof item.balance === 'string' ? parseFloat(item.balance) : item.balance || 0;
-            return { ...item, used, balance: balanceNum - used };
-          });
-          const balanceNum = typeof pkg.balance === 'string' ? parseFloat(pkg.balance) : pkg.balance || 0;
-          return { ...pkg, items, balance: balanceNum - pkgUsed };
-        });
-      }
+    const pkgs = receiptData?.packages || [];
+
+    if (pkgs.some((p: any) => typeof p.used === 'number')) {
+      return pkgs.filter((p: any) => p.used > 0);
     }
-    return pkgs;
+
+    const usageData = (receiptData as any)?.packageUsage || (receiptData as any)?.packageUsages;
+    if (!usageData) return [];
+
+    const usageArray = Array.isArray(usageData) ? usageData : [usageData];
+    const usageMap = new Map(usageArray.map((u: any) => [u.packageId, u]));
+
+    return pkgs
+      .map((pkg: any) => {
+        const usage = usageMap.get(pkg.id);
+        if (!usage) return null;
+        const usedMap = new Map(
+          usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+        );
+        let pkgUsed = 0;
+        const items = pkg.items?.map((item: any) => {
+          const key = `${item.serviceId}:${item.clothingItemId}`;
+          const used = usedMap.get(key) || 0;
+          pkgUsed += used;
+          const balanceNum =
+            typeof item.balance === 'string'
+              ? parseFloat(item.balance)
+              : item.balance || 0;
+          return { ...item, used, balance: balanceNum - used };
+        });
+        const balanceNum =
+          typeof pkg.balance === 'string' ? parseFloat(pkg.balance) : pkg.balance || 0;
+        if (pkgUsed <= 0) return null;
+        return { ...pkg, items, used: pkgUsed, balance: balanceNum - pkgUsed };
+      })
+      .filter(Boolean);
   }, [receiptData]);
 
   const renderBilingualRow = (
@@ -685,34 +692,45 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                         const key = `${item.serviceId || item.serviceName}-${item.clothingItemId || item.clothingItemName}`;
                         return (
                           <Fragment key={key}>
+                            <div className="flex">
+                              <p className="flex-1 font-medium">{label}</p>
+                              <p className="flex-1 text-right font-medium" dir="rtl">
+                                {label}
+                              </p>
+                            </div>
                             {renderBilingualRow(
-                              label,
-                              label,
-                              `Remaining: ${item.balance}/${item.totalCredits}`,
-                              "text-sm",
+                              "Used",
+                              "Used",
+                              item.used,
+                              "text-sm pl-2",
+                            )}
+                            {renderBilingualRow(
+                              "Remaining",
+                              "Remaining",
+                              `${item.balance}/${item.totalCredits}`,
+                              "text-sm pl-2",
                             )}
                           </Fragment>
                         );
                       })}
                     </div>
                   )}
-                  {pkg.startsAt &&
-                    renderBilingualRow(
-                      "Purchased on",
-                      "تاريخ الشراء",
-                      format(new Date(pkg.startsAt), "MMM dd, yyyy"),
-                    )}
+                  {renderBilingualRow(
+                    "Credits used",
+                    "Credits used",
+                    pkg.used,
+                  )}
+                  {renderBilingualRow(
+                    "Credits remaining",
+                    "Credits remaining",
+                    `${pkg.balance}/${pkg.totalCredits}`,
+                  )}
                   {pkg.expiresAt &&
                     renderBilingualRow(
                       "Expires on",
-                      "تاريخ الانتهاء",
+                      "Expires on",
                       format(new Date(pkg.expiresAt), "MMM dd, yyyy"),
                     )}
-                  {renderBilingualRow(
-                    "Credits remaining",
-                    "الرصيد المتبقي",
-                    `${pkg.balance}/${pkg.totalCredits}`,
-                  )}
                 </Fragment>
               ))}
             </div>

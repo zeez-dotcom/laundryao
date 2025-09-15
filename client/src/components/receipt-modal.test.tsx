@@ -155,18 +155,56 @@ describe("ReceiptModal", () => {
     expect(screen.getAllByText("رسالة_سفلية")).toHaveLength(1);
   });
 
-  it("shows package service balances", async () => {
+  it("displays package usage details", async () => {
     localStorage.clear();
-    renderReceipt();
+    const transactionWithUsage: any = {
+      id: "trx-usage",
+      items: [],
+      createdAt: new Date().toISOString(),
+      paymentMethod: "cash",
+      subtotal: 0,
+      tax: 0,
+      total: 0,
+      packages: [
+        {
+          id: "pkg1",
+          nameEn: "Wash Pack",
+          nameAr: "حزمة الغسيل",
+          balance: 3,
+          totalCredits: 5,
+          used: 2,
+          expiresAt: new Date("2024-12-31T00:00:00Z").toISOString(),
+          items: [
+            {
+              serviceId: "svc1",
+              serviceName: "Wash",
+              clothingItemName: "Shirt",
+              balance: 3,
+              totalCredits: 5,
+              used: 2,
+            },
+          ],
+        },
+      ],
+    };
+
+    render(
+      <AuthContext.Provider value={authValue}>
+        <TranslationProvider>
+          <ReceiptModal
+            transaction={transactionWithUsage}
+            customer={customer}
+            isOpen={true}
+            onClose={() => {}}
+          />
+        </TranslationProvider>
+      </AuthContext.Provider>
+    );
+
     expect(await screen.findByText(/Wash Pack/)).toBeTruthy();
-    expect((await screen.findAllByText(/Wash – Shirt/)).length).toBeGreaterThan(0);
-    const remainingRows = await screen.findAllByText(/Remaining: 3\/5/);
-    expect(remainingRows.length).toBeGreaterThan(0);
-    expect(
-      await screen.findByText(/Credits remaining: 3\/5/)
-    ).toBeTruthy();
-    expect(await screen.findByText(/Purchased on/)).toBeTruthy();
-    expect(await screen.findByText(/Expires on/)).toBeTruthy();
+    expect(await screen.findByText(/Credits used: 2/)).toBeTruthy();
+    expect(await screen.findByText(/Credits remaining: 3\/5/)).toBeTruthy();
+    expect((await screen.findAllByText(/Expires on/)).length).toBeGreaterThan(0);
   });
 
   it("applies package credits to totals", async () => {
@@ -195,6 +233,7 @@ describe("ReceiptModal", () => {
           nameAr: "حزمة الغسيل",
           balance: 4,
           totalCredits: 5,
+          used: 1,
           items: [
             {
               serviceId: "svc1",

@@ -108,24 +108,27 @@ function createOrdersListApp(storage: any) {
 
   function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
     if (!packageUsages || !packages.length) {
-      return packages;
+      return [];
     }
     const usageMap = new Map(packageUsages.map((pu: any) => [pu.packageId, pu]));
-    return packages.map((pkg: any) => {
-      const usage = usageMap.get(pkg.id);
-      if (!usage) return pkg;
-      const itemUsage = new Map(
-        usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
-      );
-      let pkgUsed = 0;
-      const items = pkg.items?.map((item: any) => {
-        const key = `${item.serviceId}:${item.clothingItemId}`;
-        const used = itemUsage.get(key) || 0;
-        pkgUsed += used;
-        return { ...item, used };
-      });
-      return { ...pkg, items, used: pkgUsed };
-    });
+    return packages
+      .map((pkg: any) => {
+        const usage = usageMap.get(pkg.id);
+        if (!usage) return null;
+        const itemUsage = new Map(
+          usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+        );
+        let pkgUsed = 0;
+        const items = pkg.items?.map((item: any) => {
+          const key = `${item.serviceId}:${item.clothingItemId}`;
+          const used = itemUsage.get(key) || 0;
+          pkgUsed += used;
+          return { ...item, used };
+        });
+        if (pkgUsed <= 0) return null;
+        return { ...pkg, items, used: pkgUsed, expiresAt: pkg.expiresAt };
+      })
+      .filter(Boolean);
   }
 
   app.get('/api/orders', requireAuth, async (_req, res) => {
