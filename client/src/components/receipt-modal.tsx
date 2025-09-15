@@ -533,17 +533,11 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                 tAr.staff,
                 sellerName
               )}
-            {customer &&
+            {(receiptData?.customerId || receiptData?.customerName) &&
               renderBilingualRow(
                 tEn.customer,
                 tAr.customer,
-                customer.name
-              )}
-            {receiptData.customerName &&
-              renderBilingualRow(
-                tEn.customer,
-                tAr.customer,
-                receiptData.customerName
+                receiptData?.customerName || customer?.name || receiptData?.customerId
               )}
           </div>
 
@@ -673,7 +667,7 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
             )}
           </div>
 
-          {customer && packages && packages.length > 0 && (
+          {packages.length > 0 && (
             <div className="border-t border-gray-400 pt-3 space-y-1">
               {packages.map((pkg: any) => (
                 <Fragment key={pkg.id}>
