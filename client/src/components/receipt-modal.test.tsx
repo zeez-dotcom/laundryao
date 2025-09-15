@@ -193,7 +193,6 @@ describe("ReceiptModal", () => {
         <TranslationProvider>
           <ReceiptModal
             transaction={transactionWithUsage}
-            customer={customer}
             isOpen={true}
             onClose={() => {}}
           />
