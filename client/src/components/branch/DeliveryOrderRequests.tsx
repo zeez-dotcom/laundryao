@@ -15,7 +15,7 @@ export function DeliveryOrderRequests() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: requests = [], isLoading } = useQuery<DeliveryRequest[]>({
+  const { data: requests = [], isLoading, error } = useQuery<DeliveryRequest[], Error>({
     queryKey: ["/api/delivery-order-requests"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/delivery-order-requests");
@@ -51,8 +51,30 @@ export function DeliveryOrderRequests() {
 
   const safeRequests: DeliveryRequest[] = Array.isArray(requests) ? requests : [];
 
+  const extractErrorMessage = (err: unknown): string => {
+    const raw = (err as any)?.message || "Failed to load";
+    const idx = raw.indexOf(":");
+    if (idx !== -1) {
+      const after = raw.slice(idx + 1).trim();
+      try {
+        const parsed = JSON.parse(after);
+        if (parsed?.message) return parsed.message as string;
+      } catch {
+        // ignore
+      }
+      return after || raw;
+    }
+    return raw;
+  };
+  const errorText = error ? extractErrorMessage(error) : null;
+
   return (
     <div className="p-4 space-y-4 overflow-auto">
+      {errorText && (
+        <div className="rounded-md border border-red-300 bg-red-50 text-red-800 p-2 text-sm">
+          {errorText}
+        </div>
+      )}
       {safeRequests.map((request) => (
         <Card key={request.id}>
           <CardHeader>

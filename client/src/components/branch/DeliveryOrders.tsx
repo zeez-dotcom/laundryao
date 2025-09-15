@@ -54,7 +54,7 @@ export function DeliveryOrders() {
     },
   });
 
-  const { data: orders = [], isLoading } = useQuery<DeliveryOrder[]>({
+  const { data: orders = [], isLoading, error } = useQuery<DeliveryOrder[], Error>({
     queryKey: ["/api/delivery-orders", statusFilter, driverFilter],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -168,6 +168,24 @@ export function DeliveryOrders() {
   const safeDrivers: Driver[] = Array.isArray(drivers) ? drivers : [];
   const safeOrders: DeliveryOrder[] = Array.isArray(orders) ? orders : [];
 
+  const extractErrorMessage = (err: unknown): string => {
+    const raw = (err as any)?.message || "Failed to load";
+    // Try to parse JSON portion after status code
+    const idx = raw.indexOf(":");
+    if (idx !== -1) {
+      const after = raw.slice(idx + 1).trim();
+      try {
+        const parsed = JSON.parse(after);
+        if (parsed?.message) return parsed.message as string;
+      } catch {
+        // fall through
+      }
+      return after || raw;
+    }
+    return raw;
+  };
+  const errorText = error ? extractErrorMessage(error) : null;
+
   return (
     <div className="p-4 space-y-4 overflow-auto">
       <div className="flex gap-4">
@@ -199,6 +217,12 @@ export function DeliveryOrders() {
           </SelectContent>
         </Select>
       </div>
+
+      {errorText && (
+        <div className="rounded-md border border-red-300 bg-red-50 text-red-800 p-2 text-sm">
+          {errorText}
+        </div>
+      )}
 
       {isLoading ? (
         <div>{t.loading}</div>
