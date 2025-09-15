@@ -93,6 +93,57 @@ function createCustomerOrdersApp(storage: any) {
   return app;
 }
 
+function createOrdersListApp(storage: any) {
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res, next) => {
+    req.isAuthenticated = () => true;
+    req.user = { id: 'u1', branchId: 'b1' };
+    next();
+  });
+
+  function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
+    if (!packageUsages || !packages.length) {
+      return packages;
+    }
+    const usageMap = new Map(packageUsages.map((pu: any) => [pu.packageId, pu]));
+    return packages.map((pkg: any) => {
+      const usage = usageMap.get(pkg.id);
+      if (!usage) return pkg;
+      const itemUsage = new Map(
+        usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+      );
+      let pkgUsed = 0;
+      const items = pkg.items?.map((item: any) => {
+        const key = `${item.serviceId}:${item.clothingItemId}`;
+        const used = itemUsage.get(key) || 0;
+        pkgUsed += used;
+        return { ...item, used };
+      });
+      return { ...pkg, items, used: pkgUsed };
+    });
+  }
+
+  app.get('/api/orders', requireAuth, async (_req, res) => {
+    const orders = await storage.getOrders();
+    const enriched = await Promise.all(
+      orders.map(async (order: any) => {
+        let packages: any[] = [];
+        if (order.customerId) {
+          packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+          if (order.packageUsages) {
+            packages = applyPackageUsageModification(packages, order.packageUsages);
+          }
+        }
+        return { ...order, packages };
+      })
+    );
+    res.json(enriched);
+  });
+
+  return app;
+}
+
 test('accepts ISO string dates for pickup fields', async () => {
   let received: any = null;
   const storage = {
@@ -374,5 +425,32 @@ test('rejects package usage when service-product pair is invalid', async () => {
       packageUsage: { packageId: 'cp1', items: [{ serviceId: 's1', clothingItemId: 'c2', quantity: 1 }] },
     });
   assert.equal(res.status, 400);
+});
+
+test('GET /api/orders returns packages with used counts', async () => {
+  const storage: any = {
+    getOrders: async () => [
+      {
+        id: 'o1',
+        customerId: 'cust1',
+        packageUsages: [
+          {
+            packageId: 'cp1',
+            items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 2 }],
+          },
+        ],
+      },
+    ],
+    getCustomerPackagesWithUsage: async () => [
+      {
+        id: 'cp1',
+        items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 5, totalCredits: 5 }],
+      },
+    ],
+  };
+  const app = createOrdersListApp(storage);
+  const res = await request(app).get('/api/orders');
+  assert.equal(res.status, 200);
+  assert.equal(res.body[0].packages[0].items[0].used, 2);
 });
 
