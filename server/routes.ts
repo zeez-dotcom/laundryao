@@ -3489,7 +3489,31 @@ export async function registerRoutes(
           }
         }));
       }
-      
+      // Attach customer packages with usage information for each order
+      orders = await Promise.all(
+        orders.map(async (order) => {
+          let packages: any[] = [];
+          if (order.customerId) {
+            try {
+              packages = await storage.getCustomerPackagesWithUsage(order.customerId);
+              // Use stored packageUsages for accurate per-order credit display
+              if (order.packageUsages) {
+                packages = applyPackageUsageModification(
+                  packages,
+                  Array.isArray(order.packageUsages) ? order.packageUsages : [],
+                );
+              }
+            } catch (error) {
+              logger.error(
+                { err: error, orderId: order.id, customerId: order.customerId },
+                "Failed to fetch customer packages",
+              );
+            }
+          }
+          return { ...order, packages };
+        }),
+      );
+
       res.json(orders);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch orders" });

@@ -10,7 +10,7 @@ import {
 import { Transaction, Customer } from "@shared/schema";
 import { useTranslation, loadLocale, type Translations } from "@/lib/i18n";
 import { useCurrency } from "@/lib/currency";
-import { ReactNode, useEffect, useState, Fragment } from "react";
+import { ReactNode, useEffect, useState, Fragment, useMemo } from "react";
 import logoImage from "@/assets/logo.png";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -74,6 +74,39 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   const { branch } = useAuthContext();
   // Company logo - branch logo if available, else default asset
   const logoUrl = branch?.logoUrl || logoImage;
+
+  // Build packages with usage fallback using order.packageUsage if needed
+  const packages = useMemo(() => {
+    const pkgs = (receiptData && receiptData.packages) ? receiptData.packages : [];
+    const hasUsed = pkgs.some((p: any) => p.items?.some((i: any) => typeof i.used === 'number' && i.used > 0));
+    if (!hasUsed) {
+      const usageData = (receiptData as any)?.packageUsage || (receiptData as any)?.packageUsages;
+      if (usageData) {
+        const usageArray = Array.isArray(usageData) ? usageData : [usageData];
+        const usageMap = new Map(
+          usageArray.map((u: any) => [u.packageId, u])
+        );
+        return pkgs.map((pkg: any) => {
+          const usage = usageMap.get(pkg.id);
+          if (!usage) return pkg;
+          const usedMap = new Map(
+            usage.items.map((i: any) => [`${i.serviceId}:${i.clothingItemId}`, i.quantity])
+          );
+          let pkgUsed = 0;
+          const items = pkg.items?.map((item: any) => {
+            const key = `${item.serviceId}:${item.clothingItemId}`;
+            const used = usedMap.get(key) || 0;
+            pkgUsed += used;
+            const balanceNum = typeof item.balance === 'string' ? parseFloat(item.balance) : item.balance || 0;
+            return { ...item, used, balance: balanceNum - used };
+          });
+          const balanceNum = typeof pkg.balance === 'string' ? parseFloat(pkg.balance) : pkg.balance || 0;
+          return { ...pkg, items, balance: balanceNum - pkgUsed };
+        });
+      }
+    }
+    return pkgs;
+  }, [receiptData]);
 
   const renderBilingualRow = (
     enLabel: string,
@@ -189,11 +222,11 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   const createCreditPool = () => {
     const creditPool = new Map<string, number>();
     
-    if (!receiptData.packages || receiptData.packages.length === 0) {
+    if (!packages || packages.length === 0) {
       return creditPool;
     }
-    
-    receiptData.packages.forEach((pkg: any) => {
+
+    packages.forEach((pkg: any) => {
       if (pkg.items) {
         pkg.items.forEach((pkgItem: any) => {
           if (pkgItem.serviceId && pkgItem.clothingItemId && pkgItem.used && pkgItem.used > 0) {
@@ -633,9 +666,9 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
             )}
           </div>
 
-          {customer && receiptData.packages && receiptData.packages.length > 0 && (
+          {customer && packages && packages.length > 0 && (
             <div className="border-t border-gray-400 pt-3 space-y-1">
-              {receiptData.packages.map((pkg: any) => (
+              {packages.map((pkg: any) => (
                 <Fragment key={pkg.id}>
                   <div className="flex font-semibold">
                     <p className="flex-1">{pkg.nameEn}</p>
