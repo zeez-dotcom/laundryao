@@ -1,8 +1,23 @@
-CREATE TYPE "status" AS ENUM ('received','start_processing','processing','ready','handed_over','completed');
+DO $$
+BEGIN
+    CREATE TYPE "status" AS ENUM ('received','start_processing','processing','ready','handed_over','completed');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "promised_ready_option" AS ENUM ('today','tomorrow','day_after_tomorrow');
+DO $$
+BEGIN
+    CREATE TYPE "promised_ready_option" AS ENUM ('today','tomorrow','day_after_tomorrow');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "item_type" AS ENUM ('everyday','premium');
+DO $$
+BEGIN
+    CREATE TYPE "item_type" AS ENUM ('everyday','premium');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
 CREATE TABLE "branch_delivery_areas" (
         "branch_id" varchar(255) NOT NULL,

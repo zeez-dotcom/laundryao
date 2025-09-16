@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Store, AlertCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { LanguageSelector } from "@/components/language-selector";
 
 interface QRCodeData {
   qrCode: {
@@ -33,6 +34,8 @@ function CustomerAuthContent() {
   const [location, setLocation] = useLocation();
   const searchParams = new URLSearchParams(useSearch());
   const qrCode = searchParams.get("qr");
+  const branchCodeParam = searchParams.get("branchCode");
+  const next = searchParams.get("next");
   const [authView, setAuthView] = useState<AuthView>("login");
   const [resetPhoneNumber, setResetPhoneNumber] = useState("");
   const { customer, isLoading: isAuthLoading, isAuthenticated } = useCustomerAuth();
@@ -43,37 +46,70 @@ function CustomerAuthContent() {
     isLoading: isQRLoading,
     error: qrError,
   } = useQuery<QRCodeData>({
-    queryKey: ["/api/qr", qrCode],
+    queryKey: ["/api/qr-or-branch", qrCode || branchCodeParam],
     queryFn: async () => {
-      if (!qrCode) throw new Error("No QR code provided");
-      const response = await apiRequest("GET", `/api/qr/${qrCode}`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Invalid QR code");
+      if (qrCode) {
+        const response = await apiRequest("GET", `/api/qr/${qrCode}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || "Invalid QR code");
+        }
+        return await response.json();
       }
-      return await response.json();
+      if (branchCodeParam) {
+        const response = await apiRequest("GET", `/api/branches/${branchCodeParam}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || "Invalid branch code");
+        }
+        const branch = await response.json();
+        // Fabricate minimal qrCode info to satisfy existing UI typings
+        return {
+          qrCode: {
+            id: "",
+            branchId: branch.id,
+            qrCode: "",
+            isActive: true,
+            createdAt: new Date().toISOString(),
+          },
+          branch,
+        } as QRCodeData;
+      }
+      throw new Error("No QR code or branch code provided");
     },
-    enabled: !!qrCode,
+    enabled: !!qrCode || !!branchCodeParam,
     retry: 1,
   });
 
   // Redirect to dashboard if already authenticated
   useEffect(() => {
     if (isAuthenticated && customer && qrData?.branch) {
-      // Redirect to customer dashboard
-      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      // Redirect based on intent
+      if (next === "ordering") {
+        setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      } else {
+        setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      }
     }
-  }, [isAuthenticated, customer, qrData, setLocation]);
+  }, [isAuthenticated, customer, qrData, setLocation, next]);
 
   const handleLoginSuccess = (customer: any) => {
     if (qrData?.branch) {
-      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      if (next === "ordering") {
+        setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      } else {
+        setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      }
     }
   };
 
   const handleRegistrationSuccess = (customer: any) => {
     if (qrData?.branch) {
-      setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      if (next === "ordering") {
+        setLocation(`/customer-ordering?branchCode=${qrData.branch.code}&customerId=${customer.id}`);
+      } else {
+        setLocation(`/customer-dashboard?branchCode=${qrData.branch.code}`);
+      }
     }
   };
 
@@ -106,7 +142,7 @@ function CustomerAuthContent() {
   }
 
   // Show error if QR code is invalid
-  if (!qrCode || qrError || !qrData) {
+  if ((!qrCode && !branchCodeParam) || qrError || !qrData) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
@@ -129,7 +165,7 @@ function CustomerAuthContent() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Branch Header */}
-      <div className="bg-white dark:bg-gray-800 shadow-sm border-b">
+      <div className="bg-white dark:bg-gray-800 shadow-sm border-b relative">
         <div className="max-w-md mx-auto p-4">
           <div className="flex items-center space-x-3">
             <div className="bg-blue-100 dark:bg-blue-900/20 p-2 rounded-lg">
@@ -142,6 +178,9 @@ function CustomerAuthContent() {
               </p>
             </div>
           </div>
+        </div>
+        <div className="absolute top-2 right-2">
+          <LanguageSelector />
         </div>
       </div>
 

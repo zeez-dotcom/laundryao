@@ -38,6 +38,7 @@ import {
   type ClothingItem,
   orders,
   deliveryOrders,
+  branchAds,
   type DeliveryStatus,
 } from "@shared/schema";
 import { loginSchema } from "@shared/schemas";
@@ -73,6 +74,7 @@ import { NotificationService } from "./services/notification";
 import { registerHealthRoutes } from "./routes/health";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
+import ExcelJS from "exceljs";
 import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
@@ -1098,7 +1100,7 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Access denied" });
       }
 
-      const { status, branchId } = req.query as Record<string, string>;
+      const { status, branchId, driverId } = req.query as Record<string, string>;
       let targetBranchId: string | undefined = branchId;
       if (user.role !== "super_admin") {
         if (branchId && branchId !== user.branchId) {
@@ -1107,10 +1109,44 @@ export async function registerRoutes(
         targetBranchId = user.branchId || undefined;
       }
 
-      const orders = await storage.getDeliveryOrders(targetBranchId, status as DeliveryStatus | undefined);
+      // If a driverId is provided, filter by driver
+      let orders;
+      if (driverId) {
+        orders = await storage.getDeliveryOrdersByDriver(driverId, targetBranchId);
+      } else {
+        orders = await storage.getDeliveryOrders(targetBranchId, status as DeliveryStatus | undefined);
+      }
       res.json(orders);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch delivery orders" });
+    }
+  });
+
+  // List drivers for the current branch (or all for super admins)
+  app.get("/api/drivers", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!["admin", "super_admin"].includes(user.role)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const where = user.role === "super_admin"
+        ? and(eq(users.role, "driver"))
+        : and(eq(users.role, "driver"), eq(users.branchId, user.branchId as any));
+
+      const rows = await db
+        .select({ id: users.id, firstName: users.firstName, lastName: users.lastName, username: users.username })
+        .from(users)
+        .where(where);
+
+      const drivers = rows.map((u) => ({
+        id: u.id,
+        name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username,
+      }));
+
+      res.json(drivers);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch drivers" });
     }
   });
 
@@ -1705,9 +1741,9 @@ export async function registerRoutes(
       }
       // Only expose public fields needed by client
       const branchData = branch as any;
-      const { name, tagline, logoUrl, serviceCityIds } = branchData;
+      const { name, nameAr, tagline, taglineAr, logoUrl, whatsappQrUrl, serviceCityIds } = branchData;
       const deliveryEnabled = branchData.deliveryEnabled || false;
-      res.json({ name, tagline, logoUrl, serviceCityIds, deliveryEnabled });
+      res.json({ name, nameAr, tagline, taglineAr, logoUrl, whatsappQrUrl, serviceCityIds, deliveryEnabled });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch branch" });
     }
@@ -2218,6 +2254,34 @@ export async function registerRoutes(
     },
   );
 
+  // Upload WhatsApp QR code image for branch
+  app.post(
+    "/api/branches/:id/whatsapp-qr",
+    requireAdminOrSuperAdmin,
+    uploadLogo.single("whatsappQr"),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const user = req.user as User;
+        if (user.role !== "super_admin" && user.branchId !== id) {
+          return res.status(403).json({ message: "Cannot modify other branches" });
+        }
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        const whatsappQrUrl = `/uploads/${req.file.filename}`;
+        const branch = await storage.updateBranch(id, { whatsappQrUrl } as any);
+        if (!branch) {
+          return res.status(404).json({ message: "Branch not found" });
+        }
+        res.json({ whatsappQrUrl });
+      } catch (error) {
+        logger.error("Error uploading WhatsApp QR:", error as any);
+        res.status(500).json({ message: "Failed to upload WhatsApp QR" });
+      }
+    },
+  );
+
   app.delete("/api/branches/:id", requireSuperAdmin, async (req, res) => {
     try {
       const deleted = await storage.deleteBranch(req.params.id);
@@ -2643,6 +2707,8 @@ export async function registerRoutes(
         try {
           const categoryId = req.query.categoryId as string;
           const search = req.query.search as string;
+          const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+          const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
           const user = req.user as UserWithBranch;
           const userId = user.id;
 
@@ -2669,8 +2735,10 @@ export async function registerRoutes(
               item.descriptionAr?.toLowerCase?.().includes(term),
             );
           }
-
-          res.json(items);
+          const total = items.length;
+          const sliced = typeof offset === 'number' && typeof limit === 'number' ? items.slice(offset, offset + limit) : items;
+          res.setHeader('X-Total-Count', String(total));
+          res.json(sliced);
         } catch (error) {
           logger.error("Error fetching clothing items:", error as any);
           res.status(500).json({ message: "Failed to fetch clothing items" });
@@ -2699,7 +2767,7 @@ export async function registerRoutes(
       if (!category) {
         return res.status(400).json({ message: "Invalid category" });
       }
-      if (category.type !== 'item') {
+      if (category.type !== 'clothing') {
         return res.status(400).json({ message: "Invalid category type" });
       }
       const newItem = await storage.createClothingItem({ ...validatedData, userId });
@@ -2816,6 +2884,8 @@ export async function registerRoutes(
     try {
       const categoryId = req.query.categoryId as string;
       const search = req.query.search as string;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+      const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
       const userId = (req.user as UserWithBranch).id;
 
       let services = categoryId
@@ -2832,7 +2902,10 @@ export async function registerRoutes(
         );
       }
 
-      res.json(services);
+      const total = services.length;
+      const sliced = typeof offset === 'number' && typeof limit === 'number' ? services.slice(offset, offset + limit) : services;
+      res.setHeader('X-Total-Count', String(total));
+      res.json(sliced);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch laundry services" });
     }
@@ -4270,6 +4343,191 @@ export async function registerRoutes(
     }
   });
 
+  // Expenses management (Admin/Super Admin)
+  app.get("/api/expenses", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { start, end, branchId, q, limit, offset, page, pageSize } = req.query as any;
+      const startDate = start ? new Date(start) : undefined;
+      const endDate = end ? new Date(end) : undefined;
+      const effectiveBranchId = user.role === "super_admin" ? (branchId as string | undefined) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      const ps = pageSize ? parseInt(pageSize, 10) : (limit ? parseInt(limit, 10) : undefined);
+      const pg = page ? parseInt(page, 10) : undefined;
+      const off = typeof pg === 'number' && typeof ps === 'number' ? (pg - 1) * ps : (offset ? parseInt(offset, 10) : undefined);
+      const search = q as string | undefined;
+      const [items, all] = await Promise.all([
+        storage.getExpenses(effectiveBranchId, startDate, endDate, search, ps, off),
+        storage.getExpenses(effectiveBranchId, startDate, endDate, search),
+      ]);
+      res.setHeader('X-Total-Count', String(all.length));
+      res.json(items);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch expenses" });
+    }
+  });
+
+  app.post("/api/expenses", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const body = req.body as any;
+      const effectiveBranchId = user.role === "super_admin" ? (body.branchId || user.branchId) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      const created = await storage.createExpense(body, user.id, effectiveBranchId);
+      res.status(201).json(created);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to create expense" });
+    }
+  });
+
+  app.put("/api/expenses/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { id } = req.params;
+      const effectiveBranchId = user.role === "super_admin" ? (req.body.branchId || user.branchId) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      const updated = await storage.updateExpense(id, req.body, effectiveBranchId);
+      if (!updated) return res.status(404).json({ message: "Expense not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update expense" });
+    }
+  });
+
+  app.delete("/api/expenses/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { id } = req.params;
+      const effectiveBranchId = user.role === "super_admin" ? (req.query.branchId as string | undefined) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      const ok = await storage.deleteExpense(id, effectiveBranchId);
+      if (!ok) return res.status(404).json({ message: "Expense not found" });
+      res.json({ message: "Expense deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete expense" });
+    }
+  });
+
+  // Bulk delete expenses
+  app.delete("/api/expenses", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { ids } = req.body as { ids?: string[] };
+      if (!ids || ids.length === 0) return res.status(400).json({ message: "No ids provided" });
+      const effectiveBranchId = user.role === "super_admin" ? (req.query.branchId as string | undefined) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      let deleted = 0;
+      for (const id of ids) {
+        const ok = await storage.deleteExpense(id, effectiveBranchId);
+        if (ok) deleted++;
+      }
+      res.json({ message: `Deleted ${deleted} expenses` });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete expenses" });
+    }
+  });
+
+  // Export expenses as CSV (server-side)
+  app.get("/api/expenses/export", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { start, end, branchId, q } = req.query as any;
+      const startDate = start ? new Date(start) : undefined;
+      const endDate = end ? new Date(end) : undefined;
+      const effectiveBranchId = user.role === "super_admin" ? (branchId as string | undefined) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+
+      const items = await storage.getExpenses(effectiveBranchId, startDate, endDate, q as string | undefined);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="expenses_${start || 'all'}_${end || 'all'}.csv"`);
+      const header = ["category", "amount", "incurredAt", "notes"];
+      res.write(header.join(",") + "\n");
+      for (const r of items) {
+        const row = [
+          JSON.stringify((r as any).category ?? ""),
+          JSON.stringify((r as any).amount ?? ""),
+          JSON.stringify((r as any).incurredAt ? new Date((r as any).incurredAt).toISOString().slice(0,10) : ""),
+          JSON.stringify((r as any).notes ?? ""),
+        ];
+        res.write(row.join(",") + "\n");
+      }
+      res.end();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export expenses" });
+    }
+  });
+
+  // Export expenses as XLSX (server-side)
+  app.get("/api/expenses/export.xlsx", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { start, end, branchId, q } = req.query as any;
+      const startDate = start ? new Date(start) : undefined;
+      const endDate = end ? new Date(end) : undefined;
+      const effectiveBranchId = user.role === "super_admin" ? (branchId as string | undefined) : user.branchId;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+
+      const items = await storage.getExpenses(effectiveBranchId, startDate, endDate, q as string | undefined);
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Expenses");
+      ws.columns = [
+        { header: "Category", key: "category", width: 30 },
+        { header: "Amount", key: "amount", width: 15 },
+        { header: "Date", key: "incurredAt", width: 15 },
+        { header: "Notes", key: "notes", width: 50 },
+      ];
+      ws.addRows(
+        items.map((r: any) => ({
+          category: r.category || "",
+          amount: Number(r.amount || 0),
+          incurredAt: r.incurredAt ? new Date(r.incurredAt).toISOString().slice(0, 10) : "",
+          notes: r.notes || "",
+        }))
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="expenses_${start || 'all'}_${end || 'all'}.xlsx"`
+      );
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      res.status(500).json({ message: "Failed to export expenses (xlsx)" });
+    }
+  });
+
+  app.get("/api/reports/expenses", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const range = (req.query.range as string) || "monthly";
+      const effectiveBranchId = user.role === "super_admin" ? (req.query.branchId as string | undefined) : user.branchId || undefined;
+      if (!effectiveBranchId) return res.status(400).json({ message: "Branch is required" });
+      const customization = await storage.getBranchCustomization(effectiveBranchId);
+      if (!customization?.expensesEnabled) return res.status(403).json({ message: "Expenses feature is disabled for this branch" });
+      const summary = await storage.getExpenseSummary(range, effectiveBranchId);
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch expense reports" });
+    }
+  });
+
   app.get("/api/order-logs", requireAdminOrSuperAdmin, async (req, res) => {
     try {
       const status = req.query.status as string | undefined;
@@ -4316,6 +4574,174 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error updating delivery settings:", error as any);
       res.status(500).json({ message: "Failed to update delivery settings" });
+    }
+  });
+
+  // Customer Dashboard Settings routes
+  app.get("/api/branches/:id/customer-dashboard-settings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch settings" });
+      }
+      const settings = await storage.getCustomerDashboardSettings(id);
+      res.json(settings || {});
+    } catch (error) {
+      logger.error("Error fetching customer dashboard settings:", error as any);
+      res.status(500).json({ message: "Failed to fetch customer dashboard settings" });
+    }
+  });
+
+  app.put("/api/branches/:id/customer-dashboard-settings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch settings" });
+      }
+      const settings = await storage.updateCustomerDashboardSettings(id, req.body);
+      res.json(settings);
+    } catch (error) {
+      logger.error("Error updating customer dashboard settings:", error as any);
+      res.status(500).json({ message: "Failed to update customer dashboard settings" });
+    }
+  });
+
+  // Ads management (admin)
+  app.get("/api/branches/:id/ads", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot access other branch ads" });
+      }
+      const ads = await storage.getBranchAds(id);
+      res.json(ads);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ads" });
+    }
+  });
+
+  app.post("/api/branches/:id/ads", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as UserWithBranch;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branch ads" });
+      }
+      const ad = await storage.createBranchAd({ ...(req.body || {}), branchId: id });
+      res.status(201).json(ad);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to create ad" });
+    }
+  });
+
+  app.put("/api/ads/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const ad = await storage.updateBranchAd(req.params.id, req.body || {});
+      if (!ad) return res.status(404).json({ message: "Ad not found" });
+      res.json(ad);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to update ad" });
+    }
+  });
+
+  app.delete("/api/ads/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const ok = await storage.deleteBranchAd(req.params.id, user.role === "super_admin" ? undefined : user.branchId || undefined);
+      if (!ok) return res.status(404).json({ message: "Ad not found" });
+      res.json({ message: "Ad deleted" });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to delete ad" });
+    }
+  });
+
+  // Upload ad image for a branch
+  app.post(
+    "/api/branches/:id/ads/upload-image",
+    requireAdminOrSuperAdmin,
+    uploadLogo.single("image"),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const user = req.user as User;
+        if (user.role !== "super_admin" && user.branchId !== id) {
+          return res.status(403).json({ message: "Cannot modify other branch ads" });
+        }
+        if (!req.file) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        const imageUrl = `/uploads/${req.file.filename}`;
+        res.json({ imageUrl });
+      } catch (error) {
+        logger.error("Error uploading ad image:", error as any);
+        res.status(500).json({ message: "Failed to upload ad image" });
+      }
+    }
+  );
+
+  // Customer: fetch active ads for their branch
+  app.get("/customer/ads", async (req, res) => {
+    try {
+      const customerId = (req.session as any).customerId as string | undefined;
+      if (!customerId) return res.status(401).json({ message: "Not authenticated" });
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const ads = await storage.getActiveAds(customer.branchId);
+      res.json(ads);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch ads" });
+    }
+  });
+
+  // Customer: ad analytics endpoints
+  app.post("/customer/ads/:id/impression", async (req, res) => {
+    try {
+      const customerId = (req.session as any).customerId as string | undefined;
+      const adId = req.params.id;
+      const ad = await db.select().from(branchAds).where(eq(branchAds.id, adId)).then(r => r[0]);
+      if (!ad) return res.status(404).json({ message: "Ad not found" });
+      await storage.recordAdImpression({
+        adId,
+        branchId: ad.branchId,
+        customerId: customerId || null,
+        cityId: req.body?.cityId || null,
+        governorateId: req.body?.governorateId || null,
+        lat: req.body?.lat || null,
+        lng: req.body?.lng || null,
+        language: req.body?.language || req.headers['accept-language'] || null,
+        userAgent: req.headers['user-agent'] || null,
+        referrer: req.headers['referer'] || null,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to record impression" });
+    }
+  });
+
+  app.post("/customer/ads/:id/click", async (req, res) => {
+    try {
+      const customerId = (req.session as any).customerId as string | undefined;
+      const adId = req.params.id;
+      const ad = await db.select().from(branchAds).where(eq(branchAds.id, adId)).then(r => r[0]);
+      if (!ad) return res.status(404).json({ message: "Ad not found" });
+      await storage.recordAdClick({
+        adId,
+        branchId: ad.branchId,
+        customerId: customerId || null,
+        cityId: req.body?.cityId || null,
+        governorateId: req.body?.governorateId || null,
+        lat: req.body?.lat || null,
+        lng: req.body?.lng || null,
+        language: req.body?.language || req.headers['accept-language'] || null,
+        userAgent: req.headers['user-agent'] || null,
+        referrer: req.headers['referer'] || null,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to record click" });
     }
   });
 

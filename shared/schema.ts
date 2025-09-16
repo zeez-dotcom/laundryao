@@ -152,6 +152,8 @@ export const categories = pgTable("categories", {
   type: text("type").notNull(), // 'clothing' or 'service'
   description: text("description"),
   descriptionAr: text("description_ar"),
+  color: text("color"),
+  icon: text("icon"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -167,11 +169,16 @@ export const categories = pgTable("categories", {
 export const branches = pgTable("branches", {
   id: uuid("id").primaryKey().default(uuidFn),
   name: text("name").notNull(),
+  // Arabic/localized counterparts for branch display fields
+  nameAr: text("name_ar"),
   address: text("address"),
+  addressAr: text("address_ar"),
   phone: text("phone"),
   addressInputMode: text("address_input_mode").notNull().default("mapbox"),
   logoUrl: text("logo_url"),
+  whatsappQrUrl: text("whatsapp_qr_url"),
   tagline: text("tagline"),
+  taglineAr: text("tagline_ar"),
   code: varchar("code", { length: 3 }).unique().notNull(),
   nextOrderNumber: integer("next_order_number").notNull().default(1),
   deliveryEnabled: boolean("delivery_enabled").notNull().default(true),
@@ -334,6 +341,18 @@ export const payments = pgTable("payments", {
   paymentMethod: text("payment_method").notNull(),
   notes: text("notes"),
   receivedBy: varchar("received_by", { length: 255 }).notNull(),
+  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// Business expenses for profit/loss reporting
+export const expenses = pgTable("expenses", {
+  id: uuid("id").primaryKey().default(uuidFn),
+  branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  category: text("category").notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  notes: text("notes"),
+  incurredAt: timestamptz("incurred_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  createdBy: uuid("created_by").references(() => users.id).notNull(),
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
@@ -770,7 +789,12 @@ export const insertBranchSchema = createInsertSchema(branches).omit({
 }).extend({
   code: z.string().regex(/^[A-Za-z]{2,3}$/, "Code must be 2–3 letters"),
   logoUrl: z.string().url().optional(),
+  whatsappQrUrl: z.string().url().optional(),
   tagline: z.string().optional(),
+  // Optional Arabic fields
+  nameAr: z.string().optional(),
+  addressAr: z.string().optional(),
+  taglineAr: z.string().optional(),
   addressInputMode: z.enum(["mapbox", "manual"]).optional(),
 });
 
@@ -815,6 +839,14 @@ export const insertDeliveryOrderSchema = createInsertSchema(deliveryOrders).omit
   id: true,
   createdAt: true,
   updatedAt: true,
+});
+
+// Expenses insert schema
+export const insertExpenseSchema = createInsertSchema(expenses).omit({
+  id: true,
+  createdAt: true,
+  createdBy: true,
+  branchId: true,
 });
 
 export type User = typeof users.$inferSelect;
@@ -880,6 +912,8 @@ export type OrderPrint = typeof orderPrints.$inferSelect;
 export type InsertOrderPrint = z.infer<typeof insertOrderPrintSchema>;
 export type Payment = typeof payments.$inferSelect;
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
+export type Expense = typeof expenses.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 export type LoyaltyHistory = typeof loyaltyHistory.$inferSelect;
@@ -970,12 +1004,22 @@ export const branchCustomizationTable = pgTable("branch_customizations", {
   primaryColor: text("primary_color").default("#1976d2"),
   secondaryColor: text("secondary_color").default("#dc004e"),
   headerText: text("header_text").default("Welcome to Our Laundry Service"),
+  headerTextAr: text("header_text_ar"),
   subHeaderText: text("sub_header_text"),
+  subHeaderTextAr: text("sub_header_text_ar"),
   footerText: text("footer_text").default("Thank you for choosing our service"),
+  footerTextAr: text("footer_text_ar"),
   contactPhone: text("contact_phone"),
   contactEmail: text("contact_email"),
   address: text("address"),
+  addressAr: text("address_ar"),
   returnPolicy: text("return_policy"),
+  returnPolicyAr: text("return_policy_ar"),
+  deliveryPolicy: text("delivery_policy"),
+  deliveryPolicyAr: text("delivery_policy_ar"),
+  // Customizable compensation/notice line shown on receipt footer
+  compensationNoticeEn: text("compensation_notice_en"),
+  compensationNoticeAr: text("compensation_notice_ar"),
   socialMediaLinks: jsonb("social_media_links").$type<{
     facebook?: string;
     instagram?: string;
@@ -985,6 +1029,8 @@ export const branchCustomizationTable = pgTable("branch_customizations", {
   customCss: text("custom_css"),
   enableGuestCheckout: boolean("enable_guest_checkout").default(true),
   requireAddressForGuests: boolean("require_address_for_guests").default(true),
+  // Feature flags
+  expensesEnabled: boolean("expenses_enabled").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -1021,3 +1067,85 @@ export type DeliveryStatus = typeof deliveryStatusEnum[number];
 export type CityType = typeof cityTypeEnum[number];
 export type DeliveryMode = typeof deliveryModeEnum[number];
 export type PaymentMethodType = typeof paymentMethodEnum[number];
+
+// Customer Dashboard settings per branch
+export const customerDashboardSettings = pgTable("customer_dashboard_settings", {
+  branchId: uuid("branch_id").primaryKey().references(() => branches.id),
+  heroTitleEn: text("hero_title_en"),
+  heroTitleAr: text("hero_title_ar"),
+  heroSubtitleEn: text("hero_subtitle_en"),
+  heroSubtitleAr: text("hero_subtitle_ar"),
+  featuredMessageEn: text("featured_message_en"),
+  featuredMessageAr: text("featured_message_ar"),
+  showPackages: boolean("show_packages").default(true).notNull(),
+  showOrders: boolean("show_orders").default(true).notNull(),
+  updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+// Branch ads and analytics
+export const branchAds = pgTable("branch_ads", {
+  id: uuid("id").primaryKey().default(uuidFn),
+  branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  titleEn: text("title_en").notNull(),
+  titleAr: text("title_ar"),
+  imageUrl: text("image_url").notNull(),
+  targetUrl: text("target_url"),
+  placement: text("placement").default("dashboard_top").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  startsAt: timestamptz("starts_at"),
+  endsAt: timestamptz("ends_at"),
+  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const adImpressions = pgTable("ad_impressions", {
+  id: uuid("id").primaryKey().default(uuidFn),
+  adId: uuid("ad_id").references(() => branchAds.id).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  customerId: uuid("customer_id").references(() => customers.id),
+  cityId: uuid("city_id").references(() => cities.id),
+  governorateId: uuid("governorate_id").references(() => cities.id),
+  lat: numeric("lat", { precision: 9, scale: 6 }),
+  lng: numeric("lng", { precision: 9, scale: 6 }),
+  language: text("language"),
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const adClicks = pgTable("ad_clicks", {
+  id: uuid("id").primaryKey().default(uuidFn),
+  adId: uuid("ad_id").references(() => branchAds.id).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  customerId: uuid("customer_id").references(() => customers.id),
+  cityId: uuid("city_id").references(() => cities.id),
+  governorateId: uuid("governorate_id").references(() => cities.id),
+  lat: numeric("lat", { precision: 9, scale: 6 }),
+  lng: numeric("lng", { precision: 9, scale: 6 }),
+  language: text("language"),
+  userAgent: text("user_agent"),
+  referrer: text("referrer"),
+  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertCustomerDashboardSettingsSchema = createInsertSchema(customerDashboardSettings).omit({
+  updatedAt: true,
+});
+export const insertBranchAdSchema = createInsertSchema(branchAds).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertAdImpressionSchema = createInsertSchema(adImpressions).omit({
+  id: true,
+  createdAt: true,
+});
+export const insertAdClickSchema = createInsertSchema(adClicks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type CustomerDashboardSettings = typeof customerDashboardSettings.$inferSelect;
+export type InsertCustomerDashboardSettings = z.infer<typeof insertCustomerDashboardSettingsSchema>;
+export type BranchAd = typeof branchAds.$inferSelect;
+export type InsertBranchAd = z.infer<typeof insertBranchAdSchema>;

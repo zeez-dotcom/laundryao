@@ -31,9 +31,12 @@ export function BranchManager() {
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
   const [formData, setFormData] = useState<InsertBranch>({
     name: "",
+    nameAr: "",
     address: "",
+    addressAr: "",
     phone: "",
     tagline: "",
+    taglineAr: "",
     code: "",
     logoUrl: "",
     addressInputMode: "mapbox",
@@ -128,9 +131,12 @@ export function BranchManager() {
   const resetForm = () => {
     setFormData({
       name: "",
+      nameAr: "",
       address: "",
+      addressAr: "",
       phone: "",
       tagline: "",
+      taglineAr: "",
       code: "",
       logoUrl: "",
       addressInputMode: "mapbox",
@@ -147,9 +153,12 @@ export function BranchManager() {
     setEditingBranch(branch);
     setFormData({
       name: branch.name,
+      nameAr: (branch as any).nameAr || "",
       address: branch.address || "",
+      addressAr: (branch as any).addressAr || "",
       phone: branch.phone || "",
       tagline: branch.tagline || "",
+      taglineAr: (branch as any).taglineAr || "",
       code: branch.code,
       logoUrl: branch.logoUrl || "",
       addressInputMode:
@@ -269,13 +278,21 @@ export function BranchManager() {
                   </RadioGroup>
                 </div>
                 <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="address" className="text-right">
-                    Address
-                  </Label>
+                  <Label htmlFor="address" className="text-right">Address (EN)</Label>
                   <Input
                     id="address"
                     value={formData.address || ""}
                     onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                    className="col-span-3"
+                  />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="addressAr" className="text-right">Address (AR)</Label>
+                  <Input
+                    id="addressAr"
+                    dir="rtl"
+                    value={formData.addressAr || ""}
+                    onChange={(e) => setFormData({ ...formData, addressAr: e.target.value })}
                     className="col-span-3"
                   />
                 </div>
@@ -291,13 +308,40 @@ export function BranchManager() {
                   />
                 </div>
                 <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="tagline" className="text-right">
-                    Tagline
-                  </Label>
+                  <Label htmlFor="tagline" className="text-right">Tagline (EN)</Label>
                   <Input
                     id="tagline"
                     value={formData.tagline || ""}
                     onChange={(e) => setFormData({ ...formData, tagline: e.target.value })}
+                    className="col-span-3"
+                  />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="taglineAr" className="text-right">Tagline (AR)</Label>
+                  <Input
+                    id="taglineAr"
+                    dir="rtl"
+                    value={formData.taglineAr || ""}
+                    onChange={(e) => setFormData({ ...formData, taglineAr: e.target.value })}
+                    className="col-span-3"
+                  />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="name" className="text-right">Name (EN)</Label>
+                  <Input
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="col-span-3"
+                  />
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="nameAr" className="text-right">Name (AR)</Label>
+                  <Input
+                    id="nameAr"
+                    dir="rtl"
+                    value={formData.nameAr || ""}
+                    onChange={(e) => setFormData({ ...formData, nameAr: e.target.value })}
                     className="col-span-3"
                   />
                 </div>
@@ -442,4 +486,3 @@ export function BranchManager() {
     </div>
   );
 }
-

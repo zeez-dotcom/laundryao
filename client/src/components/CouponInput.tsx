@@ -35,6 +35,8 @@ interface CouponInputProps {
   onApplyCoupon: (code: string, branchId: string) => Promise<{ success: boolean; error?: string; coupon?: AppliedCoupon }>;
   onRemoveCoupon: () => void;
   discountAmount?: number;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 export function CouponInput({
@@ -45,7 +47,9 @@ export function CouponInput({
   couponError,
   onApplyCoupon,
   onRemoveCoupon,
-  discountAmount = 0
+  discountAmount = 0,
+  disabled = false,
+  disabledReason
 }: CouponInputProps) {
   const [inputValue, setInputValue] = useState("");
   const { branch } = useAuthContext();
@@ -80,12 +84,12 @@ export function CouponInput({
             onChange={(e) => setInputValue(e.target.value.toUpperCase())}
             placeholder="Enter coupon code"
             className="flex-1"
-            disabled={isCouponLoading}
+            disabled={isCouponLoading || disabled}
           />
           <Button 
             type="submit" 
             size="sm" 
-            disabled={!inputValue.trim() || isCouponLoading}
+            disabled={!inputValue.trim() || isCouponLoading || disabled}
             className="px-4"
           >
             {isCouponLoading ? (
@@ -170,6 +174,12 @@ export function CouponInput({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {disabled && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          {disabledReason || "Coupons cannot be combined with packages or other offers."}
         </div>
       )}
 

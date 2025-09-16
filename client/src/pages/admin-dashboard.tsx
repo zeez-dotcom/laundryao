@@ -16,6 +16,7 @@ import {
   QrCode,
   Truck,
   BarChart3,
+  DollarSign,
   Store,
   TicketPercent,
 } from "lucide-react";
@@ -63,9 +64,19 @@ const FinancialReportsManager = React.lazy(() =>
     (m) => ({ default: m.FinancialReportsManager })
   )
 );
+const ExpenseManager = React.lazy(() =>
+  import(/* webpackPrefetch: true */ "@/components/admin/ExpenseManager").then(
+    (m) => ({ default: m.ExpenseManager })
+  )
+);
 const BranchDeliveryManager = React.lazy(() =>
   import(/* webpackPrefetch: true */ "@/components/admin/BranchDeliveryManager").then(
     (m) => ({ default: m.BranchDeliveryManager })
+  )
+);
+const CustomerDashboardManager = React.lazy(() =>
+  import(/* webpackPrefetch: true */ "@/components/admin/CustomerDashboardManager").then(
+    (m) => ({ default: m.CustomerDashboardManager })
   )
 );
 const BranchQRCodeManager = React.lazy(() =>
@@ -117,7 +128,9 @@ export default function AdminDashboard() {
         { value: "qr-management", label: "QR Code Management", icon: QrCode },
         { value: "delivery-management", label: "Delivery Management", icon: Truck },
         { value: "customization", label: "Customization", icon: TicketPercent },
+        { value: "customer-dashboard", label: "Customer Dashboard", icon: TicketPercent },
         { value: "financial-reports", label: "Financial Reports", icon: BarChart3 },
+        { value: "expenses", label: "Expenses", icon: DollarSign },
         { value: "coupons", label: "Coupons", icon: TicketPercent }
       );
     }
@@ -239,7 +252,9 @@ export default function AdminDashboard() {
               {selectedSection === "qr-management" && isAdminLike && <BranchQRCodeManager />}
               {selectedSection === "delivery-management" && isAdminLike && <BranchDeliveryManager />}
               {selectedSection === "customization" && isAdminLike && <BranchCustomizationManager />}
+              {selectedSection === "customer-dashboard" && isAdminLike && <CustomerDashboardManager />}
               {selectedSection === "financial-reports" && isAdminLike && <FinancialReportsManager />}
+              {selectedSection === "expenses" && isAdminLike && <ExpenseManager />}
               {selectedSection === "coupons" && isAdminLike && <CouponManager />}
               {selectedSection === "branches" && isSuperAdmin && <BranchManager />}
               {selectedSection === "users" && isSuperAdmin && <UserManager />}

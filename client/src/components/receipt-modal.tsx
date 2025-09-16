@@ -14,6 +14,7 @@ import { ReactNode, useEffect, useState, Fragment, useMemo } from "react";
 import logoImage from "@/assets/logo.png";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import { getTaxRate } from "@/lib/tax";
 import { format } from "date-fns";
 import { useAuthContext } from "@/context/AuthContext";
@@ -43,6 +44,19 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   const [receiptHeaderAr, setReceiptHeaderAr] = useState("");
   const [receiptFooterEn, setReceiptFooterEn] = useState("");
   const [receiptFooterAr, setReceiptFooterAr] = useState("");
+  const [compensationEn, setCompensationEn] = useState<string | undefined>(undefined);
+  const [compensationAr, setCompensationAr] = useState<string | undefined>(undefined);
+
+  // Load branch customization for overrides (declare BEFORE effects that reference it)
+  const { branch } = useAuthContext();
+  const { data: customization } = useQuery<any>({
+    queryKey: branch?.id ? ["/api/branches", branch.id, "customization"] : ["customization:disabled"],
+    enabled: !!branch?.id,
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/branches/${branch!.id}/customization`);
+      return res.json();
+    }
+  });
 
   useEffect(() => {
     const settings = localStorage.getItem("laundrySettings");
@@ -71,7 +85,23 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
     loadLocale("ar").then(setTAr);
   }, []);
 
-  const { branch } = useAuthContext();
+  // Apply customization overrides when loaded
+  useEffect(() => {
+    if (!customization) return;
+    if (customization.headerText || customization.headerTextAr) {
+      setReceiptHeaderEn(customization.headerText || "");
+      setReceiptHeaderAr(customization.headerTextAr || "");
+    }
+    if (customization.footerText || customization.footerTextAr) {
+      setReceiptFooterEn(customization.footerText || "");
+      setReceiptFooterAr(customization.footerTextAr || "");
+    }
+    if (customization.compensationNoticeEn || customization.compensationNoticeAr) {
+      setCompensationEn(customization.compensationNoticeEn || undefined);
+      setCompensationAr(customization.compensationNoticeAr || undefined);
+    }
+  }, [customization]);
+
   // Company logo - branch logo if available, else default asset
   const logoUrl = branch?.logoUrl || logoImage;
 
@@ -299,8 +329,9 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
 
   const branchName = storedCompanyName || branch?.name || tEn.companyName;
   const branchPhone = storedCompanyPhone || branch?.phone || tEn.phone;
-  const companyTaglineEn = storedCompanyTagline || tEn.companyTagline;
-  const companyTaglineAr = storedCompanyTagline || tAr.companyTagline;
+  const companyTaglineEn = storedCompanyTagline || branch?.tagline || tEn.companyTagline;
+  const companyTaglineAr = (localStorage.getItem('companyTaglineAr') || (branch as any)?.taglineAr || storedCompanyTagline) || tAr.companyTagline;
+  const whatsappQrUrl = (branch as any)?.whatsappQrUrl as string | undefined;
 
   const sellerName = receiptData.sellerName;
 
@@ -857,6 +888,13 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
 
           {/* Footer */}
           <div className="border-t border-gray-400 pt-3 text-center text-xs text-gray-600 space-y-1">
+            {whatsappQrUrl && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-center">
+                  <img src={whatsappQrUrl} alt="WhatsApp QR" style={{ width: 96, height: 96 }} />
+                </div>
+              </div>
+            )}
             <div className="flex">
               <p className="flex-1">{tEn.thankYouService}</p>
               <p className="flex-1 text-right" dir="rtl">{tAr.thankYouService}</p>
@@ -894,9 +932,9 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
               )
             )}
             <div className="flex">
-              <p className="flex-1">{tEn.damagedItemsCompensation}</p>
+              <p className="flex-1">{compensationEn || tEn.damagedItemsCompensation}</p>
               <p className="flex-1 text-right" dir="rtl">
-                {tAr.damagedItemsCompensation}
+                {compensationAr || tAr.damagedItemsCompensation}
               </p>
             </div>
           </div>

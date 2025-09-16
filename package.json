@@ -5,9 +5,12 @@
   "license": "MIT",
   "scripts": {
     "db:generate": "dotenv -e .env -- drizzle-kit generate",
-    "db:migrate": "dotenv -e .env -- drizzle-kit migrate",
+    "db:generate:ci": "cross-env CI=1 dotenv -e .env -- drizzle-kit generate && echo 'Migrations generated successfully'",
+    "db:migrate": "dotenv -e .env -- drizzle-kit migrate && echo 'Migrations applied successfully'",
     "db:push": "dotenv -e .env -- drizzle-kit push",
+    "db:push:ci": "cross-env CI=1 dotenv -e .env -- drizzle-kit push && echo 'Schema pushed successfully'",
     "db:studio": "dotenv -e .env -- drizzle-kit studio",
+    "db:migrate:ci": "cross-env CI=1 dotenv -e .env -- drizzle-kit migrate && echo 'Migrations applied successfully'",
     "db:prepare": "wait-on tcp:localhost:5432 && npm run db:migrate",
     "db:seed": "dotenv -e .env -- tsx server/db/seed.ts",
     "dev": "dotenv -e .env -- tsx -r dotenv/config server/index.ts",

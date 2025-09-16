@@ -1,8 +1,11 @@
 export interface BranchInfo {
   name?: string;
+  nameAr?: string | null;
   address?: string | null;
+  addressAr?: string | null;
   phone?: string | null;
   tagline?: string | null;
+  taglineAr?: string | null;
 }
 
 export interface UserInfo {

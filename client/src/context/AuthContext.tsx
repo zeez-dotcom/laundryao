@@ -5,11 +5,21 @@ import type { User, Branch } from "@shared/schema";
 
 // Extended user type with optional branch information
 export type AuthUser =
-  User & { branch?: (Branch & { logoUrl?: string | null; tagline?: string | null }) | null };
+  User & {
+    branch?: (
+      Branch & {
+        logoUrl?: string | null;
+        tagline?: string | null;
+        taglineAr?: string | null;
+        nameAr?: string | null;
+        addressAr?: string | null;
+      }
+    ) | null;
+  };
 
 interface AuthContextValue {
   user: AuthUser | undefined;
-  branch: (Branch & { logoUrl?: string | null; tagline?: string | null }) | null;
+  branch: (Branch & { logoUrl?: string | null; tagline?: string | null; taglineAr?: string | null; nameAr?: string | null; addressAr?: string | null; whatsappQrUrl?: string | null }) | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;

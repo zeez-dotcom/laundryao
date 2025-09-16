@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,12 +18,10 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  PieChart,
-  Pie,
-  Cell,
   AreaChart,
   Area
 } from "recharts";
+import { PieChart, Pie, Cell } from "recharts";
 import { 
   DollarSign,
   TrendingUp,
@@ -38,21 +36,16 @@ import {
   AlertTriangle,
   RefreshCw
 } from "lucide-react";
+import EmptyState from "@/components/common/EmptyState";
+import { apiRequest } from "@/lib/queryClient";
 
-type FinancialData = {
+type FinancialPoint = {
   period: string;
   revenue: number;
   expenses: number;
   profit: number;
   orders: number;
   avgOrderValue: number;
-};
-
-type ExpenseCategory = {
-  category: string;
-  amount: number;
-  percentage: number;
-  color: string;
 };
 
 type PaymentMethodData = {
@@ -74,33 +67,105 @@ export function FinancialReportsManager() {
     to: new Date()
   });
 
-  // Mock data - In real implementation, these would be API calls
-  const financialData: FinancialData[] = [
-    { period: "Jan", revenue: 45000, expenses: 32000, profit: 13000, orders: 450, avgOrderValue: 100 },
-    { period: "Feb", revenue: 52000, expenses: 35000, profit: 17000, orders: 520, avgOrderValue: 100 },
-    { period: "Mar", revenue: 48000, expenses: 33000, profit: 15000, orders: 480, avgOrderValue: 100 },
-    { period: "Apr", revenue: 61000, expenses: 38000, profit: 23000, orders: 610, avgOrderValue: 100 },
-    { period: "May", revenue: 55000, expenses: 36000, profit: 19000, orders: 550, avgOrderValue: 100 },
-    { period: "Jun", revenue: 67000, expenses: 40000, profit: 27000, orders: 670, avgOrderValue: 100 },
-  ];
+  // Fetch live report summary for this admin's branch
+  const { data: summary } = useQuery<{
+    transactions: any[];
+    orders: any[];
+    customers: any[];
+    payments: any[];
+    laundryServices: any[];
+  }>({
+    queryKey: ["/api/report/summary"],
+  });
 
-  const expenseData: ExpenseCategory[] = [
-    { category: "Rent & Utilities", amount: 15000, percentage: 37.5, color: "#0088FE" },
-    { category: "Staff Wages", amount: 12000, percentage: 30, color: "#00C49F" },
-    { category: "Cleaning Supplies", amount: 6000, percentage: 15, color: "#FFBB28" },
-    { category: "Equipment Maintenance", amount: 4000, percentage: 10, color: "#FF8042" },
-    { category: "Marketing", amount: 2000, percentage: 5, color: "#8884D8" },
-    { category: "Other", amount: 1000, percentage: 2.5, color: "#82ca9d" },
-  ];
+  const transactions = summary?.transactions ?? [];
+  const orders = summary?.orders ?? [];
+  const payments = summary?.payments ?? [];
+  const { data: customization } = useQuery<any>({
+    queryKey: branch?.id ? ["/api/branches", branch.id, "customization"] : ["customization:disabled"],
+    enabled: !!branch?.id,
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/branches/${branch!.id}/customization`);
+      return res.json();
+    }
+  });
+  const { data: expenseReport } = useQuery<{ byMonth: { month: string; total: number }[]; byCategory: { category: string; total: number }[] }>({
+    queryKey: ["/api/reports/expenses"],
+    enabled: !!customization?.expensesEnabled,
+  });
 
-  const paymentMethodData: PaymentMethodData[] = [
-    { method: "Cash", amount: 28000, percentage: 42, transactions: 280 },
-    { method: "Card", amount: 25000, percentage: 37, transactions: 250 },
-    { method: "Pay Later", amount: 14000, percentage: 21, transactions: 140 },
-  ];
+  // Helpers for month aggregation
+  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const lastNMonths = (n: number) => {
+    const now = new Date();
+    const months: string[] = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(monthKey(d));
+    }
+    return months;
+  };
 
-  const currentMonthData = financialData[financialData.length - 1];
-  const previousMonthData = financialData[financialData.length - 2];
+  // Build financial series from real payments and orders
+  const financialData: FinancialPoint[] = useMemo(() => {
+    const months = lastNMonths(6);
+    const revenueByMonth: Record<string, number> = {};
+    payments.forEach((p: any) => {
+      const key = monthKey(new Date(p.createdAt));
+      revenueByMonth[key] = (revenueByMonth[key] || 0) + parseFloat(p.amount);
+    });
+    const ordersByMonth: Record<string, number> = {};
+    orders.forEach((o: any) => {
+      const key = monthKey(new Date(o.createdAt));
+      ordersByMonth[key] = (ordersByMonth[key] || 0) + 1;
+    });
+    const expenseByMonth: Record<string, number> = {};
+    (expenseReport?.byMonth || []).forEach((e) => { expenseByMonth[e.month] = e.total; });
+
+    return months.map((m) => {
+      const revenue = revenueByMonth[m] || 0;
+      const ordersCount = ordersByMonth[m] || 0;
+      const expenses = expenseByMonth[m] || 0;
+      const profit = revenue - expenses;
+      return {
+        period: m,
+        revenue,
+        expenses,
+        profit,
+        orders: ordersCount,
+        avgOrderValue: ordersCount > 0 ? revenue / ordersCount : 0,
+      };
+    });
+  }, [payments, orders, expenseReport]);
+
+  // Payment method breakdown from real payments
+  const paymentMethodData: PaymentMethodData[] = useMemo(() => {
+    const totals: Record<string, { amount: number; transactions: number }> = {};
+    payments.forEach((p: any) => {
+      const method = p.paymentMethod || "unknown";
+      const amt = parseFloat(p.amount);
+      if (!totals[method]) totals[method] = { amount: 0, transactions: 0 };
+      totals[method].amount += amt;
+      totals[method].transactions += 1;
+    });
+    const totalAmount = Object.values(totals).reduce((s, v) => s + v.amount, 0) || 1;
+    return Object.entries(totals).map(([method, v]) => ({
+      method: method === "pay_later" ? "Pay Later" : method.charAt(0).toUpperCase() + method.slice(1),
+      amount: v.amount,
+      percentage: Math.round((v.amount / totalAmount) * 1000) / 10,
+      transactions: v.transactions,
+    }));
+  }, [payments]);
+
+  const currentMonthData = financialData[financialData.length - 1] || {
+    period: "",
+    revenue: 0,
+    expenses: 0,
+    profit: 0,
+    orders: 0,
+    avgOrderValue: 0,
+  };
+  const previousMonthData = financialData[financialData.length - 2] || currentMonthData;
   
   const revenueGrowth = previousMonthData 
     ? ((currentMonthData.revenue - previousMonthData.revenue) / previousMonthData.revenue * 100)
@@ -110,7 +175,7 @@ export function FinancialReportsManager() {
     ? ((currentMonthData.profit - previousMonthData.profit) / previousMonthData.profit * 100)
     : 0;
 
-  const totalExpenses = expenseData.reduce((sum, expense) => sum + expense.amount, 0);
+  const totalExpenses = (expenseReport?.byCategory || []).reduce((s, c) => s + c.total, 0);
   const profitMargin = currentMonthData.revenue > 0 
     ? (currentMonthData.profit / currentMonthData.revenue * 100) 
     : 0;
@@ -224,7 +289,9 @@ export function FinancialReportsManager() {
       <Tabs defaultValue="profit-loss" className="space-y-4">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="profit-loss">Profit & Loss</TabsTrigger>
-          <TabsTrigger value="expenses">Expense Breakdown</TabsTrigger>
+          {customization?.expensesEnabled && (
+            <TabsTrigger value="expenses">Expense Breakdown</TabsTrigger>
+          )}
           <TabsTrigger value="payments">Payment Methods</TabsTrigger>
           <TabsTrigger value="trends">Trends Analysis</TabsTrigger>
         </TabsList>
@@ -306,6 +373,7 @@ export function FinancialReportsManager() {
           </Card>
         </TabsContent>
 
+        {customization?.expensesEnabled ? (
         <TabsContent value="expenses" className="space-y-4">
           <div className="grid gap-6 md:grid-cols-2">
             <Card>
@@ -314,25 +382,28 @@ export function FinancialReportsManager() {
                 <CardDescription>Breakdown of monthly expenses by category</CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={expenseData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ category, percentage }) => `${category}: ${percentage}%`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="amount"
-                    >
-                      {expenseData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                  </PieChart>
-                </ResponsiveContainer>
+                {expenseReport && expenseReport.byCategory.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <PieChart>
+                      <Pie
+                        data={expenseReport.byCategory}
+                        dataKey="total"
+                        nameKey="category"
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={90}
+                        label={(entry) => `${entry.category}: ${((entry.total / Math.max(totalExpenses, 1)) * 100).toFixed(1)}%`}
+                      >
+                        {expenseReport.byCategory.map((entry, idx) => (
+                          <Cell key={entry.category} fill={COLORS[idx % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => [formatCurrency(value), 'Expense']} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <EmptyState title="No expense data" description="No expenses recorded for this month." icon={<AlertTriangle className="h-8 w-8 text-gray-400" />} />
+                )}
               </CardContent>
             </Card>
 
@@ -342,35 +413,31 @@ export function FinancialReportsManager() {
                 <CardDescription>Detailed breakdown with amounts</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {expenseData.map((expense, index) => (
-                    <div key={expense.category} className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div 
-                          className="w-4 h-4 rounded-full" 
-                          style={{ backgroundColor: expense.color }}
-                        />
-                        <span className="font-medium">{expense.category}</span>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold">{formatCurrency(expense.amount)}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {expense.percentage}%
+                {expenseReport && expenseReport.byCategory.length > 0 ? (
+                  <div className="space-y-3">
+                    {expenseReport.byCategory.map((row, index) => (
+                      <div key={row.category} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-3 h-3 rounded" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                          <span className="font-medium">{row.category}</span>
                         </div>
+                        <div className="font-bold">{formatCurrency(row.total)}</div>
+                        <Badge variant="outline">{((row.total / Math.max(totalExpenses, 1)) * 100).toFixed(1)}%</Badge>
                       </div>
-                    </div>
-                  ))}
-                  <div className="border-t pt-3 mt-3">
-                    <div className="flex justify-between items-center font-bold">
+                    ))}
+                    <div className="flex items-center justify-between pt-2 border-t">
                       <span>Total Expenses</span>
                       <span>{formatCurrency(totalExpenses)}</span>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <EmptyState title="No expense categories" description="No expenses recorded for this month." icon={<AlertTriangle className="h-8 w-8 text-gray-400" />} />
+                )}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
+        ) : null}
 
         <TabsContent value="payments" className="space-y-4">
           <div className="grid gap-6 md:grid-cols-2">
@@ -514,7 +581,7 @@ export function FinancialReportsManager() {
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-5 w-5 text-orange-600" />
                   <span className="text-lg font-bold">
-                    {((currentMonthData.expenses / currentMonthData.revenue) * 100).toFixed(1)}%
+                    {currentMonthData.revenue > 0 ? ((currentMonthData.expenses / currentMonthData.revenue) * 100).toFixed(1) : "0.0"}%
                   </span>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">

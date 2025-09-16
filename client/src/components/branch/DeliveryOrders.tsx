@@ -40,7 +40,7 @@ export function DeliveryOrders() {
   const { toast } = useToast();
 
   const [statusFilter, setStatusFilter] = useState("all");
-  const [driverFilter, setDriverFilter] = useState("");
+  const [driverFilter, setDriverFilter] = useState("all");
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [assignOrder, setAssignOrder] = useState<DeliveryOrder | null>(null);
   const [selectedDriver, setSelectedDriver] = useState("");
@@ -59,7 +59,7 @@ export function DeliveryOrders() {
     queryFn: async () => {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.append("status", statusFilter);
-      if (driverFilter) params.append("driverId", driverFilter);
+      if (driverFilter !== "all") params.append("driverId", driverFilter);
       const res = await apiRequest(
         "GET",
         `/api/delivery-orders?${params.toString()}`
@@ -208,7 +208,7 @@ export function DeliveryOrders() {
             <SelectValue placeholder={t.filterByDriver} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">{t.all}</SelectItem>
+            <SelectItem value="all">{t.all}</SelectItem>
             {safeDrivers.map((d) => (
               <SelectItem key={d.id} value={d.id}>
                 {d.name}
@@ -319,7 +319,7 @@ export function DeliveryOrders() {
               <SelectValue placeholder={t.select} />
             </SelectTrigger>
             <SelectContent>
-              {drivers.map((d) => (
+              {safeDrivers.map((d) => (
                 <SelectItem key={d.id} value={d.id}>
                   {d.name}
                 </SelectItem>

@@ -25,7 +25,7 @@ function createApp(storage: any) {
       if (!category) {
         return res.status(400).json({ message: 'Invalid category' });
       }
-      if (category.type !== 'item') {
+      if (category.type !== 'clothing') {
         return res.status(400).json({ message: 'Invalid category type' });
       }
       const newItem = await storage.createClothingItem({ ...validated, userId });
@@ -37,10 +37,10 @@ function createApp(storage: any) {
   return app;
 }
 
-test('creates clothing item when category type is item', async () => {
+test('creates clothing item when category type is clothing', async () => {
   let created = false;
   const storage = {
-    getCategory: async (_id: string, _userId: string) => ({ id: 'c1', type: 'item' }),
+    getCategory: async (_id: string, _userId: string) => ({ id: 'c1', type: 'clothing' }),
     createClothingItem: async (data: any) => {
       created = true;
       return { id: 'i1', ...data };
@@ -55,7 +55,7 @@ test('creates clothing item when category type is item', async () => {
   assert.ok(created);
 });
 
-test('returns 400 for non-item category type', async () => {
+test('returns 400 for non-clothing category type', async () => {
   let created = false;
   const storage = {
     getCategory: async (_id: string, _userId: string) => ({ id: 'c1', type: 'service' }),

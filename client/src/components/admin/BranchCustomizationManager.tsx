@@ -28,13 +28,21 @@ type BranchCustomization = {
   primaryColor: string;
   secondaryColor: string;
   headerText: string;
+  headerTextAr?: string;
   subHeaderText?: string;
+  subHeaderTextAr?: string;
   footerText: string;
+  footerTextAr?: string;
   contactPhone?: string;
   contactEmail?: string;
   address?: string;
+  addressAr?: string;
   deliveryPolicy?: string;
+  deliveryPolicyAr?: string;
   returnPolicy?: string;
+  returnPolicyAr?: string;
+  compensationNoticeEn?: string;
+  compensationNoticeAr?: string;
   socialMediaLinks?: {
     facebook?: string;
     instagram?: string;
@@ -59,13 +67,21 @@ export function BranchCustomizationManager() {
     primaryColor: "#1976d2",
     secondaryColor: "#dc004e",
     headerText: "Welcome to Our Laundry Service",
+    headerTextAr: "",
     subHeaderText: "",
+    subHeaderTextAr: "",
     footerText: "Thank you for choosing our service",
+    footerTextAr: "",
     contactPhone: "",
     contactEmail: "",
     address: "",
+    addressAr: "",
     deliveryPolicy: "",
+    deliveryPolicyAr: "",
     returnPolicy: "",
+    returnPolicyAr: "",
+    compensationNoticeEn: "",
+    compensationNoticeAr: "",
     socialMediaLinks: {
       facebook: "",
       instagram: "",
@@ -251,7 +267,7 @@ export function BranchCustomizationManager() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="headerText">Header Text</Label>
+                <Label htmlFor="headerText">Header Text (EN)</Label>
                 <Input
                   id="headerText"
                   placeholder="Welcome to Our Laundry Service"
@@ -260,7 +276,17 @@ export function BranchCustomizationManager() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="subHeaderText">Sub Header Text</Label>
+                <Label htmlFor="headerTextAr">Header Text (AR)</Label>
+                <Input
+                  id="headerTextAr"
+                  dir="rtl"
+                  placeholder="مرحبا بكم"
+                  value={formData.headerTextAr || ""}
+                  onChange={(e) => handleInputChange("headerTextAr", e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="subHeaderText">Sub Header Text (EN)</Label>
                 <Input
                   id="subHeaderText"
                   placeholder="Professional laundry services you can trust"
@@ -269,7 +295,17 @@ export function BranchCustomizationManager() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="footerText">Footer Text</Label>
+                <Label htmlFor="subHeaderTextAr">Sub Header Text (AR)</Label>
+                <Input
+                  id="subHeaderTextAr"
+                  dir="rtl"
+                  placeholder="خدمات غسيل موثوقة"
+                  value={formData.subHeaderTextAr || ""}
+                  onChange={(e) => handleInputChange("subHeaderTextAr", e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="footerText">Footer Text (EN)</Label>
                 <Input
                   id="footerText"
                   placeholder="Thank you for choosing our service"
@@ -277,9 +313,42 @@ export function BranchCustomizationManager() {
                   onChange={(e) => handleInputChange("footerText", e.target.value)}
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="footerTextAr">Footer Text (AR)</Label>
+                <Input
+                  id="footerTextAr"
+                  dir="rtl"
+                  placeholder="شكراً لاختياركم خدمتنا"
+                  value={formData.footerTextAr || ""}
+                  onChange={(e) => handleInputChange("footerTextAr", e.target.value)}
+                />
+              </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="deliveryPolicy">Delivery Policy</Label>
+                  <Label htmlFor="compensationNoticeEn">Compensation Notice (EN)</Label>
+                  <Textarea
+                    id="compensationNoticeEn"
+                    placeholder="Maximum compensation for damaged items is 20 KD."
+                    value={formData.compensationNoticeEn || ""}
+                    onChange={(e) => handleInputChange("compensationNoticeEn", e.target.value)}
+                    rows={2}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="compensationNoticeAr">Compensation Notice (AR)</Label>
+                  <Textarea
+                    id="compensationNoticeAr"
+                    dir="rtl"
+                    placeholder="الحد الأقصى للتعويض عن الأغراض التالفة هو 20 د.ك"
+                    value={formData.compensationNoticeAr || ""}
+                    onChange={(e) => handleInputChange("compensationNoticeAr", e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="deliveryPolicy">Delivery Policy (EN)</Label>
                   <Textarea
                     id="deliveryPolicy"
                     placeholder="Describe your delivery terms and conditions..."
@@ -289,12 +358,36 @@ export function BranchCustomizationManager() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="returnPolicy">Return Policy</Label>
+                  <Label htmlFor="returnPolicy">Return Policy (EN)</Label>
                   <Textarea
                     id="returnPolicy"
                     placeholder="Describe your return and refund policy..."
                     value={formData.returnPolicy || ""}
                     onChange={(e) => handleInputChange("returnPolicy", e.target.value)}
+                    rows={4}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="deliveryPolicyAr">Delivery Policy (AR)</Label>
+                  <Textarea
+                    id="deliveryPolicyAr"
+                    dir="rtl"
+                    placeholder="وصف شروط وأحكام التوصيل"
+                    value={formData.deliveryPolicyAr || ""}
+                    onChange={(e) => handleInputChange("deliveryPolicyAr", e.target.value)}
+                    rows={4}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="returnPolicyAr">Return Policy (AR)</Label>
+                  <Textarea
+                    id="returnPolicyAr"
+                    dir="rtl"
+                    placeholder="وصف سياسة الاستبدال والاسترجاع"
+                    value={formData.returnPolicyAr || ""}
+                    onChange={(e) => handleInputChange("returnPolicyAr", e.target.value)}
                     rows={4}
                   />
                 </div>
@@ -334,12 +427,23 @@ export function BranchCustomizationManager() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="address">Address</Label>
+                <Label htmlFor="address">Address (EN)</Label>
                 <Textarea
                   id="address"
                   placeholder="Your full business address..."
                   value={formData.address || ""}
                   onChange={(e) => handleInputChange("address", e.target.value)}
+                  rows={3}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="addressAr">Address (AR)</Label>
+                <Textarea
+                  id="addressAr"
+                  dir="rtl"
+                  placeholder="عنوان العمل الكامل"
+                  value={formData.addressAr || ""}
+                  onChange={(e) => handleInputChange("addressAr", e.target.value)}
                   rows={3}
                 />
               </div>
@@ -391,9 +495,9 @@ export function BranchCustomizationManager() {
         <TabsContent value="settings" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Customer Settings</CardTitle>
+              <CardTitle>Settings</CardTitle>
               <CardDescription>
-                Configure customer experience options
+                Configure feature flags and customer experience options
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">

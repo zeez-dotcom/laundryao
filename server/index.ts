@@ -50,28 +50,45 @@ app.use(express.json({ limit: '10mb' })); // Add reasonable payload limits
 app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 app.use(compression());
 
-// Security Headers Middleware - Enhanced protection against common attacks
-app.use((req, res, next) => {
-  // Prevent clickjacking attacks
-  res.setHeader('X-Frame-Options', 'DENY');
-  
-  // Prevent MIME type sniffing
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  
-  // XSS Protection (for older browsers)
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  
-  // Referrer Policy
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
-  // Content Security Policy - Basic protection
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:;");
-  
-  // Remove server header that might leak server info
-  res.removeHeader('X-Powered-By');
-  
-  next();
-});
+// Security Headers Middleware - only enforce strict CSP in production.
+if (app.get('env') !== 'development') {
+  app.use((req, res, next) => {
+    // Prevent clickjacking attacks
+    res.setHeader('X-Frame-Options', 'DENY');
+    
+    // Prevent MIME type sniffing
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    
+    // XSS Protection (for older browsers)
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    
+    // Referrer Policy
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    
+    // Content Security Policy - allow only what we need in prod
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:;"
+    );
+    
+    // Remove server header that might leak server info
+    res.removeHeader('X-Powered-By');
+    
+    next();
+  });
+} else {
+  // In development, relax headers to allow Vite HMR and local tooling
+  app.use((_, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    // Allow websockets and local https connections for HMR and APIs
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: https:;"
+    );
+    next();
+  });
+}
 app.use(
   "/.well-known",
   express.static(path.resolve(import.meta.dirname, "../client/.well-known")),

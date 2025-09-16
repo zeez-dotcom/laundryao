@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { ReceiptModal } from "./receipt-modal";
 import { TranslationProvider } from "@/context/TranslationContext";
 import AuthContext from "@/context/AuthContext";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const authValue = {
   user: undefined,
@@ -58,16 +59,19 @@ const authValue = {
 const customer = { id: "cust1", name: "John Doe" } as any;
 
 function renderReceipt() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <AuthContext.Provider value={authValue}>
-      <TranslationProvider>
-        <ReceiptModal
-          transaction={transaction}
-          customer={customer}
-          isOpen={true}
-          onClose={() => {}}
-        />
-      </TranslationProvider>
+      <QueryClientProvider client={queryClient}>
+        <TranslationProvider>
+          <ReceiptModal
+            transaction={transaction}
+            customer={customer}
+            isOpen={true}
+            onClose={() => {}}
+          />
+        </TranslationProvider>
+      </QueryClientProvider>
     </AuthContext.Provider>
   );
 }
@@ -97,15 +101,18 @@ describe("ReceiptModal", () => {
       paymentMethod: "cash",
     };
 
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <AuthContext.Provider value={authValue}>
-        <TranslationProvider>
-          <ReceiptModal
-            transaction={transactionWithOrder}
-            isOpen={true}
-            onClose={() => {}}
-          />
-        </TranslationProvider>
+        <QueryClientProvider client={queryClient}>
+          <TranslationProvider>
+            <ReceiptModal
+              transaction={transactionWithOrder}
+              isOpen={true}
+              onClose={() => {}}
+            />
+          </TranslationProvider>
+        </QueryClientProvider>
       </AuthContext.Provider>
     );
 
@@ -189,15 +196,18 @@ describe("ReceiptModal", () => {
       ],
     };
 
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <AuthContext.Provider value={authValue}>
-        <TranslationProvider>
-          <ReceiptModal
-            transaction={transactionWithUsage}
-            isOpen={true}
-            onClose={() => {}}
-          />
-        </TranslationProvider>
+        <QueryClientProvider client={queryClient}>
+          <TranslationProvider>
+            <ReceiptModal
+              transaction={transactionWithUsage}
+              isOpen={true}
+              onClose={() => {}}
+            />
+          </TranslationProvider>
+        </QueryClientProvider>
       </AuthContext.Provider>
     );
 
@@ -249,15 +259,18 @@ describe("ReceiptModal", () => {
       ],
     };
 
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <AuthContext.Provider value={authValue}>
-        <TranslationProvider>
-          <ReceiptModal
-            transaction={transactionWithCredits}
-            isOpen={true}
-            onClose={() => {}}
-          />
-        </TranslationProvider>
+        <QueryClientProvider client={queryClient}>
+          <TranslationProvider>
+            <ReceiptModal
+              transaction={transactionWithCredits}
+              isOpen={true}
+              onClose={() => {}}
+            />
+          </TranslationProvider>
+        </QueryClientProvider>
       </AuthContext.Provider>
     );
 

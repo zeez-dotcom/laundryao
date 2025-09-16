@@ -158,8 +158,10 @@ export function useLaundryCart() {
     let discountAmount = 0;
     let applicableSubtotal = subtotal;
 
-    // Apply coupon discount if available
-    if (appliedCoupon) {
+    // Business rule: coupons cannot be combined with packages/other offers.
+    // If package usage is present, do not apply any coupon discount.
+    const hasPackageUsage = !!packageUsage?.items && packageUsage.items.length > 0;
+    if (!hasPackageUsage && appliedCoupon) {
       if (appliedCoupon.applicationType === "whole_cart") {
         applicableSubtotal = subtotal;
       } else if (appliedCoupon.applicableItems && appliedCoupon.applicableItems.length > 0) {

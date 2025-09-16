@@ -59,6 +59,10 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
     "name" | "price" | "category" | "image" | null
   >(null);
   const [addData, setAddData] = useState<any>({});
+  // Inline category creation support
+  const [creatingCategoryType, setCreatingCategoryType] = useState<
+    "clothing" | "service" | null
+  >(null);
   // Workflow state for assigning services to a newly added item
   const [pendingAssignItemId, setPendingAssignItemId] = useState<string | null>(null);
   const [pendingAssignItemName, setPendingAssignItemName] = useState<string | null>(null);
@@ -316,6 +320,17 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
       setStep("input");
     } else if (step === "addCategory") {
       const option = options.find((o) => o.value === value);
+      if (value === "add_new_category") {
+        // Start inline category creation for the current add flow
+        setCreatingCategoryType(addMode === "item" ? "clothing" : "service");
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: "Enter new category name" },
+        ]);
+        setOptions([]);
+        setStep("input");
+        return;
+      }
       setMessages((m) => [
         ...m,
         { role: "user", content: option?.label || "" },
@@ -495,7 +510,10 @@ const handleAddSubmit = async () => {
             ...m,
             { role: "assistant", content: "Select category" },
           ]);
-          setOptions(cats.map((c: any) => ({ label: c.name, value: c.id })));
+          setOptions([
+            ...cats.map((c: any) => ({ label: c.name, value: c.id })),
+            { label: "Add New Category", value: "add_new_category" },
+          ]);
           setStep("addCategory");
           setAddField("category");
         } catch {
@@ -516,7 +534,10 @@ const handleAddSubmit = async () => {
           ...m,
           { role: "assistant", content: "Select category" },
         ]);
-        setOptions(cats.map((c: any) => ({ label: c.name, value: c.id })));
+        setOptions([
+          ...cats.map((c: any) => ({ label: c.name, value: c.id })),
+          { label: "Add New Category", value: "add_new_category" },
+        ]);
         setStep("addCategory");
         setAddField("category");
       } catch {
@@ -567,6 +588,45 @@ const handleAddSubmit = async () => {
       setInputValue("");
       setFile(null);
       setImageInputMode(null);
+    }
+    // Handle inline category creation while in add flow
+    else if (addField === "category" && creatingCategoryType) {
+      const catName = inputValue.trim();
+      if (!catName) return;
+      try {
+        const res = await fetch("/api/categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ name: catName, type: creatingCategoryType, isActive: true }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const message = data?.message || "Failed to add category";
+          setMessages((m) => [...m, { role: "assistant", content: message }]);
+          toast({ title: message, variant: "destructive" });
+        } else {
+          try {
+            const listRes = await fetch(`/api/categories?type=${creatingCategoryType}`, { credentials: "include" });
+            const cats = await listRes.json();
+            setMessages((m) => [
+              ...m,
+              { role: "assistant", content: "Category added. Select category" },
+            ]);
+            setOptions([
+              ...cats.map((c: any) => ({ label: c.name, value: c.id })),
+              { label: "Add New Category", value: "add_new_category" },
+            ]);
+            setStep("addCategory");
+          } catch {
+            toast({ title: "Failed to refresh categories", variant: "destructive" });
+          }
+        }
+      } catch {
+        toast({ title: "Failed to add category", variant: "destructive" });
+      }
+      setCreatingCategoryType(null);
+      setInputValue("");
     }
   };
 

@@ -40,6 +40,15 @@ import {
   type BranchCustomization,
   type BranchCustomizationInsert,
   branchCustomizationTable,
+  // Customer dashboard + ads
+  customerDashboardSettings,
+  branchAds,
+  adImpressions,
+  adClicks,
+  type CustomerDashboardSettings,
+  type InsertCustomerDashboardSettings,
+  type BranchAd,
+  type InsertBranchAd,
   // New customer ordering system types
   type CustomerSession, type InsertCustomerSession,
   type BranchDeliverySettings, type InsertBranchDeliverySettings,
@@ -50,6 +59,7 @@ import {
   type DeliveryOrder, type InsertDeliveryOrder, type DeliveryStatus,
   type CityType, type DeliveryMode, type PaymentMethodType,
   customerSessions, branchDeliverySettings, branchDeliveryItems, branchDeliveryPackages, branchPaymentMethods, branchQRCodes, deliveryOrders,
+  expenses, type Expense, type InsertExpense,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { db } from "./db";
@@ -450,6 +460,24 @@ export interface IStorage {
   createDeliveryOrder(deliveryOrder: InsertDeliveryOrder): Promise<DeliveryOrder>;
   updateDeliveryOrder(id: string, updates: Partial<InsertDeliveryOrder>): Promise<DeliveryOrder | undefined>;
   getDeliveryOrdersByCustomer(customerId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+
+  // Customer dashboard settings and ads
+  getCustomerDashboardSettings(branchId: string): Promise<CustomerDashboardSettings | undefined>;
+  updateCustomerDashboardSettings(branchId: string, settings: Partial<InsertCustomerDashboardSettings>): Promise<CustomerDashboardSettings>;
+  getBranchAds(branchId: string): Promise<BranchAd[]>;
+  createBranchAd(ad: InsertBranchAd): Promise<BranchAd>;
+  updateBranchAd(id: string, ad: Partial<InsertBranchAd>): Promise<BranchAd | undefined>;
+  deleteBranchAd(id: string, branchId?: string): Promise<boolean>;
+  getActiveAds(branchId: string): Promise<BranchAd[]>;
+  recordAdImpression(data: any): Promise<void>;
+  recordAdClick(data: any): Promise<void>;
+
+  // Expenses
+  getExpenses(branchId?: string, start?: Date, end?: Date, search?: string, limit?: number, offset?: number): Promise<Expense[]>;
+  createExpense(expense: Omit<InsertExpense, "branchId" | "createdBy"> & { branchId?: string }, createdBy: string, branchId: string): Promise<Expense>;
+  getExpenseSummary(range?: string, branchId?: string): Promise<{ byMonth: { month: string; total: number }[]; byCategory: { category: string; total: number }[] }>;
+  updateExpense(id: string, updates: Partial<InsertExpense>, branchId?: string): Promise<Expense | undefined>;
+  deleteExpense(id: string, branchId?: string): Promise<boolean>;
 }
 
 export class MemStorage {
@@ -3869,6 +3897,56 @@ export class DatabaseStorage {
     return created;
   }
 
+  // Branch Delivery Settings
+  async getBranchDeliverySettings(branchId: string): Promise<BranchDeliverySettings | undefined> {
+    const [existing] = await db
+      .select()
+      .from(branchDeliverySettings)
+      .where(eq(branchDeliverySettings.branchId, branchId));
+    if (existing) return existing as any;
+    // Create default settings lazily if none exist
+    const [created] = await db
+      .insert(branchDeliverySettings)
+      .values({ branchId, deliveryEnabled: false } as any)
+      .onConflictDoNothing()
+      .returning();
+    return created as any;
+  }
+
+  async createBranchDeliverySettings(settings: InsertBranchDeliverySettings): Promise<BranchDeliverySettings> {
+    const [created] = await db
+      .insert(branchDeliverySettings)
+      .values(settings as any)
+      .returning();
+    return created as any;
+  }
+
+  async updateBranchDeliverySettings(
+    branchId: string,
+    settings: Partial<InsertBranchDeliverySettings>,
+  ): Promise<BranchDeliverySettings | undefined> {
+    const [existing] = await db
+      .select()
+      .from(branchDeliverySettings)
+      .where(eq(branchDeliverySettings.branchId, branchId));
+
+    const updateData: any = { ...settings, updatedAt: new Date() };
+    if (existing) {
+      const [updated] = await db
+        .update(branchDeliverySettings)
+        .set(updateData)
+        .where(eq(branchDeliverySettings.branchId, branchId))
+        .returning();
+      return updated as any;
+    } else {
+      const [created] = await db
+        .insert(branchDeliverySettings)
+        .values({ branchId, ...settings } as any)
+        .returning();
+      return created as any;
+    }
+  }
+
   // Order status management
   async updateOrderStatus(orderId: string, status: string, notes?: string): Promise<Order> {
     const updateData: any = { 
@@ -4064,6 +4142,157 @@ export class DatabaseStorage {
     }
 
     return await query;
+  }
+
+  // Customer Dashboard settings and ads
+  async getCustomerDashboardSettings(branchId: string): Promise<CustomerDashboardSettings | undefined> {
+    const [row] = await db.select().from(customerDashboardSettings).where(eq(customerDashboardSettings.branchId, branchId));
+    return row as any;
+  }
+
+  async updateCustomerDashboardSettings(branchId: string, settings: Partial<InsertCustomerDashboardSettings>): Promise<CustomerDashboardSettings> {
+    const [existing] = await db.select().from(customerDashboardSettings).where(eq(customerDashboardSettings.branchId, branchId));
+    const updateData: any = { ...settings, updatedAt: new Date() };
+    if (existing) {
+      const [updated] = await db.update(customerDashboardSettings).set(updateData).where(eq(customerDashboardSettings.branchId, branchId)).returning();
+      return updated as any;
+    } else {
+      const [created] = await db.insert(customerDashboardSettings).values({ branchId, ...settings } as any).returning();
+      return created as any;
+    }
+  }
+
+  async getBranchAds(branchId: string): Promise<BranchAd[]> {
+    const rows = await db.select().from(branchAds).where(eq(branchAds.branchId, branchId));
+    return rows as any;
+  }
+
+  async createBranchAd(ad: InsertBranchAd): Promise<BranchAd> {
+    const [created] = await db.insert(branchAds).values(ad as any).returning();
+    return created as any;
+  }
+
+  async updateBranchAd(id: string, ad: Partial<InsertBranchAd>): Promise<BranchAd | undefined> {
+    const [updated] = await db.update(branchAds).set({ ...(ad as any), updatedAt: new Date() }).where(eq(branchAds.id, id)).returning();
+    return updated as any;
+  }
+
+  async deleteBranchAd(id: string, branchId?: string): Promise<boolean> {
+    const conditions = [eq(branchAds.id, id)] as any[];
+    if (branchId) conditions.push(eq(branchAds.branchId, branchId));
+    const result = await db.delete(branchAds).where(and(...conditions));
+    return (result as any).rowCount ? (result as any).rowCount > 0 : true;
+  }
+
+  async getActiveAds(branchId: string): Promise<BranchAd[]> {
+    const now = new Date();
+    const rows = await db
+      .select()
+      .from(branchAds)
+      .where(and(
+        eq(branchAds.branchId, branchId),
+        eq(branchAds.isActive, true),
+      ))
+      .orderBy(desc(branchAds.createdAt));
+    return (rows as any).filter((ad: any) => {
+      const s = ad.startsAt ? new Date(ad.startsAt) : null;
+      const e = ad.endsAt ? new Date(ad.endsAt) : null;
+      return (!s || s <= now) && (!e || e >= now);
+    });
+  }
+
+  async recordAdImpression(data: any): Promise<void> {
+    await db.insert(adImpressions).values(data as any);
+  }
+
+  async recordAdClick(data: any): Promise<void> {
+    await db.insert(adClicks).values(data as any);
+  }
+
+  // Expenses
+  async getExpenses(branchId?: string, start?: Date, end?: Date, search?: string, limit?: number, offset?: number): Promise<Expense[]> {
+    const conditions: any[] = [];
+    if (branchId) conditions.push(eq(expenses.branchId, branchId));
+    if (start) conditions.push(gte(expenses.incurredAt, start));
+    if (end) conditions.push(lte(expenses.incurredAt, end));
+    if (search && search.trim()) {
+      const term = `%${search.trim()}%`;
+      conditions.push(or(ilike(expenses.category, term as any), ilike(expenses.notes, term as any)));
+    }
+
+    let query: any = db.select().from(expenses);
+    if (conditions.length) query = query.where(and(...conditions));
+    query = query.orderBy(desc(expenses.incurredAt));
+    if (typeof limit === 'number') query = query.limit(limit);
+    if (typeof offset === 'number') query = query.offset(offset);
+    return await query;
+  }
+
+  async createExpense(
+    data: Omit<InsertExpense, "branchId" | "createdBy"> & { branchId?: string },
+    createdBy: string,
+    branchId: string,
+  ): Promise<Expense> {
+    const payload: InsertExpense = {
+      category: (data as any).category,
+      amount: (data as any).amount,
+      notes: (data as any).notes,
+      incurredAt: (data as any).incurredAt || new Date(),
+      branchId: (data as any).branchId || branchId,
+      createdBy,
+    } as any;
+    const [created] = await db.insert(expenses).values(payload as any).returning();
+    return created as any;
+  }
+
+  async getExpenseSummary(range: string = "monthly", branchId?: string): Promise<{ byMonth: { month: string; total: number }[]; byCategory: { category: string; total: number }[] }> {
+    const now = new Date();
+    const start6 = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    const end = now;
+    const list = await this.getExpenses(branchId, start6, end);
+
+    // byMonth last 6 months
+    const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i--) {
+      months.push(monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+    }
+    const totalsByMonth: Record<string, number> = Object.fromEntries(months.map(m => [m, 0]));
+    list.forEach((e: any) => {
+      const mk = monthKey(new Date(e.incurredAt));
+      if (mk in totalsByMonth) totalsByMonth[mk] += parseFloat(e.amount);
+    });
+    const byMonth = months.map(m => ({ month: m, total: Math.round(totalsByMonth[m] * 100) / 100 }));
+
+    // byCategory for current month
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const byCategoryMap: Record<string, number> = {};
+    list.forEach((e: any) => {
+      const d = new Date(e.incurredAt);
+      if (d >= thisMonthStart) {
+        const cat = e.category || "Other";
+        byCategoryMap[cat] = (byCategoryMap[cat] || 0) + parseFloat(e.amount);
+      }
+    });
+    const byCategory = Object.entries(byCategoryMap).map(([category, total]) => ({ category, total: Math.round(total * 100) / 100 }));
+
+    return { byMonth, byCategory };
+  }
+
+  async updateExpense(id: string, updates: Partial<InsertExpense>, branchId?: string): Promise<Expense | undefined> {
+    const conditions: any[] = [eq(expenses.id, id)];
+    if (branchId) conditions.push(eq(expenses.branchId, branchId));
+    const [existing] = await db.select().from(expenses).where(and(...conditions));
+    if (!existing) return undefined;
+    const [updated] = await db.update(expenses).set({ ...(updates as any) }).where(eq(expenses.id, id)).returning();
+    return updated as any;
+  }
+
+  async deleteExpense(id: string, branchId?: string): Promise<boolean> {
+    const conditions: any[] = [eq(expenses.id, id)];
+    if (branchId) conditions.push(eq(expenses.branchId, branchId));
+    const result = await db.delete(expenses).where(and(...conditions));
+    return (result as any).rowCount ? (result as any).rowCount > 0 : true;
   }
 }
 

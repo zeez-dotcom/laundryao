@@ -299,6 +299,12 @@ export function LaundryCartSidebar({
             const safeSet = setCouponCode || (() => {});
             const safeApply = onApplyCoupon || (async () => ({ success: false }));
             const safeRemove = onRemoveCoupon || (() => {});
+            const hasPackages = !!packageUsage?.items && packageUsage.items.length > 0;
+            const couponsDisabled = hasPackages || redeemPoints > 0;
+            // If coupon is applied and user selects packages or redeem points, clear coupon
+            if (couponsDisabled && appliedCoupon && onRemoveCoupon) {
+              safeRemove();
+            }
             return (
               <CouponInput
                 couponCode={couponCode}
@@ -309,6 +315,14 @@ export function LaundryCartSidebar({
                 onApplyCoupon={safeApply}
                 onRemoveCoupon={safeRemove}
                 discountAmount={adjustedSummary.discountAmount}
+                disabled={couponsDisabled}
+                disabledReason={
+                  hasPackages
+                    ? "Coupons cannot be used when package credits are applied."
+                    : redeemPoints > 0
+                      ? "Coupons cannot be used with loyalty point redemption."
+                      : undefined
+                }
               />
             );
           })()}

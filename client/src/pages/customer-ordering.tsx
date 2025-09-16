@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useTranslation } from "@/lib/i18n";
+import { LanguageSelector } from "@/components/language-selector";
 import { apiRequest } from "@/lib/queryClient";
 import { useCurrency } from "@/lib/currency";
 import { getCities } from "@/lib/cities";
@@ -123,6 +125,7 @@ function CustomerOrderingContent() {
   const customerId = searchParams.get("customerId");
   const { customer, isLoading: isAuthLoading, isAuthenticated } = useCustomerAuth();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const { formatCurrency } = useCurrency();
   const queryClient = useQueryClient();
 
@@ -249,10 +252,10 @@ function CustomerOrderingContent() {
         options: [
           {
             id: 'start_order',
-            label: '🚀 Start New Order',
+            label: `🚀 ${t.customerOrdering?.startNewOrder || 'Start New Order'}`,
             action: () => {
               setOrderState(prev => ({ ...prev, serviceType: 'individual', step: 'item_selection' }));
-              addBotMessage("Great! Let's get started. I'll help you select the items you'd like to have cleaned. What type of clothing do you need service for?");
+              addBotMessage(t.customerOrdering?.botIntro || "Great! Let's get started. I'll help you select the items you'd like to have cleaned. What type of clothing do you need service for?");
             }
           }
         ]
@@ -315,23 +318,25 @@ function CustomerOrderingContent() {
   // Handle clothing item selection
   const selectClothingItem = (item: ClothingItem) => {
     setOrderState(prev => ({ ...prev, selectedClothingItem: item, step: 'service_selection' }));
-    addUserMessage(`Selected: ${item.name}`);
-    addBotMessage(`Great choice! Now, what type of service would you like for your ${item.name}?`);
+    addUserMessage(`${t.customerOrdering?.selected || 'Selected:'} ${item.name}`);
+    addBotMessage((t.customerOrdering?.greatChoiceForItem || 'Great choice! Now, what type of service would you like for your {item}?').replace('{item}', item.name));
   };
 
   // Handle service selection
   const selectService = (service: LaundryService & { itemPrice: string }) => {
     setOrderState(prev => ({ ...prev, selectedService: service, step: 'quantity_selection' }));
-    addUserMessage(`Selected: ${service.name} - ${formatCurrency(parseFloat(service.itemPrice))}`);
-    addBotMessage(`Perfect! How many ${orderState.selectedClothingItem?.name} items do you need ${service.name} for?`, [
-      { id: 'qty_1', label: '1 item', action: () => addToCart(1) },
-      { id: 'qty_2', label: '2 items', action: () => addToCart(2) },
-      { id: 'qty_3', label: '3 items', action: () => addToCart(3) },
-      { id: 'qty_4', label: '4 items', action: () => addToCart(4) },
-      { id: 'qty_5', label: '5 items', action: () => addToCart(5) },
+    addUserMessage(`${t.customerOrdering?.selected || 'Selected:'} ${service.name} - ${formatCurrency(parseFloat(service.itemPrice))}`);
+    addBotMessage((t.customerOrdering?.howManyForService || 'Perfect! How many {item} items do you need {service} for?')
+      .replace('{item}', orderState.selectedClothingItem?.name || '')
+      .replace('{service}', service.name), [
+      { id: 'qty_1', label: `1 ${t.customerOrdering?.itemSingular || 'item'}`, action: () => addToCart(1) },
+      { id: 'qty_2', label: `2 ${t.customerOrdering?.itemPlural || 'items'}`, action: () => addToCart(2) },
+      { id: 'qty_3', label: `3 ${t.customerOrdering?.itemPlural || 'items'}`, action: () => addToCart(3) },
+      { id: 'qty_4', label: `4 ${t.customerOrdering?.itemPlural || 'items'}`, action: () => addToCart(4) },
+      { id: 'qty_5', label: `5 ${t.customerOrdering?.itemPlural || 'items'}`, action: () => addToCart(5) },
       { 
         id: 'qty_custom', 
-        label: 'Custom amount', 
+        label: t.customerOrdering?.customAmount || 'Custom amount', 
         action: () => setOrderState(prev => ({ ...prev, step: 'quantity_selection' }))
       }
     ]);
@@ -363,21 +368,21 @@ function CustomerOrderingContent() {
       selectedQuantity: 1
     }));
 
-    addUserMessage(`Added ${quantity}x ${orderState.selectedClothingItem.name} (${orderState.selectedService.name}) - ${formatCurrency(totalPrice)}`);
+    addUserMessage(`${t.customerOrdering?.addedLine || 'Added'} ${quantity}x ${orderState.selectedClothingItem.name} (${orderState.selectedService.name}) - ${formatCurrency(totalPrice)}`);
     
     setTimeout(() => {
-      addBotMessage(`Great! I've added that to your cart. Your current total is ${formatCurrency(orderState.total + totalPrice)}. Would you like to add more items or proceed with your order?`, [
+      addBotMessage((t.customerOrdering?.addedToCart || "Great! I've added that to your cart. Your current total is {total}. Would you like to add more items or proceed with your order?").replace('{total}', formatCurrency(orderState.total + totalPrice)), [
         {
           id: 'add_more',
-          label: '➕ Add More Items',
+          label: `➕ ${t.customerOrdering?.addMoreItems || 'Add More Items'}`,
           action: () => {
             setOrderState(prev => ({ ...prev, step: 'item_selection' }));
-            addBotMessage("Perfect! What other items would you like to add?");
+            addBotMessage(t.customerOrdering?.whatOtherItems || 'Perfect! What other items would you like to add?');
           }
         },
         {
           id: 'proceed_address',
-          label: '📍 Proceed to Delivery',
+          label: `📍 ${t.customerOrdering?.proceedAddress || 'Proceed to Delivery'}`,
           action: () => proceedToAddress()
         }
       ]);
@@ -388,24 +393,24 @@ function CustomerOrderingContent() {
   const proceedToAddress = () => {
     if (addresses.length > 0) {
       setOrderState(prev => ({ ...prev, step: 'address_selection' }));
-      addBotMessage("Now let's set up delivery! I see you have saved addresses. Would you like to use one of them or add a new address?", [
+      addBotMessage(t.customerOrdering?.setupDeliverySaved || "Now let's set up delivery! I see you have saved addresses. Would you like to use one of them or add a new address?", [
         {
           id: 'use_saved',
-          label: '🏠 Use Saved Address',
+          label: `🏠 ${t.customerOrdering?.useSavedAddress || 'Use Saved Address'}`,
           action: () => {} // Will show address selection
         },
         {
           id: 'add_new',
-          label: '📍 Add New Address',
+          label: `📍 ${t.customerOrdering?.addNewAddress || 'Add New Address'}`,
           action: () => {
             setOrderState(prev => ({ ...prev, isCreatingNewAddress: true, step: 'address_collection' }));
-            addBotMessage("I'll help you add a new delivery address. Let's start with some basic information.");
+            addBotMessage(t.customerOrdering?.addNewAddressBot || "I'll help you add a new delivery address. Let's start with some basic information.");
           }
         }
       ]);
     } else {
       setOrderState(prev => ({ ...prev, isCreatingNewAddress: true, step: 'address_collection' }));
-      addBotMessage("Great! Now I need your delivery address. Let me collect some information to ensure accurate delivery.");
+      addBotMessage(t.customerOrdering?.collectDeliveryNow || "Great! Now I need your delivery address. Let me collect some information to ensure accurate delivery.");
     }
   };
 
@@ -417,22 +422,22 @@ function CustomerOrderingContent() {
       cart: prev.cart.filter((_, i) => i !== index)
     }));
     
-    addUserMessage(`Removed ${removedItem.clothingItemName} (${removedItem.serviceName}) from cart`);
-    addBotMessage("Item removed from your cart. Anything else you'd like to adjust?");
+    addUserMessage(`${t.customerOrdering?.removedLine || 'Removed'} ${removedItem.clothingItemName} (${removedItem.serviceName}) ${t.customerOrdering?.fromCart || 'from cart'}`);
+    addBotMessage(t.customerOrdering?.itemRemoved || "Item removed from your cart. Anything else you'd like to adjust?");
   };
 
   // Select address
   const selectAddress = (address: CustomerAddress) => {
     setOrderState(prev => ({ ...prev, selectedAddress: address, step: 'payment_selection' }));
-    addUserMessage(`Selected delivery address: ${address.label}`);
-    addBotMessage(`Perfect! I'll deliver to ${address.label}. Now let's choose how you'd like to pay for your order.`);
+    addUserMessage(`${t.customerOrdering?.selectedDeliveryAddress || 'Selected delivery address:'} ${address.label}`);
+    addBotMessage((t.customerOrdering?.deliverTo || "Perfect! I'll deliver to {label}. Now let's choose how you'd like to pay for your order.").replace('{label}', address.label));
   };
 
   // Select payment method
   const selectPaymentMethod = (method: PaymentMethodType) => {
     setOrderState(prev => ({ ...prev, paymentMethod: method, step: 'order_summary' }));
-    addUserMessage(`Selected payment method: ${method.replace('_', ' ')}`);
-    addBotMessage("Excellent! Let me show you a summary of your complete order before we finalize it.");
+    addUserMessage(`${t.customerOrdering?.selectedPaymentMethod || 'Selected payment method:'} ${method.replace('_', ' ')}`);
+    addBotMessage(t.customerOrdering?.showSummary || 'Excellent! Let me show you a summary of your complete order before we finalize it.');
   };
 
   // Create new address mutation
@@ -450,8 +455,8 @@ function CustomerOrderingContent() {
         newAddress: null,
         step: 'payment_selection' 
       }));
-      addUserMessage(`Added new address: ${newAddress.label}`);
-      addBotMessage(`Perfect! I've saved your new address. Now let's choose how you'd like to pay for your order.`);
+      addUserMessage(`${t.customerOrdering?.addedNewAddress || 'Added new address:'} ${newAddress.label}`);
+      addBotMessage(t.customerOrdering?.savedNewAddress || `Perfect! I've saved your new address. Now let's choose how you'd like to pay for your order.`);
     },
     onError: (error: any) => {
       toast({
@@ -492,8 +497,8 @@ function CustomerOrderingContent() {
       
       if (!response.ok) {
         if (response.status === 401) {
-          // Redirect to authentication
-          setLocation(`/customer-auth?qrCode=${branchCode}`);
+          // Redirect to authentication, preserving branch and intent to continue ordering
+          setLocation(`/customer-auth?branchCode=${branchCode}&next=ordering`);
           throw new Error("Please log in to continue");
         }
         const error = await response.json();
@@ -504,7 +509,7 @@ function CustomerOrderingContent() {
     },
     onSuccess: (order) => {
       setOrderState(prev => ({ ...prev, step: 'confirmation' }));
-      addBotMessage(`🎉 Fantastic! Your order #${order.orderNumber} has been placed successfully! I'll send you updates as we process your laundry.`);
+      addBotMessage((t.customerOrdering?.orderPlacedBot || '🎉 Fantastic! Your order #{orderNumber} has been placed successfully! I\'ll send you updates as we process your laundry.').replace('{orderNumber}', order.orderNumber));
       
       toast({
         title: "Order placed successfully!",
@@ -517,7 +522,7 @@ function CustomerOrderingContent() {
         description: error.message || "Unable to place order. Please try again.",
         variant: "destructive",
       });
-      addBotMessage("I'm sorry, there was an issue placing your order. Please try again or contact our support team.");
+      addBotMessage(t.customerOrdering?.orderPlaceErrorBot || "I'm sorry, there was an issue placing your order. Please try again or contact our support team.");
     },
   });
 
@@ -528,7 +533,7 @@ function CustomerOrderingContent() {
           <CardContent className="pt-6">
             <div className="text-center space-y-4">
               <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-600" />
-              <p className="text-muted-foreground">Setting up your smart ordering assistant...</p>
+              <p className="text-muted-foreground">{t.customerOrdering?.settingUp || 'Setting up your smart ordering assistant...'}</p>
             </div>
           </CardContent>
         </Card>
@@ -564,26 +569,29 @@ function CustomerOrderingContent() {
               </div>
               <div>
                 <h1 className="font-semibold text-sm">{branch.name}</h1>
-                <p className="text-xs text-muted-foreground">Smart Laundry Assistant</p>
+                <p className="text-xs text-muted-foreground">{t.customerOrdering?.assistantTitle || "Smart Laundry Assistant"}</p>
               </div>
             </div>
-            {orderState.cart.length > 0 && (
-              <div className="flex items-center space-x-1">
-                <span className="text-xs text-muted-foreground">{formatCurrency(orderState.total)}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setOrderState(prev => ({ ...prev, step: 'cart_review' }))}
-                  className="relative"
-                  data-testid="button-view-cart"
-                >
-                  <ShoppingCart className="h-4 w-4" />
-                  <Badge variant="destructive" className="absolute -top-2 -right-2 h-5 w-5 p-0 text-xs">
-                    {orderState.cart.length}
-                  </Badge>
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center space-x-1">
+              <LanguageSelector />
+              {orderState.cart.length > 0 && (
+                <>
+                  <span className="text-xs text-muted-foreground">{formatCurrency(orderState.total)}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setOrderState(prev => ({ ...prev, step: 'cart_review' }))}
+                    className="relative"
+                    data-testid="button-view-cart"
+                  >
+                    <ShoppingCart className="h-4 w-4" />
+                    <Badge variant="destructive" className="absolute -top-2 -right-2 h-5 w-5 p-0 text-xs">
+                      {orderState.cart.length}
+                    </Badge>
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
           <Progress value={getProgress()} className="h-1" />
         </div>
@@ -639,14 +647,14 @@ function CustomerOrderingContent() {
             {orderState.step === "item_selection" && (
               <div className="space-y-3">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Choose Your Items</h3>
-                  <p className="text-sm text-muted-foreground">Select the clothing items you'd like to clean</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.chooseItemsTitle || "Choose Your Items"}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.chooseItemsSubtitle || "Select the clothing items you'd like to clean"}</p>
                 </div>
                 
                 {itemsLoading ? (
                   <div className="text-center py-6">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Loading available items...</p>
+                    <p className="text-sm text-muted-foreground">{t.customerOrdering?.loadingItems || "Loading available items..."}</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto">
@@ -679,7 +687,7 @@ function CustomerOrderingContent() {
             {orderState.step === "service_selection" && orderState.selectedClothingItem && (
               <div className="space-y-3">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Choose Service</h3>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.chooseServiceTitle || "Choose Service"}</h3>
                   <p className="text-sm text-muted-foreground">
                     How would you like your <strong>{orderState.selectedClothingItem.name}</strong> cleaned?
                   </p>
@@ -688,7 +696,7 @@ function CustomerOrderingContent() {
                 {servicesLoading ? (
                   <div className="text-center py-6">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Loading services...</p>
+                    <p className="text-sm text-muted-foreground">{t.customerOrdering?.loadingServices || "Loading services..."}</p>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -710,7 +718,7 @@ function CustomerOrderingContent() {
                           <div className="font-bold text-blue-600">
                             {formatCurrency(parseFloat(service.itemPrice))}
                           </div>
-                          <div className="text-xs text-muted-foreground">per item</div>
+                          <div className="text-xs text-muted-foreground">{t.customerOrdering?.perItem || 'per item'}</div>
                         </div>
                       </Button>
                     ))}
@@ -723,7 +731,7 @@ function CustomerOrderingContent() {
             {orderState.step === "quantity_selection" && (
               <div className="space-y-4">
                 <div className="text-center">
-                  <h3 className="font-medium text-lg">How many items?</h3>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.howManyItems || 'How many items?'}</h3>
                   <p className="text-sm text-muted-foreground">
                     {orderState.selectedClothingItem?.name} • {orderState.selectedService?.name}
                   </p>
@@ -746,7 +754,7 @@ function CustomerOrderingContent() {
                   
                   <div className="text-center">
                     <div className="text-3xl font-bold">{orderState.selectedQuantity}</div>
-                    <div className="text-sm text-muted-foreground">items</div>
+                    <div className="text-sm text-muted-foreground">{t.customerOrdering?.itemsLabel || 'items'}</div>
                   </div>
                   
                   <Button
@@ -764,7 +772,7 @@ function CustomerOrderingContent() {
                 </div>
 
                 <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 text-center">
-                  <div className="text-sm text-muted-foreground mb-1">Total Price</div>
+                  <div className="text-sm text-muted-foreground mb-1">{t.customerOrdering?.totalPrice || 'Total Price'}</div>
                   <div className="text-2xl font-bold">
                     {formatCurrency(parseFloat(services.find(s => s.id === orderState.selectedService!.id)?.itemPrice || "0") * orderState.selectedQuantity)}
                   </div>
@@ -777,7 +785,7 @@ function CustomerOrderingContent() {
                   data-testid="button-add-to-cart"
                 >
                   <Plus className="w-4 h-4 mr-2" />
-                  Add to Cart
+                  {t.customerOrdering?.addToCart || 'Add to Cart'}
                 </Button>
               </div>
             )}
@@ -786,8 +794,8 @@ function CustomerOrderingContent() {
             {orderState.step === "cart_review" && (
               <div className="space-y-3">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Your Order</h3>
-                  <p className="text-sm text-muted-foreground">Review your selected items</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.yourOrder || 'Your Order'}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.reviewSelected || 'Review your selected items'}</p>
                 </div>
                 
                 {orderState.cart.length > 0 ? (
@@ -815,17 +823,17 @@ function CustomerOrderingContent() {
                     
                     <div className="border-t pt-3 mt-3">
                       <div className="flex justify-between items-center font-medium">
-                        <span>Subtotal:</span>
+                        <span>{t.customerOrdering?.subtotal || 'Subtotal:'}</span>
                         <span>{formatCurrency(orderState.cart.reduce((sum, item) => sum + item.totalPrice, 0))}</span>
                       </div>
                       {orderState.deliveryFee > 0 && (
                         <div className="flex justify-between items-center text-sm text-muted-foreground">
-                          <span>Delivery fee:</span>
+                          <span>{t.customerOrdering?.deliveryFee || 'Delivery fee:'}</span>
                           <span>{formatCurrency(orderState.deliveryFee)}</span>
                         </div>
                       )}
                       <div className="flex justify-between items-center font-bold text-lg">
-                        <span>Total:</span>
+                        <span>{t.customerOrdering?.total || 'Total:'}</span>
                         <span className="text-blue-600">{formatCurrency(orderState.total)}</span>
                       </div>
                     </div>
@@ -833,7 +841,7 @@ function CustomerOrderingContent() {
                 ) : (
                   <div className="text-center py-6 text-muted-foreground">
                     <ShoppingCart className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                    <p>Your cart is empty</p>
+                    <p>{t.customerOrdering?.cartEmpty || 'Your cart is empty'}</p>
                   </div>
                 )}
               </div>
@@ -843,15 +851,15 @@ function CustomerOrderingContent() {
             {orderState.step === "address_collection" && (
               <div className="space-y-4">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Delivery Address</h3>
-                  <p className="text-sm text-muted-foreground">Let me collect your delivery information</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.deliveryAddress || 'Delivery Address'}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.collectDeliveryInfo || 'Let me collect your delivery information'}</p>
                 </div>
                 
                 <div className="space-y-3">
                   <div>
-                    <label className="text-sm font-medium">Address Label</label>
+                    <label className="text-sm font-medium">{t.customerOrdering?.addressLabel || 'Address Label'}</label>
                     <Input
-                      placeholder="e.g., Home, Office, etc."
+                      placeholder={t.customerOrdering?.addressLabelPlaceholder || 'e.g., Home, Office, etc.'}
                       value={orderState.newAddress?.label || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -862,7 +870,7 @@ function CustomerOrderingContent() {
                   </div>
                   
                   <div>
-                    <label className="text-sm font-medium">Governorate</label>
+                    <label className="text-sm font-medium">{t.customerOrdering?.governorate || 'Governorate'}</label>
                     <Select
                       value={orderState.newAddress?.governorateId || ''}
                       onValueChange={(value) => setOrderState(prev => ({
@@ -871,7 +879,7 @@ function CustomerOrderingContent() {
                       }))}
                     >
                       <SelectTrigger data-testid="select-governorate">
-                        <SelectValue placeholder="Select governorate" />
+                        <SelectValue placeholder={t.customerOrdering?.selectGovernorate || 'Select governorate'} />
                       </SelectTrigger>
                       <SelectContent>
                         {Object.values(groupedCities).map(({ governorate }) => (
@@ -885,7 +893,7 @@ function CustomerOrderingContent() {
                   
                   {orderState.newAddress?.governorateId && (
                     <div>
-                      <label className="text-sm font-medium">Area</label>
+                      <label className="text-sm font-medium">{t.customerOrdering?.area || 'Area'}</label>
                       <Select
                         value={orderState.newAddress?.cityId || ''}
                         onValueChange={(value) => setOrderState(prev => ({
@@ -894,7 +902,7 @@ function CustomerOrderingContent() {
                         }))}
                       >
                         <SelectTrigger data-testid="select-area">
-                          <SelectValue placeholder="Select area" />
+                          <SelectValue placeholder={t.customerOrdering?.selectArea || 'Select area'} />
                         </SelectTrigger>
                         <SelectContent>
                           {groupedCities[orderState.newAddress.governorateId]?.areas.map((area) => (
@@ -908,9 +916,9 @@ function CustomerOrderingContent() {
                   )}
                   
                   <div>
-                    <label className="text-sm font-medium">Street Address</label>
+                    <label className="text-sm font-medium">{t.customerOrdering?.streetAddress || 'Street Address'}</label>
                     <Input
-                      placeholder="Enter your street address"
+                      placeholder={t.customerOrdering?.streetPlaceholder || 'Enter your street address'}
                       value={orderState.newAddress?.street || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -922,7 +930,7 @@ function CustomerOrderingContent() {
                   
                   <div className="grid grid-cols-2 gap-2">
                     <Input
-                      placeholder="Block (optional)"
+                      placeholder={t.customerOrdering?.blockPlaceholder || 'Block (optional)'}
                       value={orderState.newAddress?.block || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -931,7 +939,7 @@ function CustomerOrderingContent() {
                       data-testid="input-block"
                     />
                     <Input
-                      placeholder="Building (optional)"
+                      placeholder={t.customerOrdering?.buildingPlaceholder || 'Building (optional)'}
                       value={orderState.newAddress?.building || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -943,7 +951,7 @@ function CustomerOrderingContent() {
                   
                   <div className="grid grid-cols-2 gap-2">
                     <Input
-                      placeholder="Floor (optional)"
+                      placeholder={t.customerOrdering?.floorPlaceholder || 'Floor (optional)'}
                       value={orderState.newAddress?.floor || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -952,7 +960,7 @@ function CustomerOrderingContent() {
                       data-testid="input-floor"
                     />
                     <Input
-                      placeholder="Apartment (optional)"
+                      placeholder={t.customerOrdering?.apartmentPlaceholder || 'Apartment (optional)'}
                       value={orderState.newAddress?.apartment || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -963,9 +971,9 @@ function CustomerOrderingContent() {
                   </div>
                   
                   <div>
-                    <label className="text-sm font-medium">Additional Info (Optional)</label>
+                    <label className="text-sm font-medium">{t.customerOrdering?.additionalInfo || 'Additional Info (Optional)'}</label>
                     <Textarea
-                      placeholder="Any special delivery instructions..."
+                      placeholder={t.customerOrdering?.additionalInfoPlaceholder || 'Any special delivery instructions...'}
                       value={orderState.newAddress?.additionalInfo || ''}
                       onChange={(e) => setOrderState(prev => ({
                         ...prev,
@@ -982,8 +990,8 @@ function CustomerOrderingContent() {
                         createAddressMutation.mutate(orderState.newAddress);
                       } else {
                         toast({
-                          title: "Missing information",
-                          description: "Please fill in all required fields",
+                          title: t.customerOrdering?.missingInfo || 'Missing information',
+                          description: t.customerOrdering?.fillRequired || 'Please fill in all required fields',
                           variant: "destructive"
                         });
                       }
@@ -995,7 +1003,7 @@ function CustomerOrderingContent() {
                     {createAddressMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : null}
-                    Save Address & Continue
+                    {t.customerOrdering?.saveAddressContinue || 'Save Address & Continue'}
                   </Button>
                 </div>
               </div>
@@ -1005,8 +1013,8 @@ function CustomerOrderingContent() {
             {orderState.step === "address_selection" && (
               <div className="space-y-3">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Choose Delivery Address</h3>
-                  <p className="text-sm text-muted-foreground">Select where you'd like your order delivered</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.chooseDeliveryAddress || 'Choose Delivery Address'}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.selectDeliveryWhere || "Select where you'd like your order delivered"}</p>
                 </div>
                 
                 <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1038,13 +1046,13 @@ function CustomerOrderingContent() {
                     className="w-full h-auto p-4 border-dashed border-blue-300 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/20"
                     onClick={() => {
                       setOrderState(prev => ({ ...prev, isCreatingNewAddress: true, step: 'address_collection', newAddress: { label: '', street: '', area: '', governorateId: '', cityId: '' } }));
-                      addUserMessage("Add new address");
-                      addBotMessage("I'll help you add a new delivery address. Let's start with some basic information.");
+                      addUserMessage(t.customerOrdering?.addNewAddress || 'Add New Address');
+                      addBotMessage(t.customerOrdering?.addNewAddressBot || "I'll help you add a new delivery address. Let's start with some basic information.");
                     }}
                     data-testid="button-add-address"
                   >
                     <Plus className="h-5 w-5 mr-2" />
-                    Add New Address
+                    {t.customerOrdering?.addNewAddress || 'Add New Address'}
                   </Button>
                 </div>
               </div>
@@ -1054,8 +1062,8 @@ function CustomerOrderingContent() {
             {orderState.step === "payment_selection" && (
               <div className="space-y-3">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Payment Method</h3>
-                  <p className="text-sm text-muted-foreground">How would you like to pay?</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.paymentMethod || 'Payment Method'}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.howPay || 'How would you like to pay?'}</p>
                 </div>
                 
                 <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1074,11 +1082,11 @@ function CustomerOrderingContent() {
                         <div className="flex-1 text-left">
                           <div className="font-medium capitalize">{method.method.replace('_', ' ')}</div>
                           <div className="text-sm text-muted-foreground">
-                            {method.method === 'cash' && 'Pay cash when order is delivered'}
-                            {method.method === 'card' && 'Pay with card when order is delivered'}
-                            {method.method === 'knet' && 'Pay online with KNET'}
-                            {method.method === 'credit_card' && 'Pay online with credit card'}
-                            {method.method === 'pay_later' && 'Add to your account balance'}
+                            {method.method === 'cash' && (t.customerOrdering?.payCashDesc || 'Pay cash when order is delivered')}
+                            {method.method === 'card' && (t.customerOrdering?.payCardDesc || 'Pay with card when order is delivered')}
+                            {method.method === 'knet' && (t.customerOrdering?.payKnetDesc || 'Pay online with KNET')}
+                            {method.method === 'credit_card' && (t.customerOrdering?.payCreditCardDesc || 'Pay online with credit card')}
+                            {method.method === 'pay_later' && (t.customerOrdering?.payLaterDesc || 'Add to your account balance')}
                           </div>
                         </div>
                         {orderState.paymentMethod === method.method && (
@@ -1095,13 +1103,13 @@ function CustomerOrderingContent() {
             {orderState.step === "order_summary" && (
               <div className="space-y-4">
                 <div className="text-center mb-4">
-                  <h3 className="font-medium text-lg">Order Summary</h3>
-                  <p className="text-sm text-muted-foreground">Review your complete order</p>
+                  <h3 className="font-medium text-lg">{t.customerOrdering?.orderSummary || 'Order Summary'}</h3>
+                  <p className="text-sm text-muted-foreground">{t.customerOrdering?.reviewCompleteOrder || 'Review your complete order'}</p>
                 </div>
                 
                 <div className="space-y-3 max-h-80 overflow-y-auto">
                   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
-                    <h4 className="font-medium mb-2 text-sm">Items ({orderState.cart.length})</h4>
+                    <h4 className="font-medium mb-2 text-sm">{(t.customerOrdering?.itemsCount || 'Items') + ` (${orderState.cart.length})`}</h4>
                     {orderState.cart.map((item, index) => (
                       <div key={index} className="flex justify-between text-sm py-1">
                         <span>{item.quantity}x {item.clothingItemName} ({item.serviceName})</span>
@@ -1114,7 +1122,7 @@ function CustomerOrderingContent() {
                     <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
                       <h4 className="font-medium mb-2 text-sm flex items-center">
                         <MapPin className="h-4 w-4 mr-1" />
-                        Delivery Address
+                        {t.customerOrdering?.deliveryAddress || 'Delivery Address'}
                       </h4>
                       <p className="text-sm font-medium">{orderState.selectedAddress.label}</p>
                       <p className="text-sm text-muted-foreground">{orderState.selectedAddress.address}</p>
@@ -1124,7 +1132,7 @@ function CustomerOrderingContent() {
                   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
                     <h4 className="font-medium mb-2 text-sm flex items-center">
                       <CreditCard className="h-4 w-4 mr-1" />
-                      Payment Method
+                      {t.customerOrdering?.paymentMethod || 'Payment Method'}
                     </h4>
                     <p className="text-sm capitalize">{orderState.paymentMethod?.replace('_', ' ')}</p>
                   </div>
@@ -1132,18 +1140,18 @@ function CustomerOrderingContent() {
                   <div className="bg-blue-50 dark:bg-blue-950/20 rounded-lg p-3">
                     <div className="space-y-1">
                       <div className="flex justify-between text-sm">
-                        <span>Subtotal:</span>
+                        <span>{t.customerOrdering?.subtotal || 'Subtotal:'}</span>
                         <span>{formatCurrency(orderState.cart.reduce((sum, item) => sum + item.totalPrice, 0))}</span>
                       </div>
                       {orderState.deliveryFee > 0 && (
                         <div className="flex justify-between text-sm">
-                          <span>Delivery fee:</span>
+                          <span>{t.customerOrdering?.deliveryFee || 'Delivery fee:'}</span>
                           <span>{formatCurrency(orderState.deliveryFee)}</span>
                         </div>
                       )}
                       <Separator />
                       <div className="flex justify-between font-bold text-lg">
-                        <span>Total:</span>
+                        <span>{t.customerOrdering?.total || 'Total:'}</span>
                         <span className="text-blue-600">{formatCurrency(orderState.total)}</span>
                       </div>
                     </div>
@@ -1158,7 +1166,7 @@ function CustomerOrderingContent() {
                     data-testid="button-back-to-payment"
                   >
                     <ArrowLeft className="w-4 h-4 mr-2" />
-                    Back
+                    {t.customerOrdering?.back || 'Back'}
                   </Button>
                   <Button 
                     onClick={() => placeOrderMutation.mutate()}
@@ -1171,7 +1179,7 @@ function CustomerOrderingContent() {
                     ) : (
                       <CheckCircle className="w-4 h-4 mr-2" />
                     )}
-                    Place Order
+                    {t.customerOrdering?.placeOrder || 'Place Order'}
                   </Button>
                 </div>
               </div>
@@ -1183,14 +1191,14 @@ function CustomerOrderingContent() {
                 <div className="mx-auto mb-4 p-4 bg-green-100 dark:bg-green-900/20 rounded-full w-fit">
                   <CheckCircle className="h-12 w-12 text-green-600 dark:text-green-400" />
                 </div>
-                <h3 className="font-bold text-xl text-green-600">Order Confirmed!</h3>
+                <h3 className="font-bold text-xl text-green-600">{t.customerOrdering?.orderConfirmed || 'Order Confirmed!'}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Your order has been successfully placed. You'll receive updates as we process your laundry.
+                  {t.customerOrdering?.orderPlacedMessage || "Your order has been successfully placed. You'll receive updates as we process your laundry."}
                 </p>
                 <div className="bg-green-50 dark:bg-green-950/20 rounded-lg p-4">
-                  <p className="text-sm font-medium">Estimated delivery: 2-3 business days</p>
+                  <p className="text-sm font-medium">{t.customerOrdering?.estimatedDelivery || 'Estimated delivery: 2-3 business days'}</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    You'll receive SMS updates about your order status
+                    {t.customerOrdering?.smsUpdates || "You'll receive SMS updates about your order status"}
                   </p>
                 </div>
                 <Button 
@@ -1198,7 +1206,7 @@ function CustomerOrderingContent() {
                   className="w-full"
                   data-testid="button-done"
                 >
-                  Done
+                  {t.customerOrdering?.done || 'Done'}
                 </Button>
               </div>
             )}

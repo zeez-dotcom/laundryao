@@ -1,5 +1,7 @@
 # FlutterPos
 
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 ## Environment Variables
 
 Copy `.env.example` to `.env` and fill in your own values:
@@ -77,3 +79,25 @@ Troubleshooting:
 * In development, a missing `SESSION_SECRET` will generate an ephemeral secret and log a warning.
 * Node v24 can be bleeding edge. If dependencies misbehave, use Node 20 LTS (`nvm use 20`).
 
+## Docker (Dev)
+
+Run API + Postgres with hot-reload:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up --build
+```
+
+The API listens on `http://localhost:5000` and connects to the `db` service via `DATABASE_URL`.
+
+## Docker (Prod)
+
+Build and run production stack (serves built client assets from `dist/public`):
+
+```bash
+docker compose -f docker-compose.prod.yml up --build -d
+```
+
+Update secrets (e.g., Postgres password) before deploying in real environments.
+
+Replace `OWNER/REPO` in the CI badge URL above after pushing to GitHub.

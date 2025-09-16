@@ -3,99 +3,162 @@
 ## 1. Introduction
 
 ### 1.1 Purpose
-This document describes the current software requirements for the FlutterPos system. It serves as the authoritative reference for functionality and must be kept up to date as the project evolves.
+This document defines the complete functional and non-functional requirements for the Laundry POS and Delivery system (“FlutterPos”). It is the single source of truth for intended behavior across the web client, API, and database. It must be updated alongside code changes that affect routes, models, or behavior.
 
 ### 1.2 Scope
-FlutterPos is a point-of-sale and management platform for laundry and product sales. The system includes a web client and an Express/Node.js backend.
+FlutterPos is a multi-branch laundry point-of-sale and delivery management platform. It supports catalog management, customer accounts, prepaid packages, orders and payments, delivery orchestration with real-time updates, analytics, and branch customization.
 
-### 1.3 Definitions, Acronyms, and Abbreviations
-- **SRS**: Software Requirements Specification
-- **API**: Application Programming Interface
-- **POS**: Point of Sale
+### 1.3 Definitions and Acronyms
+- SRS: Software Requirements Specification
+- API: Application Programming Interface
+- POS: Point of Sale
+- RBAC: Role-Based Access Control
+- HMR: Hot Module Replacement (Vite dev)
+
+### 1.4 Stakeholders
+- Business Owner, Branch Managers, Staff, Delivery Drivers, Customers
+- Engineering, QA, DevOps
+
+### 1.5 References
+- Architecture overview: docs/ARCHITECTURE.md
+- API reference and connectivity: docs/API-REFERENCE.md, docs/delivery-orders.md, docs/packages.md
+- Data schema: shared/schema.ts (source of truth for tables and enums)
+- Backup procedures: docs/backup.md
 
 ## 2. Overall Description
 
 ### 2.1 Product Perspective
-The system consists of a React front end, an Express-based REST API, and a PostgreSQL database accessed through Drizzle ORM. WebSocket channels provide real-time features such as delivery updates and driver location tracking.
+- Client: React + Vite single-page app served by the Express server in dev and prod.
+- API: Express REST under `/api/*`, sessions via Postgres (connect-pg-simple), RBAC.
+- Database: PostgreSQL accessed via Drizzle ORM (schema in `shared/schema.ts`).
+- Realtime: WebSockets at `/ws/delivery-orders` and `/ws/driver-location`.
+- Notifications: Email (Nodemailer) and placeholder SMS (pluggable provider).
 
-### 2.2 User Classes and Characteristics
-- **Super Administrator** â full system access across branches.
-- **Branch Administrator** â manages data for a single branch.
-- **Staff** â handles day-to-day operations such as orders and payments.
-- **Delivery Driver** â receives assigned deliveries and streams location updates.
+See docs/ARCHITECTURE.md for component and data-flow details.
+
+### 2.2 User Classes
+- Super Administrator: full system control across all branches.
+- Branch Administrator: manage a specific branch (catalog, pricing, customers, orders, reports).
+- Staff: day-to-day POS operations (orders, payments, customers) under branch permissions.
+- Delivery Driver: receives assigned delivery jobs, streams location updates.
+- Customer (and Guest): place delivery requests/orders, manage addresses, view receipts.
 
 ### 2.3 Operating Environment
-- Node.js runtime
-- PostgreSQL database
-- Modern web browser for the client interface
+- Node.js 18–20 runtime, Express server on `PORT` (default 5000)
+- PostgreSQL (DATABASE_URL)
+- Modern browser (Chrome, Safari, Firefox, Edge)
 
-## 3. System Features and Requirements
+### 2.4 Assumptions and Dependencies
+- Single server process serves both API and client. In dev, Vite middleware is attached to the same server.
+- Sessions stored in Postgres; cookies are HTTP-only; production requires `SESSION_SECRET`.
+- Email/SMS are optional, controlled by env flags; SMS provider integration is pending.
+- DB migrations managed by Drizzle; schema changes originate from `shared/schema.ts`.
 
-### 3.1 Authentication and Authorization
-- User login with session handling.
-- Role-based access control for protected routes.
+## 3. System Features
 
-### 3.2 User Management
-- Create, read, update, and deactivate users.
-- Assign users to branches and roles.
+### 3.1 Authentication and RBAC
+- Login via username/password (passport-local). Super admin hardcoded credentials are available for development only.
+- Sessions: `express-session` with Postgres store. Admin and customer sessions are separated.
+- Guards: `requireAuth`, `requireAdminOrSuperAdmin`, `requireSuperAdmin`, `requireCustomerOrAdmin` enforce access.
+- Customer login and password reset via OTP (sent through NotificationService; dev can expose OTP in debug mode).
 
-### 3.3 Catalog Management
-- Maintain categories, clothing items, products, and laundry services.
-- Configure itemâservice pricing.
+### 3.2 Branch and Catalog Management
+- Branch CRUD, QR generation/management, service cities, delivery settings, payment methods.
+- Catalog: categories, clothing items, laundry services, item-service prices per branch.
+- Bulk catalog import/export (Excel templates).
 
-### 3.4 Customer Management
-- Register and update customers.
-- Track customer balances and contact information.
+### 3.3 Customer and Package Management
+- Customer CRUD, addresses, balances and pay-later flows.
+- Prepaid packages: define package items/credits; assign to customers; track usage and balances.
 
-### 3.5 Orders and Transactions
-- Create orders containing laundry services and product sales.
-- Update order status (e.g., pending, processing, completed, delivered).
-- Record transactions for auditing.
+### 3.4 Orders, Payments, and Receipts
+- Orders with laundry items and products; computes totals with tax and package credits.
+- Status lifecycle for in-store orders and for delivery orders.
+- Payments recorded against orders/customers; email receipts; order print history.
 
-### 3.6 Payments and Billing
-- Record payments against customer accounts or specific orders.
-- Automatically adjust customer balances.
-- Email receipts to customers.
+### 3.5 Delivery Management (Realtime)
+- Customer delivery requests; staff/branch acceptance and assignment to drivers.
+- WebSocket broadcasts for delivery status and driver location.
+- Validated state transitions to prevent invalid jumps.
 
-### 3.7 Delivery Management
-- List and filter delivery orders by status, driver, or branch.
-- Assign drivers to delivery orders.
-- Update delivery order status through the lifecycle: request → accepted → driver enroute → picked up → started processing → ready → out for delivery → completed. Transitions are validated.
-- WebSocket channel for broadcasting delivery order updates.
-- Driver location streaming via WebSocket.
+### 3.6 Reporting and Analytics
+- Sales summaries, top products/services, clothing-item analytics, expenses reports, branch performance.
 
-### 3.8 Reporting
-- Sales summaries over selectable ranges.
-- Top products and services reports.
+### 3.7 Notifications
+- Email via SMTP (Nodemailer) with `SMTP_*` env; SMS stub with `ENABLE_SMS_NOTIFICATIONS`.
 
-### 3.9 Notifications
-- Email service for sending receipts and other notifications.
+### 3.8 Branch Customization and Ads
+- Branch-specific customer dashboard settings and ad management with impressions/clicks.
 
-### 3.10 Packages and Subscriptions
-- Support prepaid packages and monthly subscription tiers with item-type restrictions.
-- Assign packages to customers and track remaining credits.
+## 4. Functional Requirements
 
-## 4. Data Models
-Key persistent entities include:
-- Users and Roles
-- Customers
-- Products and Categories
-- Laundry Services and Pricing
-- Packages and Subscription Tiers
-- Orders and Order Items
-- Payments and Transactions
-- Delivery Orders and Driver Locations
+Authentication
+- FR-101: Admin users can log in and maintain an authenticated session.
+- FR-102: Customers can register, log in, manage addresses, and reset passwords via OTP.
+- FR-103: RBAC must restrict endpoints per role; unauthorized access returns 401/403.
 
-## 5. External Interface Requirements
-- **REST API** under `/api/*` for CRUD operations and reporting.
-- **WebSocket Endpoints** at `/ws/delivery-orders` and `/ws/driver-location`.
+Catalog
+- FR-201: Admins manage categories, clothing items, services, and item-service prices per branch.
+- FR-202: Export/import catalog via Excel templates; parse and validate rows.
 
-## 6. Non-functional Requirements
-- Secure handling of credentials and sessions.
-- Consistent API responses with error handling and logging.
-- Responsive client UI with real-time feedback where appropriate.
-- Regular database backups as described in [backup.md](./backup.md).
+Customers and Packages
+- FR-301: Admins manage customers, balances, and addresses; customers view/update their own data.
+- FR-302: Define and assign packages; track per-item credit usage across multiple packages per transaction.
 
-## 7. Maintenance
-This SRS must be updated whenever routes, models, or feature behavior change. All contributors are responsible for keeping this document current. Run `npm run validate:srs` before committing to confirm that relevant changes are reflected here.
+Orders and Payments
+- FR-401: Create/modify orders; compute totals with applied credits and tax; print and email receipts.
+- FR-402: Update order status; maintain order logs and print counts.
+- FR-403: Record payments with method and audit trail; update customer balances.
+
+Delivery
+- FR-501: Accept delivery requests, assign drivers, enforce status transition rules.
+- FR-502: Broadcast delivery updates and driver locations over WebSockets for live dashboards.
+
+Reporting
+- FR-601: Provide aggregate reports and downloadable exports for expenses and sales metrics.
+
+Customization and Ads
+- FR-701: Branch-specific UI copy and feature flags for the customer dashboard.
+- FR-702: Manage branch ads; record impressions and clicks with optional geo/language metadata.
+
+## 5. Data Model
+- Source of truth: `shared/schema.ts` (Drizzle). Includes enums for order/delivery status, payment methods, etc.
+- Key entities: Users, Branches, Cities, Customers, Addresses, Categories, ClothingItems, LaundryServices, ItemServicePrices, Products, Orders, OrderPrints, Payments, Packages, PackageItems, CustomerPackages/Items, Transactions, Expenses, Ads, Impressions, Clicks, Sessions, Settings.
+- See docs/packages.md and docs/delivery-orders.md for focused data/flow notes.
+
+## 6. External Interface Requirements
+- REST API base: `/api/*` (see docs/API-REFERENCE.md for the full map with guards).
+- WebSockets: `/ws/delivery-orders` (status broadcasts), `/ws/driver-location` (location stream).
+- Static uploads: served from `/uploads/*`.
+- Client SPA: served by Express (dev: Vite middleware; prod: static build).
+
+## 7. Non-functional Requirements
+- Security: HTTP-only cookies, session store in Postgres, rate limiting on auth/reset/register, CSP and headers in prod.
+- Localization: Bilingual fields (English/Arabic) for catalog/branch copy; backfill utility provided.
+- Performance: Paged list endpoints; avoid N+1 via storage layer; gzip compression enabled.
+- Reliability: Exponential backoff for DB readiness; graceful error responses with structured messages.
+- Observability: Console logging of API calls and structured server logs.
+- Backup: Database backup and restore per docs/backup.md.
+
+## 8. Constraints
+- Tech stack: Node 18–20, Express, React, Vite, PostgreSQL, Drizzle, ws.
+- Env vars: `DATABASE_URL` (required), `PORT` (default 5000), `HOST`, `SESSION_SECRET` (prod), `ENABLE_EMAIL_NOTIFICATIONS`, `SMTP_*`, `ENABLE_SMS_NOTIFICATIONS`.
+- Deployment: Single-process server exposes API, SPA, and WS on the same origin/port.
+
+## 9. Connectivity and Ports
+- Server binds `HOST`:`PORT` (default `0.0.0.0:5000`) and serves:
+- API under `/api/*` with session cookies.
+- SPA and static assets; uploads under `/uploads/*`.
+- WebSocket upgrades on `/ws/delivery-orders` and `/ws/driver-location`.
+- Database via `DATABASE_URL` (Postgres). Sessions stored in tables `sessions` and `customer_sessions`.
+
+## 10. Acceptance Criteria (Samples)
+- Admin login establishes a session and returns `/api/auth/user` with role and branch context.
+- Creating an order with package-eligible items consumes credits first and charges only residual quantities; totals reflect tax.
+- Delivery request transitions only permit the configured next statuses; invalid transitions return 400.
+- Reports endpoints return aggregates consistent with underlying transactions and payments for the specified time range.
+
+## 11. Maintenance
+- Keep this SRS in sync with code changes. When modifying `server/`, `client/`, or `shared/`, update docs/SRS.md and run `npm run validate:srs`.
+- Add or adjust sections in docs/ARCHITECTURE.md and docs/API-REFERENCE.md as new capabilities are introduced.
 

@@ -1,27 +1,46 @@
-# Delivery Orders API
+# Delivery Orders
 
-`POST /delivery/orders`
+`POST /api/delivery-orders`
 
-Create a new delivery order for a customer.
+Create a new delivery request/order for a customer.
 
-## Lifecycle
+## Status Lifecycle
 
-Delivery orders move through the following statuses:
+Delivery orders move through validated statuses and only allow specific transitions.
 
-`request` → `accepted` → `driver_enroute` → `picked_up` → `started_processing` → `ready` → `out_for_delivery` → `completed`
+```mermaid
+stateDiagram-v2
+  [*] --> pending
+  pending --> accepted
+  pending --> cancelled
+  accepted --> driver_enroute
+  accepted --> cancelled
+  driver_enroute --> picked_up
+  driver_enroute --> cancelled
+  picked_up --> processing_started
+  picked_up --> cancelled
+  processing_started --> ready
+  processing_started --> cancelled
+  ready --> out_for_delivery
+  ready --> cancelled
+  out_for_delivery --> completed
+  out_for_delivery --> cancelled
+  completed --> [*]
+  cancelled --> [*]
+```
 
-## Consumer
+## Who Calls This
 
-Customers create delivery orders through the public web form. The request must
-include the customer's session cookie; staff credentials are not accepted for
-this endpoint.
+Customers create delivery requests through the public web form. The request must
+include the customer's session cookie. Staff/admin can later accept and manage
+the delivery order via admin endpoints.
 
 ## Authentication
 
-A logged-in customer session is required. Requests without a valid session will
-receive `401 Login required`.
+- Create request: customer session required.
+- Manage (list/accept/assign/update status): admin/staff with branch permissions.
 
-## Request Body
+## Request Body (Create)
 
 ```json
 {
@@ -41,7 +60,7 @@ receive `401 Login required`.
 `dropoffLat` and `dropoffLng` may be supplied when the address is chosen via the
 map interface. When omitted, the server will geocode the provided address.
 
-## Response
+## Response (Create)
 
 Returns `201` on success:
 
@@ -72,6 +91,16 @@ GET /api/delivery-orders?status=driver_enroute
   }
 ]
 ```
+
+## PATCH /api/delivery-orders/:id/accept
+
+Accept a pending delivery request into the branch workflow.
+
+```
+PATCH /api/delivery-order-requests/:id/accept
+```
+
+Returns the accepted delivery order.
 
 ## PATCH /api/delivery-orders/:id/assign
 
@@ -115,3 +144,10 @@ PATCH /api/delivery-orders/o1/status
   "order": { "id": "o1", "orderNumber": "ABC-0001" }
 }
 ```
+
+## Realtime
+
+- Subscribe to delivery updates: `GET ws://<host>/ws/delivery-orders`
+- Message shape: `{ "orderId": string, "deliveryStatus": string | null, "driverId": string | null }`
+- Track driver locations: `GET ws://<host>/ws/driver-location`
+- Initial payload includes latest locations; clients may send `{ "driverId", "lat", "lng" }` to update (per deployment policy).
