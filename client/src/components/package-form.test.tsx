@@ -77,6 +77,7 @@ describe("PackageForm", () => {
     }) as any;
 
     const pkg: Package = {
+      publicId: 1,
       id: "p1",
       branchId: "b1",
       nameEn: "Test",

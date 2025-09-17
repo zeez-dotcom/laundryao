@@ -136,10 +136,14 @@ export default function AdminDashboard() {
     }
 
 
-    if (isSuperAdmin) {
+    if (isAdminLike) {
       sections.push(
-        { value: "branches", label: "Branches", icon: MapPin },
-        { value: "users", label: "Users", icon: Users },
+        // Super admin only sections
+        ...(isSuperAdmin ? [
+          { value: "branches", label: "Branches", icon: MapPin },
+          { value: "users", label: "Users", icon: Users },
+        ] : []),
+        // Bulk Upload available to both admin and super admin
         { value: "bulk-upload", label: "Bulk Upload", icon: Upload }
       );
     }
@@ -258,7 +262,7 @@ export default function AdminDashboard() {
               {selectedSection === "coupons" && isAdminLike && <CouponManager />}
               {selectedSection === "branches" && isSuperAdmin && <BranchManager />}
               {selectedSection === "users" && isSuperAdmin && <UserManager />}
-              {selectedSection === "bulk-upload" && isSuperAdmin && <BulkUploadManager />}
+              {selectedSection === "bulk-upload" && isAdminLike && <BulkUploadManager />}
             </Suspense>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,10 +7,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import type { Branch } from "@shared/schema";
+import { useAuthContext } from "@/context/AuthContext";
 
 export function BulkUploadManager() {
+  const { isSuperAdmin } = useAuthContext();
+  const queryClient = useQueryClient();
   const { data: branches = [] } = useQuery<Branch[]>({
     queryKey: ["/api/branches"],
+    enabled: isSuperAdmin, // only needed for super admins
   });
   const { toast } = useToast();
   const [branchId, setBranchId] = useState("");
@@ -40,10 +44,13 @@ export function BulkUploadManager() {
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
-      if (!file || !branchId) throw new Error("Please select a branch and file");
+      if (!file) throw new Error("Please select a file");
+      if (isSuperAdmin && !branchId) throw new Error("Please select a branch");
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("branchId", branchId);
+      if (isSuperAdmin && branchId) {
+        formData.append("branchId", branchId);
+      }
       const res = await fetch("/api/catalog/bulk-upload", {
         method: "POST",
         body: formData,
@@ -52,11 +59,17 @@ export function BulkUploadManager() {
       if (!res.ok) throw new Error(await res.text());
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (result: any) => {
       setStatus("Upload successful");
       setError(null);
       toast({ title: "Upload successful" });
       setFile(null);
+      // Invalidate relevant caches so new items/prices show immediately
+      queryClient.invalidateQueries({ queryKey: ["/api/clothing-items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/laundry-services"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      // Also invalidate category manager lists
+      queryClient.invalidateQueries({ queryKey: ["/api/categories"] });
     },
     onError: (err: any) => {
       setError(err.message);
@@ -70,20 +83,20 @@ export function BulkUploadManager() {
   });
 
   const handleUpload = () => {
-    if (!branchId) {
-      setError("Please select a branch");
-      toast({
-        title: "Upload failed",
-        description: "Please select a branch",
-        variant: "destructive",
-      });
-      return;
-    }
     if (!file) {
       setError("Please select a file");
       toast({
         title: "Upload failed",
         description: "Please select a file",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (isSuperAdmin && !branchId) {
+      setError("Please select a branch");
+      toast({
+        title: "Upload failed",
+        description: "Please select a branch",
         variant: "destructive",
       });
       return;
@@ -98,21 +111,23 @@ export function BulkUploadManager() {
         <CardDescription>Upload catalog items using an Excel template</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="branch">Branch</Label>
-          <Select value={branchId} onValueChange={setBranchId}>
-            <SelectTrigger id="branch" className="w-[240px]">
-              <SelectValue placeholder="Select branch" />
-            </SelectTrigger>
-            <SelectContent>
-              {branches.map((b) => (
-                <SelectItem key={b.id} value={b.id}>
-                  {b.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {isSuperAdmin && (
+          <div className="space-y-2">
+            <Label htmlFor="branch">Branch</Label>
+            <Select value={branchId} onValueChange={setBranchId}>
+              <SelectTrigger id="branch" className="w-[240px]">
+                <SelectValue placeholder="Select branch" />
+              </SelectTrigger>
+              <SelectContent>
+                {branches.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>
+                    {b.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <Button variant="outline" onClick={downloadTemplate}>
           Download Template
         </Button>
@@ -127,7 +142,7 @@ export function BulkUploadManager() {
         </div>
         <Button
           onClick={handleUpload}
-          disabled={uploadMutation.isPending || !file || !branchId}
+          disabled={uploadMutation.isPending || !file || (isSuperAdmin && !branchId)}
         >
           {uploadMutation.isPending ? "Uploading..." : "Upload"}
         </Button>
@@ -137,4 +152,3 @@ export function BulkUploadManager() {
     </Card>
   );
 }
-

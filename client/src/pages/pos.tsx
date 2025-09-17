@@ -95,7 +95,13 @@ export default function POS() {
     onSuccess: async ({ order, transaction }) => {
       setCurrentOrder(buildReceiptData(order, branch as any, user));
       if (transaction) {
-        setCurrentTransaction(buildReceiptData(transaction, branch as any, user));
+        // Ensure receipts for transactions display customer info (e.g., Walk-in)
+        const txWithCustomer = {
+          ...transaction,
+          customerId: transaction?.customerId ?? order?.customerId,
+          customerName: (transaction as any)?.customerName ?? order?.customerName,
+        };
+        setCurrentTransaction(buildReceiptData(txWithCustomer, branch as any, user));
         toast({
           title: "Order completed successfully",
           description: `Total: ${formatCurrency(order.total)}`,
@@ -167,58 +173,8 @@ export default function POS() {
       return;
     }
 
-    // Get customer - use selected customer or find/create walk-in customer
-    let customer = selectedCustomer;
-    if (!customer) {
-      // Find or create single walk-in customer for this branch
-      try {
-        // First try to find existing walk-in customer
-        const findResponse = await fetch(`/api/customers?phoneNumber=0000000000&branchCode=${branch?.code ?? ""}`, {
-          credentials: "include",
-        });
-        
-        if (findResponse.ok) {
-          const customers = await findResponse.json();
-          customer = customers.find((c: any) => c.name === "Walk-in Customer");
-        }
-        
-        // If no walk-in customer exists, create one
-        if (!customer) {
-          const walkInData = {
-            name: "Walk-in Customer",
-            phoneNumber: "0000000000", // Standard walk-in phone number
-            loyaltyPoints: 0,
-            totalSpent: 0,
-            isActive: true
-          };
-          
-          const createResponse = await fetch("/api/customers", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify(walkInData),
-          });
-          
-          if (createResponse.ok) {
-            customer = await createResponse.json();
-          } else {
-            toast({
-              title: "Unable to process order",
-              description: "Please select a customer or contact support",
-              variant: "destructive",
-            });
-            return;
-          }
-        }
-      } catch (error) {
-        toast({
-          title: "Unable to process order", 
-          description: "Please select a customer and try again",
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+    // Use selected customer; if none selected, server will auto-assign Walk-in
+    const customer = selectedCustomer || null;
     if (!branch?.code) {
       toast({
         title: "Branch required",
@@ -274,7 +230,7 @@ export default function POS() {
 
     const orderData = {
       cartItems: orderItems,
-      customerId: customer?.id || "",
+      customerId: customer?.id, // let server default to Walk-in when undefined
       branchCode: branch.code,
       customerName: customer?.name || "Walk-in",
       customerPhone: customer?.phoneNumber || "",
@@ -302,7 +258,7 @@ export default function POS() {
       total: finalTotal.toFixed(2),
       paymentMethod,
       sellerName: username,
-      customerId: customer?.id || "",
+      customerId: customer?.id || undefined,
     };
 
     checkoutMutation.mutate({ order: orderData, transaction });

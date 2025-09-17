@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { LanguageSelector } from "@/components/language-selector";
 
 function DashboardContent() {
-  const { isAuthenticated, isLoading: authLoading } = useCustomerAuth();
+  const { isAuthenticated, isLoading: authLoading, customer } = useCustomerAuth() as any;
   const { branch } = useAuthContext();
 
   const { data: packages = [], isLoading: pkgLoading } = useQuery<any[]>({
@@ -22,8 +22,15 @@ function DashboardContent() {
   });
 
   const { data: dashboardSettings } = useQuery<any>({
-    queryKey: ["/api/branches", branch?.id, "customer-dashboard-settings"],
-    enabled: !!branch?.id,
+    queryKey: ["/customer/dashboard-settings"],
+    queryFn: async () => (await apiRequest("GET", "/customer/dashboard-settings")).json(),
+    enabled: isAuthenticated,
+  });
+
+  const { data: customization } = useQuery<any>({
+    queryKey: ["/customer/customization"],
+    queryFn: async () => (await apiRequest("GET", "/customer/customization")).json(),
+    enabled: isAuthenticated,
   });
 
   const { data: ads = [] } = useQuery<any[]>({
@@ -44,17 +51,24 @@ function DashboardContent() {
       <div className="absolute top-2 right-2">
         <LanguageSelector />
       </div>
-      {(dashboardSettings?.heroTitleEn || dashboardSettings?.heroTitleAr) && (
-        <div>
-          <h2 className="text-2xl font-bold">{dashboardSettings?.heroTitleEn}</h2>
-          {dashboardSettings?.heroTitleAr && (
-            <div className="text-right" dir="rtl">{dashboardSettings?.heroTitleAr}</div>
+      {(dashboardSettings?.heroTitleEn || customization?.headerText) && (
+        <div className="bg-white border rounded-lg p-4 shadow-sm">
+          {customization?.logoUrl && (
+            <div className="mb-3"><img src={customization.logoUrl} alt="Branch Logo" className="h-10" /></div>
           )}
-          {(dashboardSettings?.heroSubtitleEn || dashboardSettings?.heroSubtitleAr) && (
-            <p className="text-gray-600">
-              {dashboardSettings?.heroSubtitleEn}
-              {dashboardSettings?.heroSubtitleAr && (
-                <span className="block text-right" dir="rtl">{dashboardSettings?.heroSubtitleAr}</span>
+          <h2 className="text-2xl font-bold">
+            {dashboardSettings?.heroTitleEn || customization?.headerText}
+          </h2>
+          {dashboardSettings?.heroTitleAr || customization?.headerTextAr ? (
+            <div className="text-right text-gray-700" dir="rtl">
+              {dashboardSettings?.heroTitleAr || customization?.headerTextAr}
+            </div>
+          ) : null}
+          {(dashboardSettings?.heroSubtitleEn || customization?.subHeaderText) && (
+            <p className="text-gray-600 mt-2">
+              {dashboardSettings?.heroSubtitleEn || customization?.subHeaderText}
+              {(dashboardSettings?.heroSubtitleAr || customization?.subHeaderTextAr) && (
+                <span className="block text-right" dir="rtl">{dashboardSettings?.heroSubtitleAr || customization?.subHeaderTextAr}</span>
               )}
             </p>
           )}
@@ -88,15 +102,39 @@ function DashboardContent() {
         </div>
       )}
 
-      {dashboardSettings?.featuredMessageEn && (
+      {(dashboardSettings?.featuredMessageEn || customization?.tagline) && (
         <Card>
           <CardContent className="p-4">
-            <div>{dashboardSettings.featuredMessageEn}</div>
-            {dashboardSettings.featuredMessageAr && (
-              <div dir="rtl" className="text-right">{dashboardSettings.featuredMessageAr}</div>
+            <div>{dashboardSettings?.featuredMessageEn || customization?.tagline}</div>
+            {(dashboardSettings?.featuredMessageAr || customization?.taglineAr) && (
+              <div dir="rtl" className="text-right">{dashboardSettings?.featuredMessageAr || customization?.taglineAr}</div>
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Customer summary */}
+      {customer && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-gray-600">Active Packages</div>
+              <div className="text-2xl font-bold">{packages.length}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-gray-600">Loyalty Points</div>
+              <div className="text-2xl font-bold">{customer.loyaltyPoints || 0}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-sm text-gray-600">Outstanding Balance</div>
+              <div className="text-2xl font-bold">{customer.balanceDue || '0.00'}</div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {dashboardSettings?.showPackages !== false && (

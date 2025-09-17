@@ -88,6 +88,7 @@ export function PackageForm({ pkg, onClose, branchId, branchCode }: PackageFormP
   const { formatCurrency } = useCurrency();
 
   const previewPackage: Package = {
+    publicId: 0,
     id: pkg?.id || "preview",
     branchId: branchId || "",
     nameEn: name,

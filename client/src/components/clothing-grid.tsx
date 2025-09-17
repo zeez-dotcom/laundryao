@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -29,9 +29,17 @@ interface Category {
 export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const { t } = useTranslation();
   const { isSuperAdmin, branch } = useAuthContext();
   const resolvedBranchId = branchId ?? (isSuperAdmin ? branch?.id : undefined);
+  // simple debounce
+  const [debounced, setDebounced] = useState(searchQuery);
+  useEffect(() => {
+    const h = setTimeout(() => setDebounced(searchQuery), 300);
+    return () => clearTimeout(h);
+  }, [searchQuery]);
 
   const {
     data: fetchedCategories,
@@ -56,22 +64,29 @@ export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
         ];
 
   const { data: productData, isLoading } = useQuery({
-    queryKey: ["/api/products", resolvedBranchId, selectedCategory, searchQuery],
+    queryKey: ["/api/products", resolvedBranchId, selectedCategory, debounced, page, pageSize],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (resolvedBranchId) params.append("branchId", resolvedBranchId);
       if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
-      if (searchQuery) params.append("search", searchQuery);
+      if (debounced) params.append("search", debounced);
+      params.append("limit", String(pageSize));
+      params.append("offset", String((page - 1) * pageSize));
 
       const response = await fetch(`/api/products?${params}`, {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to fetch products");
-      return response.json();
+      const totalHeader = response.headers.get("X-Total-Count");
+      const json = await response.json();
+      const items = (json?.items ?? []) as Product[];
+      const total = totalHeader ? Number(totalHeader) : items.length;
+      return { items, total };
     },
-  }) as { data: { items: Product[] }; isLoading: boolean };
+  }) as { data: { items: Product[]; total: number }; isLoading: boolean };
 
   const products = productData?.items ?? [];
+  const total = productData?.total ?? products.length;
 
   if (isLoading) {
     return <LoadingScreen message={t.loadingProducts} />;
@@ -82,7 +97,7 @@ export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
       {/* Search and Categories */}
       <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
         <div className="flex justify-center">
-          <div className="relative w-full max-w-md">
+          <div className="relative w-full max-w-2xl flex items-center gap-2">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <Input
               type="text"
@@ -91,6 +106,19 @@ export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
+            {searchQuery && (
+              <Button variant="ghost" size="sm" onClick={() => setSearchQuery("")}>Clear</Button>
+            )}
+            <select
+              className="border rounded px-2 py-2 text-sm text-gray-700"
+              value={pageSize}
+              onChange={(e) => { setPage(1); setPageSize(parseInt(e.target.value, 10)); }}
+              aria-label="Items per page"
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
           </div>
         </div>
 
@@ -139,6 +167,9 @@ export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
                   <h3 className="font-medium text-gray-900 mb-1">
                     {item.name}
                   </h3>
+                  {typeof (item as any).publicId === 'number' && (
+                    <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
+                  )}
                   {item.description && (
                     <p className="text-sm text-gray-600 mb-2">{item.description}</p>
                   )}
@@ -165,8 +196,34 @@ export function ClothingGrid({ onSelectProduct, branchId }: ClothingGridProps) {
             ))}
           </div>
         )}
+        <div className="mt-4 flex items-center justify-between">
+          <div className="text-sm text-gray-600">
+            {products.length > 0 && (
+              <span>
+                Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
+              </span>
+            )}
+          </div>
+          <div className="space-x-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => (p * pageSize < total ? p + 1 : p))}
+              disabled={page * pageSize >= total}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
-

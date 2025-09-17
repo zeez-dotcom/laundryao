@@ -13,6 +13,9 @@
     "db:migrate:ci": "cross-env CI=1 dotenv -e .env -- drizzle-kit migrate && echo 'Migrations applied successfully'",
     "db:prepare": "wait-on tcp:localhost:5432 && npm run db:migrate",
     "db:seed": "dotenv -e .env -- tsx server/db/seed.ts",
+    "db:audit:uniques": "npm run db:psql scripts/sql/audit_branch_uniques.sql",
+    "db:cleanup-tests": "npm run db:psql scripts/sql/cleanup_test_artifacts.sql",
+    "db:dedupe": "dotenv -e .env -- tsx scripts/dedupe-branch-uniques.ts",
     "dev": "dotenv -e .env -- tsx -r dotenv/config server/index.ts",
     "start": "node dist/server/index.js",
     "build": "tsc -p tsconfig.json",
@@ -24,7 +27,9 @@
     "db:migrate:fix-categories": "psql \"$DATABASE_URL\" -f migrations/0017_remove_category_duplicates.sql",
     "db:backfill-package-items": "dotenv -e .env -- tsx server/backfill-package-items.ts",
     "db:backfill-item-service-prices-branch": "dotenv -e .env -- tsx server/backfill-item-service-prices-branch.ts",
-    "seed": "dotenv -e .env -- tsx scripts/seed.ts"
+    "seed": "dotenv -e .env -- tsx scripts/seed.ts",
+    "db:truncate": "npm run db:psql scripts/sql/truncate_all_user_tables.sql",
+    "db:truncate:node": "dotenv -e .env -- tsx scripts/truncate-db.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

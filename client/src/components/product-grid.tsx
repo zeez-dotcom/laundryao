@@ -34,6 +34,8 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebounce(searchQuery);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const isMobile = useIsMobile();
   const { t } = useTranslation();
   const { isSuperAdmin, branch } = useAuthContext();
@@ -112,16 +114,18 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
     : [{ id: "all", name: t.allItems, type: "clothing" } as Category, ...(fetchedCategories ?? [])];
 
   const {
-    data: clothingItems,
+    data: clothingData,
     isLoading: clothingItemsLoading,
     isError: clothingItemsError,
     error: clothingItemsErrorMessage,
-  } = useQuery<ClothingItem[]>({
+  } = useQuery<{ items: ClothingItem[]; total: number }>({
     queryKey: [
       "/api/clothing-items",
       selectedCategory,
       debouncedSearch,
       branchCode,
+      page,
+      pageSize,
     ],
     enabled: searchQuery === debouncedSearch,
     queryFn: async () => {
@@ -129,6 +133,8 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
       if (debouncedSearch) params.append("search", debouncedSearch);
       if (branchCode) params.append("branchCode", branchCode);
+      params.append("limit", String(pageSize));
+      params.append("offset", String((page - 1) * pageSize));
       const query = params.toString();
       // Try clothing-items endpoint first
       try {
@@ -136,8 +142,11 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
           credentials: "include",
         });
         if (response.ok) {
+          const totalHeader = response.headers.get("X-Total-Count");
           const json = await response.json();
-          return Array.isArray(json) ? json : json.items ?? [];
+          const items = Array.isArray(json) ? json : json.items ?? [];
+          const total = totalHeader ? Number(totalHeader) : items.length;
+          return { items, total };
         }
       } catch {
         // fall back below
@@ -148,12 +157,15 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
         const text = await prodRes.text();
         throw new Error(text || `Failed to fetch products`);
       }
+      const totalHeader = prodRes.headers.get("X-Total-Count");
       const prodJson = await prodRes.json();
-      return Array.isArray(prodJson) ? prodJson : prodJson.items ?? [];
+      const items = Array.isArray(prodJson) ? prodJson : prodJson.items ?? [];
+      const total = totalHeader ? Number(totalHeader) : items.length;
+      return { items, total };
     },
   });
-
-  const items = clothingItems ?? [];
+  const items = clothingData?.items ?? [];
+  const total = clothingData?.total ?? items.length;
 
   const columnCount = useMemo(() => {
     const w = gridSize.width;
@@ -200,7 +212,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       {/* Search and Categories */}
       <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-          <div className="relative flex-1 max-w-md">
+          <div className="relative flex-1 max-w-md flex items-center gap-2">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <Input
               type="text"
@@ -210,6 +222,19 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
               onChange={(e) => setSearchQuery(e.target.value)}
               data-testid="input-search-items"
             />
+            {searchQuery && (
+              <Button variant="ghost" size="sm" onClick={() => setSearchQuery("")}>Clear</Button>
+            )}
+            <select
+              className="border rounded px-2 py-2 text-sm text-gray-700"
+              value={pageSize}
+              onChange={(e) => { setPage(1); setPageSize(parseInt(e.target.value, 10)); }}
+              aria-label="Items per page"
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
           </div>
           {isMobile && (
             <Button 
@@ -290,6 +315,9 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                     </div>
                     <CardContent className="p-3">
                       <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
+                      {typeof (item as any).publicId === 'number' && (
+                        <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
+                      )}
                       {item.description && (
                         <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
                       )}
@@ -305,6 +333,34 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
             }}
           </Grid>
         )}
+        {/* Pagination */}
+        <div className="mt-4 flex items-center justify-between">
+          <div className="text-sm text-gray-600">
+            {items.length > 0 && (
+              <span>
+                Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
+              </span>
+            )}
+          </div>
+          <div className="space-x-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+            >
+              Prev
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage((p) => (p * pageSize < total ? p + 1 : p))}
+              disabled={page * pageSize >= total}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

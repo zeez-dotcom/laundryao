@@ -91,6 +91,8 @@ export function OrderTracking() {
   const [sortField, setSortField] = useState<"createdAt" | "balanceDue">("createdAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [notifyCustomer, setNotifyCustomer] = useState(false);
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'cash' | 'card' | 'pay_later'>('all');
+  const [payLaterOnly, setPayLaterOnly] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [printInfo, setPrintInfo] = useState<OrderPrint | null>(null);
   const [isReceiptOpen, setReceiptOpen] = useState(false);
@@ -161,7 +163,9 @@ export function OrderTracking() {
   const filteredOrders = orders.filter(order => {
     const matchesSearch = matchesOrderSearch(order, searchTerm);
     const matchesStatus = statusFilter === "all" || order.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesPayment = paymentFilter === 'all' || order.paymentMethod === paymentFilter;
+    const matchesPayLaterOnly = !payLaterOnly || (order.paymentMethod === 'pay_later' && Number(order.balanceDue || 0) > 0);
+    return matchesSearch && matchesStatus && matchesPayment && matchesPayLaterOnly;
   });
 
   const sortedOrders = sortOrders(filteredOrders, sortField, sortDirection);
@@ -254,6 +258,21 @@ export function OrderTracking() {
             <SelectItem value="balanceDue-asc">Lowest balance → Highest balance</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={paymentFilter} onValueChange={(v) => setPaymentFilter(v as any)}>
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder="Payment" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All payments</SelectItem>
+            <SelectItem value="cash">Cash</SelectItem>
+            <SelectItem value="card">Card</SelectItem>
+            <SelectItem value="pay_later">Pay Later</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-2">
+          <Switch id="payLaterOnly" checked={payLaterOnly} onCheckedChange={setPayLaterOnly} />
+          <label htmlFor="payLaterOnly" className="text-sm">Pay Later outstanding</label>
+        </div>
         <div className="flex items-center gap-2">
           <Switch id="notify" checked={notifyCustomer} onCheckedChange={setNotifyCustomer} />
           <label htmlFor="notify" className="text-sm">{t.notifyCustomer}</label>
@@ -368,6 +387,36 @@ export function OrderTracking() {
                     >
                       <Printer className="w-4 h-4 mr-1" /> {t.printReceipt}
                     </Button>
+                    {order.paymentMethod === 'pay_later' && order.customerId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          const defaultAmt = order.total;
+                          const input = window.prompt(`Enter payment amount for order #${order.orderNumber}`, String(defaultAmt));
+                          if (!input) return;
+                          const amt = parseFloat(input);
+                          if (!(amt > 0)) {
+                            toast({ title: t.error, description: 'Invalid amount', variant: 'destructive' });
+                            return;
+                          }
+                          try {
+                            await apiRequest('POST', `/api/customers/${order.customerId}/payments`, {
+                              amount: amt.toFixed(2),
+                              paymentMethod: 'cash',
+                              notes: `Payment for order ${order.orderNumber}`,
+                              receivedBy: user?.username || 'System',
+                            });
+                            toast({ title: t.success, description: 'Payment recorded' });
+                            queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+                          } catch (e) {
+                            toast({ title: t.error, description: t.failedToRecordPayment, variant: 'destructive' });
+                          }
+                        }}
+                      >
+                        Record Payment
+                      </Button>
+                    )}
                     {(order.status === 'received' || order.status === 'start_processing') && (
                       <Button
                         size="sm"

@@ -28,6 +28,7 @@ export const SESSION_SECRET = resolveSessionSecret();
 
 // Hardcoded super admin credentials for development/testing
 const hardcodedAdmin: User = {
+  publicId: 0 as any,
   id: "superadmin",
   username: "superadmin",
   email: null,

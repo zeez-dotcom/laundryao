@@ -67,6 +67,7 @@ export const cityType = enumType("city_type", cityTypeEnum);
 export const paymentMethod = enumType("payment_method", paymentMethodEnum);
 
 export const clothingItems = pgTable("clothing_items", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   name: text("name").notNull(),
   nameAr: text("name_ar"),
@@ -75,9 +76,16 @@ export const clothingItems = pgTable("clothing_items", {
   categoryId: uuid("category_id").references(() => categories.id).notNull(),
   imageUrl: text("image_url"),
   userId: uuid("user_id").references(() => users.id).notNull(),
-});
+  branchId: uuid("branch_id").references(() => branches.id),
+}, (table) => ({
+  clothingItemsBranchNameUnique: uniqueIndex("clothing_items_branch_name_unique").on(
+    table.branchId,
+    table.name,
+  ),
+}));
 
 export const laundryServices = pgTable("laundry_services", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   name: text("name").notNull(),
   nameAr: text("name_ar"),
@@ -86,7 +94,13 @@ export const laundryServices = pgTable("laundry_services", {
   price: numeric("price", { precision: 10, scale: 2 }).notNull(),
   categoryId: uuid("category_id").references(() => categories.id).notNull(),
   userId: uuid("user_id").references(() => users.id).notNull(),
-});
+  branchId: uuid("branch_id").references(() => branches.id),
+}, (table) => ({
+  laundryServicesBranchNameUnique: uniqueIndex("laundry_services_branch_name_unique").on(
+    table.branchId,
+    table.name,
+  ),
+}));
 
 export const itemServicePrices = pgTable(
   "item_service_prices",
@@ -104,18 +118,28 @@ export const itemServicePrices = pgTable(
   }),
 );
 
-export const products = pgTable("products", {
-  id: uuid("id").primaryKey().default(uuidFn),
-  name: text("name").notNull(),
-  description: text("description"),
-  categoryId: uuid("category_id").references(() => categories.id),
-  price: numeric("price", { precision: 10, scale: 2 }).notNull(),
-  stock: integer("stock").notNull().default(0),
-  imageUrl: text("image_url"),
-  itemType: itemType("item_type").notNull().default("everyday"),
-  clothingItemId: uuid("clothing_item_id").references(() => clothingItems.id),
-  branchId: uuid("branch_id").references(() => branches.id).notNull(),
-});
+export const products = pgTable(
+  "products",
+  {
+    publicId: serial("public_id").unique(),
+    id: uuid("id").primaryKey().default(uuidFn),
+    name: text("name").notNull(),
+    description: text("description"),
+    categoryId: uuid("category_id").references(() => categories.id),
+    price: numeric("price", { precision: 10, scale: 2 }).notNull(),
+    stock: integer("stock").notNull().default(0),
+    imageUrl: text("image_url"),
+    itemType: itemType("item_type").notNull().default("everyday"),
+    clothingItemId: uuid("clothing_item_id").references(() => clothingItems.id),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+  },
+  (table) => ({
+    productsBranchNameUnique: uniqueIndex("products_branch_name_unique").on(
+      table.branchId,
+      table.name,
+    ),
+  }),
+);
 
 // Session storage table.
 // (IMPORTANT) This table is mandatory for authentication, don't drop it.
@@ -131,6 +155,7 @@ export const sessions = pgTable(
 
 // User storage table for authentication
 export const users = pgTable("users", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   username: varchar("username", { length: 50 }).unique().notNull(),
   email: varchar("email", { length: 255 }).unique(),
@@ -146,6 +171,7 @@ export const users = pgTable("users", {
 
 // Categories table for organizing clothing items and services
 export const categories = pgTable("categories", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   name: text("name").notNull(),
   nameAr: text("name_ar"),
@@ -158,15 +184,21 @@ export const categories = pgTable("categories", {
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   userId: uuid("user_id").references(() => users.id).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id),
 }, (table) => ({
   userNameUnique: uniqueIndex("categories_user_id_name_unique").on(
     table.userId,
+    table.name,
+  ),
+  categoriesBranchNameUnique: uniqueIndex("categories_branch_name_unique").on(
+    table.branchId,
     table.name,
   ),
 }));
 
 // Branches table for store locations
 export const branches = pgTable("branches", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   name: text("name").notNull(),
   // Arabic/localized counterparts for branch display fields
@@ -209,22 +241,36 @@ export const branchServiceCities = pgTable(
 );
 
 // Customers table for customer management and pay-later tracking
-export const customers = pgTable("customers", {
-  id: uuid("id").primaryKey().default(uuidFn),
-  phoneNumber: varchar("phone_number", { length: 20 }).unique().notNull(),
-  name: text("name").notNull(),
-  nickname: text("nickname").unique(),
-  email: varchar("email", { length: 255 }),
-  passwordHash: text("password_hash"),
-  address: text("address"),
-  branchId: uuid("branch_id").references(() => branches.id).notNull(),
-  balanceDue: numeric("balance_due", { precision: 10, scale: 2 }).default("0.00").notNull(),
-  totalSpent: numeric("total_spent", { precision: 10, scale: 2 }).default("0.00").notNull(),
-  loyaltyPoints: integer("loyalty_points").default(0).notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+export const customers = pgTable(
+  "customers",
+  {
+    publicId: serial("public_id").unique(),
+    id: uuid("id").primaryKey().default(uuidFn),
+    phoneNumber: varchar("phone_number", { length: 20 }).notNull(),
+    name: text("name").notNull(),
+    nickname: text("nickname"),
+    email: varchar("email", { length: 255 }),
+    passwordHash: text("password_hash"),
+    address: text("address"),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    balanceDue: numeric("balance_due", { precision: 10, scale: 2 }).default("0.00").notNull(),
+    totalSpent: numeric("total_spent", { precision: 10, scale: 2 }).default("0.00").notNull(),
+    loyaltyPoints: integer("loyalty_points").default(0).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    customersBranchPhoneUnique: uniqueIndex("customers_branch_phone_unique").on(
+      table.branchId,
+      table.phoneNumber,
+    ),
+    customersBranchNicknameUnique: uniqueIndex("customers_branch_nickname_unique").on(
+      table.branchId,
+      table.nickname,
+    ),
+  }),
+);
 
 export const customerAddresses = pgTable("customer_addresses", {
   id: uuid("id").primaryKey().default(uuidFn),
@@ -242,6 +288,7 @@ export const customerAddresses = pgTable("customer_addresses", {
 
 // Prepaid packages for customers
 export const packages = pgTable("packages", {
+  publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
   nameEn: text("name_en").notNull(),
   nameAr: text("name_ar"),
@@ -291,31 +338,41 @@ export const customerPackageItems = pgTable("customer_package_items", {
 });
 
 // Orders table for order tracking
-export const orders = pgTable("orders", {
-  id: uuid("id").primaryKey().default(uuidFn),
-  orderNumber: varchar("order_number", { length: 20 }).unique().notNull(),
-  customerId: uuid("customer_id").references(() => customers.id),
-  customerName: text("customer_name").notNull(),
-  customerPhone: varchar("customer_phone", { length: 20 }).notNull(),
-  items: jsonb("items").notNull(),
-  subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
-  tax: numeric("tax", { precision: 10, scale: 2 }).notNull(),
-  total: numeric("total", { precision: 10, scale: 2 }).notNull(),
-  paymentMethod: text("payment_method").notNull(), // 'cash', 'card', 'pay_later'
-  status: orderStatus("status").notNull().default("start_processing"), // 'received', 'start_processing', 'processing', 'ready', 'handed_over', 'completed'
-  estimatedPickup: timestamptz("estimated_pickup"),
-  actualPickup: timestamptz("actual_pickup"),
-  readyBy: date("ready_by"),
-  promisedReadyDate: date("promised_ready_date").default(sql`CURRENT_DATE + INTERVAL '1 day'`).notNull(),
-  promisedReadyOption: promisedReadyOption("promised_ready_option").notNull().default("tomorrow"),
-  notes: text("notes"),
-  sellerName: varchar("seller_name", { length: 255 }).notNull(),
-  branchId: uuid("branch_id").references(() => branches.id).notNull(),
-  isDeliveryRequest: boolean("is_delivery_request").default(false).notNull(),
-  packageUsages: jsonb("package_usages"), // Store per-transaction multi-package usage for accurate receipt display
-  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+export const orders = pgTable(
+  "orders",
+  {
+    publicId: serial("public_id").unique(),
+    id: uuid("id").primaryKey().default(uuidFn),
+    orderNumber: varchar("order_number", { length: 20 }).notNull(),
+    customerId: uuid("customer_id").references(() => customers.id),
+    customerName: text("customer_name").notNull(),
+    customerPhone: varchar("customer_phone", { length: 20 }).notNull(),
+    items: jsonb("items").notNull(),
+    subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
+    tax: numeric("tax", { precision: 10, scale: 2 }).notNull(),
+    total: numeric("total", { precision: 10, scale: 2 }).notNull(),
+    paymentMethod: text("payment_method").notNull(), // 'cash', 'card', 'pay_later'
+    status: orderStatus("status").notNull().default("start_processing"), // 'received', 'start_processing', 'processing', 'ready', 'handed_over', 'completed'
+    estimatedPickup: timestamptz("estimated_pickup"),
+    actualPickup: timestamptz("actual_pickup"),
+    readyBy: date("ready_by"),
+    promisedReadyDate: date("promised_ready_date").default(sql`CURRENT_DATE + INTERVAL '1 day'`).notNull(),
+    promisedReadyOption: promisedReadyOption("promised_ready_option").notNull().default("tomorrow"),
+    notes: text("notes"),
+    sellerName: varchar("seller_name", { length: 255 }).notNull(),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    isDeliveryRequest: boolean("is_delivery_request").default(false).notNull(),
+    packageUsages: jsonb("package_usages"), // Store per-transaction multi-package usage for accurate receipt display
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    ordersBranchOrderNumberUnique: uniqueIndex("orders_branch_order_number_unique").on(
+      table.branchId,
+      table.orderNumber,
+    ),
+  }),
+);
 
 
 export const orderPrints = pgTable(
@@ -323,6 +380,7 @@ export const orderPrints = pgTable(
   {
     orderId: uuid("order_id").references(() => orders.id)
       .notNull(),
+    branchId: uuid("branch_id").references(() => branches.id),
     printedAt: timestamptz("printed_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
     printedBy: uuid("printed_by").references(() => users.id).notNull(),
     printNumber: integer("print_number").notNull(),
@@ -337,6 +395,7 @@ export const payments = pgTable("payments", {
   id: uuid("id").primaryKey().default(uuidFn),
   customerId: uuid("customer_id").references(() => customers.id).notNull(),
   orderId: uuid("order_id").references(() => orders.id),
+  branchId: uuid("branch_id").references(() => branches.id),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
   paymentMethod: text("payment_method").notNull(),
   notes: text("notes"),
@@ -373,6 +432,7 @@ export const transactions = pgTable("transactions", {
 export const notifications = pgTable("notifications", {
   id: uuid("id").primaryKey().default(uuidFn),
   orderId: uuid("order_id").references(() => orders.id).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id),
   type: text("type").notNull(), // 'sms' or 'email'
   sentAt: timestamptz("sent_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -396,28 +456,37 @@ export const loyaltyHistory = pgTable("loyalty_history", {
 });
 
 // Coupons for discounts and promotions
-export const coupons = pgTable("coupons", {
-  id: uuid("id").primaryKey().default(uuidFn),
-  code: varchar("code", { length: 50 }).unique().notNull(),
-  nameEn: text("name_en").notNull(),
-  nameAr: text("name_ar"),
-  descriptionEn: text("description_en"),
-  descriptionAr: text("description_ar"),
-  discountType: text("discount_type").notNull(), // "percentage" or "fixed"
-  discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull(),
-  minimumAmount: numeric("minimum_amount", { precision: 10, scale: 2 }),
-  maximumDiscount: numeric("maximum_discount", { precision: 10, scale: 2 }),
-  usageLimit: integer("usage_limit"),
-  usedCount: integer("used_count").default(0).notNull(),
-  validFrom: timestamptz("valid_from").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  validUntil: timestamptz("valid_until"),
-  isActive: boolean("is_active").default(true).notNull(),
-  applicationType: text("application_type").notNull().default("whole_cart"), // "whole_cart", "specific_items", "specific_services"
-  branchId: uuid("branch_id").references(() => branches.id).notNull(),
-  createdBy: uuid("created_by").references(() => users.id).notNull(),
-  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-});
+export const coupons = pgTable(
+  "coupons",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    code: varchar("code", { length: 50 }).notNull(),
+    nameEn: text("name_en").notNull(),
+    nameAr: text("name_ar"),
+    descriptionEn: text("description_en"),
+    descriptionAr: text("description_ar"),
+    discountType: text("discount_type").notNull(), // "percentage" or "fixed"
+    discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull(),
+    minimumAmount: numeric("minimum_amount", { precision: 10, scale: 2 }),
+    maximumDiscount: numeric("maximum_discount", { precision: 10, scale: 2 }),
+    usageLimit: integer("usage_limit"),
+    usedCount: integer("used_count").default(0).notNull(),
+    validFrom: timestamptz("valid_from").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    validUntil: timestamptz("valid_until"),
+    isActive: boolean("is_active").default(true).notNull(),
+    applicationType: text("application_type").notNull().default("whole_cart"), // "whole_cart", "specific_items", "specific_services"
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    createdBy: uuid("created_by").references(() => users.id).notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    couponsBranchCodeUnique: uniqueIndex("coupons_branch_code_unique").on(
+      table.branchId,
+      table.code,
+    ),
+  }),
+);
 
 // Coupon applicable clothing items
 export const couponClothingItems = pgTable("coupon_clothing_items", {
@@ -523,21 +592,31 @@ export const branchPaymentMethods = pgTable(
 );
 
 // Branch QR codes for customer ordering
-export const branchQRCodes = pgTable("branch_qr_codes", {
-  id: uuid("id").primaryKey().default(uuidFn),
-  branchId: uuid("branch_id").references(() => branches.id).notNull(),
-  qrCode: varchar("qr_code", { length: 255 }).unique().notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdBy: uuid("created_by").references(() => users.id).notNull(),
-  createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
-  deactivatedAt: timestamptz("deactivated_at"),
-  deactivatedBy: uuid("deactivated_by").references(() => users.id),
-});
+export const branchQRCodes = pgTable(
+  "branch_qr_codes",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    qrCode: varchar("qr_code", { length: 255 }).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdBy: uuid("created_by").references(() => users.id).notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    deactivatedAt: timestamptz("deactivated_at"),
+    deactivatedBy: uuid("deactivated_by").references(() => users.id),
+  },
+  (table) => ({
+    branchQRCodesBranchQrUnique: uniqueIndex("branch_qr_codes_branch_qr_unique").on(
+      table.branchId,
+      table.qrCode,
+    ),
+  }),
+);
 
 // Delivery orders - enhanced order tracking for delivery system
 export const deliveryOrders = pgTable("delivery_orders", {
   id: uuid("id").primaryKey().default(uuidFn),
   orderId: uuid("order_id").references(() => orders.id).notNull(),
+  branchId: uuid("branch_id").references(() => branches.id),
   deliveryMode: deliveryMode("delivery_mode").notNull(), // 'driver_pickup' or 'customer_cart'
   pickupAddressId: uuid("pickup_address_id").references(() => customerAddresses.id),
   deliveryAddressId: uuid("delivery_address_id").references(() => customerAddresses.id),

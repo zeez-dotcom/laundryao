@@ -51,6 +51,9 @@ export function PackageCard({ pkg }: PackageCardProps) {
               {pkg.nameAr}
             </div>
           )}
+          {typeof (pkg as any).publicId === 'number' && (
+            <div className="text-xs font-normal text-gray-500">Package ID #{(pkg as any).publicId}</div>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">

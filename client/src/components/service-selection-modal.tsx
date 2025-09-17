@@ -125,11 +125,13 @@ export function ServiceSelectionModal({
     const quantity = getQuantity(service.id);
     // Create a clean service object with proper price
     const cleanService: LaundryService = {
+      publicId: 0,
       id: service.id,
       name: service.name,
       nameAr: (service as any).nameAr || null,
       description: service.description,
       descriptionAr: (service as any).descriptionAr || null,
+      branchId: (service as any).branchId || null,
       categoryId: service.categoryId,
       price: getServicePrice(service),
       userId: service.userId,

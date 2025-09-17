@@ -334,6 +334,11 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
   const whatsappQrUrl = (branch as any)?.whatsappQrUrl as string | undefined;
 
   const sellerName = receiptData.sellerName;
+  // Ensure customer name is always shown; default to Walk-in when absent
+  const displayCustomer =
+    (receiptData as any)?.customerName ||
+    (customer as any)?.name ||
+    ((receiptData as any)?.customerId ? (receiptData as any).customerId : 'Walk-in');
 
   const paymentMethodKey =
     receiptData.paymentMethod === 'pay_later'
@@ -592,12 +597,11 @@ export function ReceiptModal({ transaction, order, customer, isOpen, onClose, pr
                 tAr.staff,
                 sellerName
               )}
-            {(receiptData?.customerId || receiptData?.customerName) &&
-              renderBilingualRow(
-                tEn.customer,
-                tAr.customer,
-                receiptData?.customerName || customer?.name || receiptData?.customerId
-              )}
+            {renderBilingualRow(
+              tEn.customer,
+              tAr.customer,
+              displayCustomer
+            )}
           </div>
 
           {/* Delivery Information */}

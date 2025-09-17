@@ -29,6 +29,9 @@ import {
   itemServicePrices,
   categories,
   users,
+  customers,
+  packages,
+  products,
   insertPaymentSchema,
   insertSecuritySettingsSchema,
   insertItemServicePriceSchema,
@@ -59,7 +62,7 @@ import type { IStorage } from "./storage";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { z, ZodError } from "zod";
-import { eq, sql, and, inArray, like, or } from "drizzle-orm";
+import { eq, sql, and, inArray, like, or, ilike } from "drizzle-orm";
 import {
   generateCatalogTemplate,
   parsePrice,
@@ -78,6 +81,23 @@ import ExcelJS from "exceljs";
 import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
+
+// Helper: resolve UUID by numeric publicId for routes that accept :id
+async function resolveUuidByPublicId(table: any, idParam: string) {
+  try {
+    if (idParam && /^\d+$/.test(idParam)) {
+      const num = Number(idParam);
+      const rows = await db
+        .select({ id: table.id })
+        .from(table)
+        .where(eq(table.publicId, num));
+      if (rows && rows[0]?.id) return rows[0].id as string;
+    }
+  } catch {
+    // ignore resolution errors and fall back to original param
+  }
+  return idParam;
+}
 import { WebSocketServer } from "ws";
 
 const upload = multer();
@@ -2620,7 +2640,7 @@ export async function registerRoutes(
 
   app.put("/api/products/:id", requireAdminOrSuperAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = await resolveUuidByPublicId(products, req.params.id);
       const user = req.user as UserWithBranch;
       const branchId =
         user.branchId ?? (user.role === "super_admin" ? req.body.branchId : undefined);
@@ -2643,7 +2663,8 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const categoryId = req.query.categoryId as string | undefined;
-      const product = await storage.getProduct(req.params.id);
+      const resolved = await resolveUuidByPublicId(products, req.params.id);
+      const product = await storage.getProduct(resolved);
       if (!product?.clothingItemId) {
         return res.status(404).json({ message: "Product not found" });
       }
@@ -2677,25 +2698,37 @@ export async function registerRoutes(
         }
         const categoryId = req.query.categoryId as string;
         const search = req.query.search as string | undefined;
-        
-        // Get clothing items for this branch
-        const allItems = await db.select().from(clothingItems);
-        let items = allItems;
-        
+        // Get clothing items only for this branch by joining item_service_prices
+        const conditions: any[] = [eq(itemServicePrices.branchId, branch.id)];
         if (categoryId && categoryId !== "all") {
-          items = items.filter(item => item.categoryId === categoryId);
+          conditions.push(eq(clothingItems.categoryId, categoryId));
         }
-
         if (search) {
-          const term = search.toLowerCase();
-          items = items.filter((item: any) =>
-            item.name?.toLowerCase().includes(term) ||
-            item.description?.toLowerCase().includes(term) ||
-            item.nameAr?.toLowerCase?.().includes(term) ||
-            item.descriptionAr?.toLowerCase?.().includes(term),
+          const pattern = `%${search}%`;
+          conditions.push(
+            or(
+              ilike(clothingItems.name, pattern),
+              ilike(clothingItems.description, pattern),
+              ilike(clothingItems.nameAr, pattern as any),
+              ilike(clothingItems.descriptionAr, pattern as any),
+            ) as any,
           );
         }
-
+        const where = conditions.length ? and(...conditions) : undefined;
+        const rows = await db
+          .select({ item: clothingItems })
+          .from(clothingItems)
+          .innerJoin(
+            itemServicePrices,
+            and(
+              eq(itemServicePrices.clothingItemId, clothingItems.id),
+              eq(itemServicePrices.branchId, branch.id),
+            ),
+          )
+          .$dynamic()
+          .where(where as any)
+          .groupBy(clothingItems.id);
+        const items = rows.map((r) => r.item);
         res.json(items);
       } catch (error) {
         logger.error("Error fetching clothing items (public):", error as any);
@@ -2706,39 +2739,69 @@ export async function registerRoutes(
     async (req, res) => {
         try {
           const categoryId = req.query.categoryId as string;
-          const search = req.query.search as string;
+          const search = req.query.search as string | undefined;
           const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
           const offset = req.query.offset ? parseInt(req.query.offset as string, 10) : undefined;
           const user = req.user as UserWithBranch;
-          const userId = user.id;
 
-          // Super admin can see all items, regular users see their branch items
-          let items: ClothingItem[] = [];
-          if (user.role === 'super_admin') {
-            // For super admin, get all items from all users
-            const allItems = await db.select().from(clothingItems);
-            items = categoryId && categoryId !== "all" 
-              ? allItems.filter(item => item.categoryId === categoryId)
-              : allItems;
-          } else {
-            items = categoryId
-              ? await storage.getClothingItemsByCategory(categoryId, userId)
-              : await storage.getClothingItems(userId);
+          // Resolve effective branch: non-super admins must use their branch; super_admin may provide ?branchId
+          const effectiveBranchId =
+            user.role === 'super_admin' ? ((req.query.branchId as string | undefined) ?? undefined) : (user.branchId || undefined);
+          if (!effectiveBranchId) {
+            return res.status(400).json({ message: 'branchId is required' });
           }
 
+          const conditions: any[] = [eq(itemServicePrices.branchId, effectiveBranchId)];
+          if (categoryId && categoryId !== 'all') {
+            conditions.push(eq(clothingItems.categoryId, categoryId));
+          }
           if (search) {
-            const term = search.toLowerCase();
-            items = items.filter((item: any) =>
-              item.name?.toLowerCase().includes(term) ||
-              item.description?.toLowerCase().includes(term) ||
-              item.nameAr?.toLowerCase?.().includes(term) ||
-              item.descriptionAr?.toLowerCase?.().includes(term),
+            const pattern = `%${search}%`;
+            conditions.push(
+              or(
+                ilike(clothingItems.name, pattern),
+                ilike(clothingItems.description, pattern),
+                ilike(clothingItems.nameAr, pattern as any),
+                ilike(clothingItems.descriptionAr, pattern as any),
+              ) as any,
             );
           }
-          const total = items.length;
-          const sliced = typeof offset === 'number' && typeof limit === 'number' ? items.slice(offset, offset + limit) : items;
-          res.setHeader('X-Total-Count', String(total));
-          res.json(sliced);
+          const where = conditions.length ? and(...conditions) : undefined;
+
+          // Count distinct items for pagination header
+          const [{ count }] = await db
+            .select({ count: sql<number>`count(distinct ${clothingItems.id})` })
+            .from(clothingItems)
+            .innerJoin(
+              itemServicePrices,
+              and(
+                eq(itemServicePrices.clothingItemId, clothingItems.id),
+                eq(itemServicePrices.branchId, effectiveBranchId),
+              ),
+            )
+            .$dynamic()
+            .where(where as any);
+
+          // Fetch items with optional pagination
+          let query = db
+            .select({ item: clothingItems })
+            .from(clothingItems)
+            .innerJoin(
+              itemServicePrices,
+              and(
+                eq(itemServicePrices.clothingItemId, clothingItems.id),
+                eq(itemServicePrices.branchId, effectiveBranchId),
+              ),
+            )
+            .$dynamic()
+            .where(where as any)
+            .groupBy(clothingItems.id);
+          if (typeof limit === 'number') query = query.limit(limit);
+          if (typeof offset === 'number') query = query.offset(offset);
+          const rows = await query;
+          const items = rows.map((r) => r.item);
+          res.setHeader('X-Total-Count', String(Number(count)));
+          res.json(items);
         } catch (error) {
           logger.error("Error fetching clothing items:", error as any);
           res.status(500).json({ message: "Failed to fetch clothing items" });
@@ -2749,7 +2812,8 @@ export async function registerRoutes(
   app.get("/api/clothing-items/:id", requireAuth, async (req, res) => {
     try {
       const userId = (req.user as UserWithBranch).id;
-      const item = await storage.getClothingItem(req.params.id, userId);
+      const resolved = await resolveUuidByPublicId(clothingItems, req.params.id);
+      const item = await storage.getClothingItem(resolved, userId);
       if (!item) {
         return res.status(404).json({ message: "Clothing item not found" });
       }
@@ -2783,7 +2847,7 @@ export async function registerRoutes(
 
   app.put("/api/clothing-items/:id", requireAdminOrSuperAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = await resolveUuidByPublicId(clothingItems, req.params.id);
       const validatedData = insertClothingItemSchema.partial().parse(req.body);
       const userId = (req.user as UserWithBranch).id;
       const updatedItem = await storage.updateClothingItem(id, validatedData, userId);
@@ -2799,7 +2863,7 @@ export async function registerRoutes(
 
   app.delete("/api/clothing-items/:id", requireAdminOrSuperAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = await resolveUuidByPublicId(clothingItems, req.params.id);
       const userId = (req.user as UserWithBranch).id;
       const deleted = await storage.deleteClothingItem(id, userId);
       if (!deleted) {
@@ -2824,10 +2888,15 @@ export async function registerRoutes(
           return res.status(404).json({ message: "Branch not found" });
         }
         const categoryId = req.query.categoryId as string | undefined;
-        
-        // Get services for this clothing item and branch - using simplified approach
-        // Get all services from DB directly for public access
-        const rows = await db
+        // Only return services that have a branch-specific price for this clothing item
+        const conditions: any[] = [
+          eq(itemServicePrices.clothingItemId, req.params.id as any),
+          eq(itemServicePrices.branchId, branch.id),
+        ];
+        if (categoryId && categoryId !== "all") {
+          conditions.push(eq(laundryServices.categoryId, categoryId));
+        }
+        const services = await db
           .select({
             id: laundryServices.id,
             name: laundryServices.name,
@@ -2837,24 +2906,12 @@ export async function registerRoutes(
             categoryId: laundryServices.categoryId,
             price: laundryServices.price,
             userId: laundryServices.userId,
-            itemPrice: sql<string>`COALESCE(${itemServicePrices.price}, ${laundryServices.price})`,
+            branchId: laundryServices.branchId,
+            itemPrice: itemServicePrices.price,
           })
-          .from(laundryServices)
-          .leftJoin(
-            itemServicePrices,
-            and(
-              eq(itemServicePrices.serviceId, laundryServices.id),
-              eq(itemServicePrices.clothingItemId, req.params.id),
-              eq(itemServicePrices.branchId, branch.id),
-            ),
-          )
-          .where(
-            categoryId && categoryId !== "all" 
-              ? eq(laundryServices.categoryId, categoryId)
-              : undefined
-          );
-        
-        const services = rows;
+          .from(itemServicePrices)
+          .innerJoin(laundryServices, eq(itemServicePrices.serviceId, laundryServices.id))
+          .where(and(...conditions));
         res.json(services);
       } catch (error) {
         logger.error("Error fetching item services (public):", error as any);
@@ -2866,8 +2923,9 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const categoryId = req.query.categoryId as string | undefined;
+      const clothingId = await resolveUuidByPublicId(clothingItems, req.params.id);
       const services = await storage.getServicesForClothingItem(
-        req.params.id,
+        clothingId,
         user.id,
         user.branchId!,
         categoryId,
@@ -2914,7 +2972,8 @@ export async function registerRoutes(
   app.get("/api/laundry-services/:id", requireAuth, async (req, res) => {
     try {
       const userId = (req.user as UserWithBranch).id;
-      const service = await storage.getLaundryService(req.params.id, userId);
+      const id = await resolveUuidByPublicId(laundryServices, req.params.id);
+      const service = await storage.getLaundryService(id, userId);
       if (!service) {
         return res.status(404).json({ message: "Laundry service not found" });
       }
@@ -2945,7 +3004,7 @@ export async function registerRoutes(
 
   app.put("/api/laundry-services/:id", requireAdminOrSuperAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = await resolveUuidByPublicId(laundryServices, req.params.id);
       const validatedData = insertLaundryServiceSchema.partial().parse(req.body);
       const userId = (req.user as UserWithBranch).id;
       const updatedService = await storage.updateLaundryService(id, validatedData, userId);
@@ -2961,7 +3020,7 @@ export async function registerRoutes(
 
   app.delete("/api/laundry-services/:id", requireAdminOrSuperAdmin, async (req, res) => {
     try {
-      const { id } = req.params;
+      const id = await resolveUuidByPublicId(laundryServices, req.params.id);
       const userId = (req.user as UserWithBranch).id;
       const deleted = await storage.deleteLaundryService(id, userId);
       if (!deleted) {
@@ -3116,7 +3175,8 @@ export async function registerRoutes(
       if (!branchId) {
         return res.status(400).json({ message: "branchId required" });
       }
-      const pkg = await storage.getPackage(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(packages, req.params.id);
+      const pkg = await storage.getPackage(id, branchId);
       if (!pkg) {
         return res.status(404).json({ message: "Package not found" });
       }
@@ -3162,8 +3222,9 @@ export async function registerRoutes(
       if (!pkgData.branchId) {
         return res.status(400).json({ message: "branchId required" });
       }
+      const id = await resolveUuidByPublicId(packages, req.params.id);
       let pkg = await storage.updatePackage(
-        req.params.id,
+        id,
         {
           ...pkgData,
           packageItems: packageItems?.map((i) => ({
@@ -3193,7 +3254,8 @@ export async function registerRoutes(
       if (!branchId) {
         return res.status(400).json({ message: "branchId required" });
       }
-      const deleted = await storage.deletePackage(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(packages, req.params.id);
+      const deleted = await storage.deletePackage(id, branchId);
       if (!deleted) {
         return res.status(404).json({ message: "Package not found" });
       }
@@ -3221,7 +3283,8 @@ export async function registerRoutes(
           paymentMethod: z.string().default("cash"), // Matches insertPaymentSchema paymentMethod
         })
         .parse(req.body);
-      const pkg = await storage.getPackage(req.params.id, branchId);
+      const pkgId = await resolveUuidByPublicId(packages, req.params.id);
+      const pkg = await storage.getPackage(pkgId, branchId);
       if (!pkg) {
         return res.status(404).json({ message: "Package not found" });
       }
@@ -3242,7 +3305,7 @@ export async function registerRoutes(
       // Check for existing package assignment to prevent duplicates
       const existingAssignments = await storage.getCustomerPackagesWithUsage(customerId);
       const duplicateAssignment = existingAssignments.find(
-        (cp: any) => cp.packageId === req.params.id && 
+        (cp: any) => cp.packageId === pkgId && 
         Math.abs(new Date(cp.startsAt).getTime() - startDate.getTime()) < 60000 // Within 1 minute
       );
       
@@ -3258,7 +3321,7 @@ export async function registerRoutes(
       try {
         // First assign the package
         record = await storage.assignPackageToCustomer(
-          req.params.id,
+          pkgId,
           customerId,
           balance,
           startDate,
@@ -3488,7 +3551,8 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
-      const customer = await storage.getCustomer(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(customers, req.params.id);
+      const customer = await storage.getCustomer(id, branchId);
       if (!customer) {
         return res.status(404).json({ message: "Customer not found" });
       }
@@ -3567,11 +3631,12 @@ export async function registerRoutes(
       const user = req.user as UserWithBranch;
       const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
       const data = insertCustomerSchema.partial().parse(req.body);
-      const existing = await storage.getCustomer(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(customers, req.params.id);
+      const existing = await storage.getCustomer(id, branchId);
       if (!existing) {
         return res.status(404).json({ message: "Customer not found" });
       }
-      const customer = await storage.updateCustomer(req.params.id, data);
+      const customer = await storage.updateCustomer(id, data);
       res.json(customer);
     } catch (error) {
       res.status(500).json({ message: "Failed to update customer" });
@@ -3586,13 +3651,14 @@ export async function registerRoutes(
         .object({ password: z.string().min(8), notify: z.boolean().optional() })
         .parse(req.body);
 
-      const existing = await storage.getCustomer(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(customers, req.params.id);
+      const existing = await storage.getCustomer(id, branchId);
       if (!existing) {
         return res.status(404).json({ message: "Customer not found" });
       }
 
       const passwordHash = await bcrypt.hash(password, 10);
-      const updated = await storage.updateCustomerPassword(req.params.id, passwordHash);
+      const updated = await storage.updateCustomerPassword(id, passwordHash);
 
       if (notify && updated) {
         if (updated.phoneNumber) {
@@ -3621,11 +3687,12 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
-      const existing = await storage.getCustomer(req.params.id, branchId);
+      const id = await resolveUuidByPublicId(customers, req.params.id);
+      const existing = await storage.getCustomer(id, branchId);
       if (!existing) {
         return res.status(404).json({ message: "Customer not found" });
       }
-      const deleted = await storage.deleteCustomer(req.params.id);
+      const deleted = await storage.deleteCustomer(id);
       if (!deleted) {
         return res.status(404).json({ message: "Customer not found" });
       }
@@ -3740,7 +3807,8 @@ export async function registerRoutes(
   app.get("/api/orders/:id", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      const order = await storage.getOrder(req.params.id, user.branchId || undefined);
+      const id = await resolveUuidByPublicId(orders, req.params.id);
+      const order = await storage.getOrder(id, user.branchId || undefined);
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
       }
@@ -3869,9 +3937,6 @@ export async function registerRoutes(
       if (!Array.isArray(cartItems) || cartItems.length === 0) {
         return res.status(400).json({ message: "cartItems required" });
       }
-      if (!customerId) {
-        return res.status(400).json({ message: "customerId required" });
-      }
       if (!branchCode) {
         return res.status(400).json({ message: "branchCode required" });
       }
@@ -3884,8 +3949,33 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Branch mismatch" });
       }
 
+      // If no customer was selected, use/create a branch-scoped Walk-in Customer
+      let effectiveCustomerId: string | undefined = customerId;
+      if (!effectiveCustomerId) {
+        try {
+          const WALKIN_PHONE = "0000000000";
+          const WALKIN_NAME = "Walk-in Customer";
+          const existing = await storage.getCustomerByPhone(WALKIN_PHONE);
+          if (existing && existing.branchId === branch.id) {
+            effectiveCustomerId = existing.id;
+          } else {
+            const walkIn = await storage.createCustomer(
+              { name: WALKIN_NAME, phoneNumber: WALKIN_PHONE, isActive: true } as any,
+              branch.id,
+            );
+            effectiveCustomerId = walkIn.id;
+          }
+        } catch (e) {
+          // If walk-in resolution fails for any reason, continue without customerId
+          // Downstream logic already guards package/loyalty flows by checking customerId.
+          effectiveCustomerId = undefined;
+        }
+      }
+
       // Compute packageUsages server-side for security (don't trust client)
-      const packageComputeResult = await computePackageUsage(customerId, cartItems, storage);
+      const packageComputeResult = effectiveCustomerId
+        ? await computePackageUsage(effectiveCustomerId, cartItems, storage)
+        : null;
       let pkgUsages: any = null;
 
       if (packageComputeResult) {
@@ -3922,7 +4012,7 @@ export async function registerRoutes(
       const orderData = insertOrderSchema.parse({
         ...data,
         items: cartItems,
-        customerId,
+        customerId: effectiveCustomerId,
       });
 
       const order = await storage.createOrder({ ...orderData, branchId: branch.id, packageUsages: pkgUsages });
@@ -4054,7 +4144,8 @@ export async function registerRoutes(
 
   app.patch("/api/orders/:id", requireAuth, async (req, res) => {
     try {
-      const order = await storage.updateOrder(req.params.id, req.body);
+      const id = await resolveUuidByPublicId(orders, req.params.id);
+      const order = await storage.updateOrder(id, req.body);
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
       }
@@ -4068,7 +4159,8 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const { status, notify } = req.body as { status: string; notify?: boolean };
-      const order = await storage.updateOrderStatus(req.params.id, status);
+      const id = await resolveUuidByPublicId(orders, req.params.id);
+      const order = await storage.updateOrderStatus(id, status);
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
       }
@@ -4112,7 +4204,8 @@ export async function registerRoutes(
   app.post("/api/orders/:id/print", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      const record = await storage.recordOrderPrint(req.params.id, user.id);
+      const id = await resolveUuidByPublicId(orders, req.params.id);
+      const record = await storage.recordOrderPrint(id, user.id);
       res.status(201).json(record);
     } catch (error) {
       res.status(500).json({ message: "Failed to record order print" });
@@ -4121,7 +4214,8 @@ export async function registerRoutes(
 
   app.get("/api/orders/:id/prints", requireAuth, async (req, res) => {
     try {
-      const history = await storage.getOrderPrintHistory(req.params.id);
+      const id = await resolveUuidByPublicId(orders, req.params.id);
+      const history = await storage.getOrderPrintHistory(id);
       res.json(history);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch order print history" });
@@ -4324,6 +4418,17 @@ export async function registerRoutes(
       res.json({ products });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch top products" });
+    }
+  });
+
+  app.get("/api/reports/top-packages", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range as string) || "daily";
+      const user = req.user as UserWithBranch;
+      const packages = await storage.getTopPackages(range, user.branchId || undefined);
+      res.json({ packages });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch top packages" });
     }
   });
 
@@ -4605,6 +4710,33 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error updating customer dashboard settings:", error as any);
       res.status(500).json({ message: "Failed to update customer dashboard settings" });
+    }
+  });
+
+  // Customer endpoints for dashboard settings and customization
+  app.get("/customer/dashboard-settings", async (req, res) => {
+    try {
+      const customerId = (req.session as any).customerId as string | undefined;
+      if (!customerId) return res.status(401).json({ message: "Not authenticated" });
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const settings = await storage.getCustomerDashboardSettings(customer.branchId);
+      res.json(settings || {});
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch dashboard settings" });
+    }
+  });
+
+  app.get("/customer/customization", async (req, res) => {
+    try {
+      const customerId = (req.session as any).customerId as string | undefined;
+      if (!customerId) return res.status(401).json({ message: "Not authenticated" });
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ message: "Customer not found" });
+      const customization = await storage.getBranchCustomization(customer.branchId);
+      res.json(customization || {});
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch branch customization" });
     }
   });
 

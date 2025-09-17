@@ -395,6 +395,7 @@ export interface IStorage {
   getOrderStats(range: string, branchId?: string): Promise<{ period: string; count: number; revenue: number }[]>;
   getTopServices(range: string, branchId?: string): Promise<{ service: string; count: number; revenue: number }[]>;
   getTopProducts(range: string, branchId?: string): Promise<{ product: string; count: number; revenue: number }[]>;
+  getTopPackages(range: string, branchId?: string): Promise<{ pkg: string; count: number; revenue: number }[]>;
   getClothingItemStats(
     range: string,
     branchId?: string,
@@ -741,6 +742,7 @@ export class MemStorage {
   async createProduct(product: InsertProduct & { branchId: string }): Promise<Product> {
     const id = randomUUID();
     const newProduct: Product = {
+      publicId: 0 as any,
       id,
       name: product.name,
       description: product.description || null,
@@ -814,6 +816,7 @@ export class MemStorage {
   async createClothingItem(item: InsertClothingItem & { userId: string }): Promise<ClothingItem> {
     const id = randomUUID();
     const newItem: ClothingItem = {
+      publicId: 0 as any,
       id,
       name: item.name,
       nameAr: (item as any).nameAr ?? null,
@@ -822,6 +825,7 @@ export class MemStorage {
       categoryId: item.categoryId,
       imageUrl: item.imageUrl || null,
       userId: item.userId,
+      branchId: null as any,
     };
     this.clothingItems.set(id, newItem);
 
@@ -880,6 +884,7 @@ export class MemStorage {
   async createLaundryService(service: InsertLaundryService & { userId: string }): Promise<LaundryService> {
     const id = randomUUID();
     const newService: LaundryService = {
+      publicId: 0 as any,
       id,
       name: service.name,
       nameAr: (service as any).nameAr ?? null,
@@ -888,6 +893,7 @@ export class MemStorage {
       price: service.price,
       categoryId: service.categoryId,
       userId: service.userId,
+      branchId: null as any,
     };
     this.laundryServices.set(id, newService);
     return newService;
@@ -920,14 +926,14 @@ export class MemStorage {
     branchId: string,
     categoryId?: string,
   ): Promise<(LaundryService & { itemPrice: string })[]> {
-    const serviceMap = this.itemServicePrices.get(
-      `${clothingItemId}:${branchId}`,
-    );
+    const serviceMap = this.itemServicePrices.get(`${clothingItemId}:${branchId}`);
+    if (!serviceMap || serviceMap.size === 0) return [];
     const services: (LaundryService & { itemPrice: string })[] = [];
-    for (const service of Array.from(this.laundryServices.values())) {
+    for (const [serviceId, rec] of serviceMap.entries()) {
+      const service = this.laundryServices.get(serviceId);
+      if (!service) continue;
       if (categoryId && service.categoryId !== categoryId) continue;
-      const itemPrice = serviceMap?.get(service.id)?.price ?? service.price;
-      services.push({ ...service, itemPrice });
+      services.push({ ...service, itemPrice: rec.price });
     }
     return services;
   }
@@ -1085,6 +1091,7 @@ export class MemStorage {
     const id = randomUUID();
     const now = new Date();
     const newPkg: Package = {
+      publicId: 0 as any,
       id,
       nameEn: data.nameEn,
       nameAr: data.nameAr ?? null,
@@ -1273,6 +1280,7 @@ export class MemStorage {
   async recordOrderPrint(orderId: string, printedBy: string): Promise<OrderPrint> {
     const next = this.orderPrints.filter(p => p.orderId === orderId).length + 1;
     const record: OrderPrint = {
+      branchId: null as any,
       orderId,
       printedAt: new Date(),
       printedBy,
@@ -1305,6 +1313,7 @@ export class MemStorage {
     const record: Notification = {
       ...entry,
       id: randomUUID(),
+      branchId: null as any,
       sentAt: new Date(),
     };
     this.notifications.push(record);
@@ -1576,9 +1585,10 @@ export class DatabaseStorage {
     userId: string,
   ): Promise<Category> {
     const { name, type, description, isActive } = categoryData;
+    const [user] = await db.select({ branchId: users.branchId }).from(users).where(eq(users.id, userId));
     const [category] = await db
       .insert(categories)
-      .values({ name, type, description, isActive, userId })
+      .values({ name, type, description, isActive, userId, branchId: user?.branchId || null as any })
       .returning();
     return category;
   }
@@ -1859,16 +1869,19 @@ export class DatabaseStorage {
 
   async createClothingItem(item: InsertClothingItem & { userId: string }): Promise<ClothingItem> {
     return await db.transaction(async (tx) => {
-      const [newItem] = await tx.insert(clothingItems).values(item).returning();
+      const [user] = await tx
+        .select({ branchId: users.branchId })
+        .from(users)
+        .where(eq(users.id, item.userId));
+      const [newItem] = await tx
+        .insert(clothingItems)
+        .values({ ...item, branchId: user?.branchId || null as any })
+        .returning();
       const services = await tx
         .select()
         .from(laundryServices)
         .where(eq(laundryServices.userId, item.userId));
       if (services.length > 0) {
-        const [user] = await tx
-          .select({ branchId: users.branchId })
-          .from(users)
-          .where(eq(users.id, item.userId));
         const branchId = user?.branchId || "default";
         const priceRows = services.map((s) => ({
           clothingItemId: newItem.id,
@@ -1926,7 +1939,11 @@ export class DatabaseStorage {
   }
 
   async createLaundryService(service: InsertLaundryService & { userId: string }): Promise<LaundryService> {
-    const [newService] = await db.insert(laundryServices).values(service).returning();
+    const [user] = await db.select({ branchId: users.branchId }).from(users).where(eq(users.id, service.userId));
+    const [newService] = await db
+      .insert(laundryServices)
+      .values({ ...service, branchId: user?.branchId || null as any })
+      .returning();
     return newService;
   }
 
@@ -1959,6 +1976,8 @@ export class DatabaseStorage {
     const conditions: any[] = [
       eq(laundryServices.userId, userId),
       eq(clothingItems.userId, userId),
+      eq(itemServicePrices.clothingItemId, clothingItemId),
+      eq(itemServicePrices.branchId, branchId),
     ];
     if (categoryId && categoryId !== "all") {
       conditions.push(eq(laundryServices.categoryId, categoryId));
@@ -1966,6 +1985,7 @@ export class DatabaseStorage {
 
     const rows = await db
       .select({
+        publicId: laundryServices.publicId,
         id: laundryServices.id,
         name: laundryServices.name,
         nameAr: laundryServices.nameAr,
@@ -1974,17 +1994,11 @@ export class DatabaseStorage {
         categoryId: laundryServices.categoryId,
         price: laundryServices.price,
         userId: laundryServices.userId,
-        itemPrice: sql<string>`COALESCE(${itemServicePrices.price}, ${laundryServices.price})`,
+        branchId: laundryServices.branchId,
+        itemPrice: itemServicePrices.price,
       })
-      .from(laundryServices)
-      .leftJoin(
-        itemServicePrices,
-        and(
-          eq(itemServicePrices.serviceId, laundryServices.id),
-          eq(itemServicePrices.clothingItemId, clothingItemId),
-          eq(itemServicePrices.branchId, branchId),
-        ),
-      )
+      .from(itemServicePrices)
+      .innerJoin(laundryServices, eq(itemServicePrices.serviceId, laundryServices.id))
       .innerJoin(clothingItems, eq(clothingItems.id, clothingItemId))
       .where(and(...conditions));
 
@@ -2256,38 +2270,87 @@ export class DatabaseStorage {
 
       for (const row of rows) {
         const clothingCategoryId = catMap.get("Clothing Items")!;
-        const [existingItem] = await tx
+
+        // Prefer an existing branch-scoped item with the same name (shared across users in a branch)
+        const [existingBranchItem] = await tx
           .select()
           .from(clothingItems)
           .where(
             and(
-              eq(clothingItems.userId, userId),
               eq(clothingItems.name, row.itemEn),
+              eq(clothingItems.branchId, branchId),
             ),
           );
+
         let clothingItemId: string;
-        if (existingItem) {
-          clothingItemId = existingItem.id;
-          const updatePayload: any = { imageUrl: row.imageUrl };
+        if (existingBranchItem) {
+          clothingItemId = existingBranchItem.id;
+          // Update bilingual fields/image if provided
+          const updatePayload: any = {};
+          if (row.imageUrl) updatePayload.imageUrl = row.imageUrl;
           if (row.itemAr) updatePayload.nameAr = row.itemAr;
-          await tx
-            .update(clothingItems)
-            .set(updatePayload)
-            .where(eq(clothingItems.id, existingItem.id));
-          clothingItemsUpdated++;
+          if (Object.keys(updatePayload).length > 0) {
+            await tx
+              .update(clothingItems)
+              .set(updatePayload)
+              .where(eq(clothingItems.id, existingBranchItem.id));
+          }
         } else {
-          const [insertedItem] = await tx
-            .insert(clothingItems)
-            .values({
-              name: row.itemEn,
-              nameAr: row.itemAr || null,
-              imageUrl: row.imageUrl,
-              categoryId: clothingCategoryId,
-              userId,
-            })
-            .returning();
-          clothingItemId = insertedItem.id;
-          clothingItemsCreated++;
+          // Fall back to user's own item by name
+          const [existingItem] = await tx
+            .select()
+            .from(clothingItems)
+            .where(
+              and(
+                eq(clothingItems.userId, userId),
+                eq(clothingItems.name, row.itemEn),
+              ),
+            );
+
+          if (existingItem) {
+            clothingItemId = existingItem.id;
+            const updatePayload: any = { imageUrl: row.imageUrl };
+            if (row.itemAr) updatePayload.nameAr = row.itemAr;
+            // If this item isn't yet branch-scoped, try to stamp the branch
+            if (!existingItem.branchId) {
+              // Double-check no conflict exists for this branch+name
+              const [conflict] = await tx
+                .select({ id: clothingItems.id })
+                .from(clothingItems)
+                .where(
+                  and(
+                    eq(clothingItems.name, row.itemEn),
+                    eq(clothingItems.branchId, branchId),
+                  ),
+                );
+              if (!conflict) {
+                updatePayload.branchId = branchId;
+              } else {
+                // Reuse the conflicting (canonical) item instead
+                clothingItemId = conflict.id;
+              }
+            }
+            await tx
+              .update(clothingItems)
+              .set(updatePayload)
+              .where(eq(clothingItems.id, clothingItemId));
+            clothingItemsUpdated++;
+          } else {
+            // Create a new branch-scoped item for this user
+            const [insertedItem] = await tx
+              .insert(clothingItems)
+              .values({
+                name: row.itemEn,
+                nameAr: row.itemAr || null,
+                imageUrl: row.imageUrl,
+                categoryId: clothingCategoryId,
+                userId,
+                branchId,
+              })
+              .returning();
+            clothingItemId = insertedItem.id;
+            clothingItemsCreated++;
+          }
         }
 
         const services: Record<string, number | undefined> = {
@@ -3211,9 +3274,20 @@ export class DatabaseStorage {
   }
 
   async createPayment(paymentData: InsertPayment): Promise<Payment> {
+    let branchId: string | undefined = (paymentData as any).branchId;
+    if (!branchId) {
+      if (paymentData.orderId) {
+        const [o] = await db.select({ branchId: orders.branchId }).from(orders).where(eq(orders.id, paymentData.orderId));
+        branchId = o?.branchId;
+      }
+      if (!branchId) {
+        const [c] = await db.select({ branchId: customers.branchId }).from(customers).where(eq(customers.id, paymentData.customerId));
+        branchId = c?.branchId;
+      }
+    }
     const [payment] = await db
       .insert(payments)
-      .values(paymentData)
+      .values({ ...paymentData, branchId: branchId! })
       .returning();
     return payment;
   }
@@ -3285,9 +3359,14 @@ export class DatabaseStorage {
   }
 
   async createNotification(notificationData: InsertNotification): Promise<Notification> {
+    let branchId: string | undefined = (notificationData as any).branchId;
+    if (!branchId) {
+      const [o] = await db.select({ branchId: orders.branchId }).from(orders).where(eq(orders.id, notificationData.orderId));
+      branchId = o?.branchId;
+    }
     const [record] = await db
       .insert(notifications)
-      .values(notificationData)
+      .values({ ...notificationData, branchId: branchId! })
       .returning();
     return record;
   }
@@ -3495,6 +3574,60 @@ export class DatabaseStorage {
 
     return rows.map((r: any) => ({
       product: r.product,
+      count: Number(r.count),
+      revenue: Number(r.revenue),
+    }));
+  }
+
+  async getTopPackages(range: string, branchId?: string): Promise<{ pkg: string; count: number; revenue: number }[]> {
+    const intervalMap: Record<string, string> = {
+      daily: "1 DAY",
+      weekly: "7 DAY",
+      monthly: "1 MONTH",
+      yearly: "1 YEAR",
+    };
+    const interval = intervalMap[range] ?? "1 DAY";
+
+    // For branch scoping: include order-linked payments for that branch OR package payments (orderId null) for customers of that branch
+    const branchJoinFilter = branchId
+      ? `AND (o.branch_id = '${branchId}' OR (p.order_id IS NULL AND c.branch_id = '${branchId}'))`
+      : "";
+
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH filtered AS (
+        SELECT p.*
+        FROM payments p
+        LEFT JOIN orders o ON p.order_id = o.id
+        LEFT JOIN customers c ON p.customer_id = c.id
+        WHERE p.created_at >= NOW() - INTERVAL ${interval}
+          ${branchJoinFilter}
+          AND p.notes ILIKE 'Package purchase:%'
+      ),
+      extracted AS (
+        SELECT
+          COALESCE(
+            (
+              SELECT name_en FROM packages pkg
+              WHERE pkg.id = (
+                SELECT (regexp_matches(p.notes, 'Package ID: ([0-9a-fA-F\-]{36})'))[1]
+              )::uuid
+            ),
+            NULLIF(TRIM(BOTH ' ' FROM (SUBSTRING(p.notes FROM 'Package purchase: ([^\(]+)'))), '')
+          ) AS package_name,
+          p.amount::numeric AS revenue
+        FROM filtered p
+      )
+      SELECT COALESCE(package_name, 'Unknown') AS pkg,
+             COUNT(*) AS count,
+             SUM(revenue) AS revenue
+      FROM extracted
+      GROUP BY COALESCE(package_name, 'Unknown')
+      ORDER BY revenue DESC
+      LIMIT 10;
+    `));
+
+    return rows.map((r: any) => ({
+      pkg: r.pkg,
       count: Number(r.count),
       revenue: Number(r.revenue),
     }));

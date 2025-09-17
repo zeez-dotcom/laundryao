@@ -646,6 +646,9 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
                 </span>
               )}
             </CardTitle>
+            {typeof (customer as any).publicId === 'number' && (
+              <div className="text-xs text-gray-500 mt-1">ID #{(customer as any).publicId}</div>
+            )}
             <CardDescription className="flex items-center mt-1">
               <Phone className="w-3 h-3 mr-1" />
               {customer.phoneNumber}

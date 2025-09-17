@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Filter } from "lucide-react";
+import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Package as PackageIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +19,18 @@ export function ReportsDashboard() {
   });
   const [serviceFilter, setServiceFilter] = useState("all");
   const { formatCurrency } = useCurrency();
+
+  const [range, setRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
+
+  const { data: topPackages = [] } = useQuery<{ pkg: string; count: number; revenue: number }[]>({
+    queryKey: ["/api/reports/top-packages", range],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/top-packages?range=${range}`, { credentials: 'include' });
+      if (!res.ok) return [];
+      const json = await res.json();
+      return json.packages || [];
+    },
+  });
 
   // Fetch transactions with pagination based on date range
   const { data: transactions = [] } = useQuery({
@@ -213,7 +225,7 @@ export function ReportsDashboard() {
         </div>
 
         <Tabs defaultValue="services" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1">
           <TabsTrigger value="services" className="text-xs sm:text-sm">
             <span className="hidden sm:inline">Services</span>
             <span className="sm:hidden">Svc</span>
@@ -225,6 +237,10 @@ export function ReportsDashboard() {
           <TabsTrigger value="daily" className="text-xs sm:text-sm">
             <span className="hidden sm:inline">Daily Revenue</span>
             <span className="sm:hidden">Daily</span>
+          </TabsTrigger>
+          <TabsTrigger value="packages" className="text-xs sm:text-sm">
+            <span className="hidden sm:inline">Packages</span>
+            <span className="sm:hidden">Pkgs</span>
           </TabsTrigger>
           <TabsTrigger value="payments" className="text-xs sm:text-sm">
             <span className="hidden sm:inline">Payment Methods</span>
@@ -264,6 +280,45 @@ export function ReportsDashboard() {
                     </div>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="packages" className="space-y-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle>Top Packages</CardTitle>
+                <div className="flex items-center gap-2">
+                  <PackageIcon className="h-4 w-4 text-muted-foreground" />
+                  <Select value={range} onValueChange={(v) => setRange(v as any)}>
+                    <SelectTrigger className="w-[120px]">
+                      <SelectValue placeholder="Range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="yearly">Yearly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {topPackages.length === 0 ? (
+                  <div className="text-sm text-gray-500">No package sales found for the selected period.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {topPackages.map((p) => (
+                      <div key={p.pkg} className="flex items-center justify-between p-3 border rounded">
+                        <div>
+                          <div className="font-medium">{p.pkg}</div>
+                          <div className="text-xs text-gray-600">{p.count} sold</div>
+                        </div>
+                        <div className="font-bold">{formatCurrency(p.revenue)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
