@@ -87,6 +87,14 @@ import {
 import { PRICE_MATRIX } from "./seed-prices";
 import { haversineDistance } from "./utils/geolocation";
 
+// Simple UUID v4-ish validator to guard raw SQL string interpolation
+function assertUuid(id: string) {
+  const re = /^[0-9a-fA-F-]{36}$/; // lenient but blocks quotes/injection chars
+  if (!re.test(id)) {
+    throw new Error("Invalid UUID format");
+  }
+}
+
 const VALID_DELIVERY_STATUSES = [
   "pending",
   "dispatched",
@@ -193,7 +201,7 @@ export interface IStorage {
     offset?: number,
     itemType?: ItemType,
   ): Promise<{ items: Product[]; total: number }>;
-  getProduct(id: string): Promise<Product | undefined>;
+  getProduct(id: string, branchId?: string): Promise<Product | undefined>;
   createProduct(product: InsertProduct & { branchId: string }): Promise<Product>;
   updateProduct(id: string, product: Partial<InsertProduct>, branchId: string): Promise<Product | undefined>;
   getProductCategories(branchId: string): Promise<Category[]>;
@@ -295,12 +303,12 @@ export interface IStorage {
     offset?: number,
   ): Promise<{ items: Customer[]; total: number }>;
   getCustomer(id: string, branchId?: string): Promise<Customer | undefined>;
-  getCustomerByPhone(phoneNumber: string): Promise<Customer | undefined>;
-  getCustomerByNickname(nickname: string): Promise<Customer | undefined>;
+  getCustomerByPhone(phoneNumber: string, branchId?: string): Promise<Customer | undefined>;
+  getCustomerByNickname(nickname: string, branchId?: string): Promise<Customer | undefined>;
   createCustomer(customer: InsertCustomer, branchId: string): Promise<Customer>;
-  updateCustomer(id: string, customer: Partial<InsertCustomer>): Promise<Customer | undefined>;
+  updateCustomer(id: string, customer: Partial<InsertCustomer>, branchId?: string): Promise<Customer | undefined>;
   updateCustomerPassword(id: string, passwordHash: string): Promise<Customer | undefined>;
-  deleteCustomer(id: string): Promise<boolean>;
+  deleteCustomer(id: string, branchId?: string): Promise<boolean>;
   updateCustomerBalance(id: string, balanceChange: number, branchId?: string): Promise<Customer | undefined>;
 
   // Coupons
@@ -1376,6 +1384,15 @@ export class MemStorage {
 }
 
 export class DatabaseStorage {
+  private async withTenant<T>(branchId: string | undefined, fn: (tx: any) => Promise<T>): Promise<T> {
+    // Always run in a transaction; set app.branch_id if provided
+    return await db.transaction(async (tx) => {
+      if (branchId) {
+        await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
+      }
+      return await fn(tx);
+    });
+  }
   private driverLocations = new Map<string, { lat: number; lng: number; timestamp: Date }>();
   // User methods
   async getUser(id: string): Promise<UserWithBranch | undefined> {
@@ -1748,29 +1765,31 @@ export class DatabaseStorage {
     offset?: number,
     itemType?: ItemType,
   ): Promise<{ items: Product[]; total: number }> {
-    const conditions = [] as any[];
-    if (branchId) conditions.push(eq(products.branchId, branchId));
-    if (itemType) conditions.push(eq(products.itemType, itemType));
-    if (search) {
-      const pattern = `%${search}%`;
-      conditions.push(
-        or(ilike(products.name, pattern), ilike(products.description, pattern)) as any,
-      );
-    }
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [] as any[];
+      if (branchId) conditions.push(eq(products.branchId, branchId));
+      if (itemType) conditions.push(eq(products.itemType, itemType));
+      if (search) {
+        const pattern = `%${search}%`;
+        conditions.push(
+          or(ilike(products.name, pattern), ilike(products.description, pattern)) as any,
+        );
+      }
       const where = conditions.length ? (and(...conditions) as any) : undefined;
-    let query = db.select().from(products).$dynamic();
-    if (where) query = query.where(where);
-    if (typeof limit === "number") query = query.limit(limit);
-    if (typeof offset === "number") query = query.offset(offset);
-    const items = await query;
+      let query = tx.select().from(products).$dynamic();
+      if (where) query = query.where(where);
+      if (typeof limit === "number") query = query.limit(limit);
+      if (typeof offset === "number") query = query.offset(offset);
+      const items = await query;
 
-    let countQuery = db
-      .select({ count: sql<number>`count(*)` })
-      .from(products)
-      .$dynamic();
-    if (where) countQuery = countQuery.where(where);
-    const [{ count }] = await countQuery;
-    return { items, total: Number(count) };
+      let countQuery = tx
+        .select({ count: sql<number>`count(*)` })
+        .from(products)
+        .$dynamic();
+      if (where) countQuery = countQuery.where(where);
+      const [{ count }] = await countQuery;
+      return { items, total: Number(count) };
+    });
   }
 
   async getProductsByCategory(
@@ -1784,41 +1803,49 @@ export class DatabaseStorage {
     if (categoryId === "all") {
       return this.getProducts(branchId, search, limit, offset, itemType);
     }
-    const conditions = [eq(products.categoryId, categoryId)];
-    if (branchId) conditions.push(eq(products.branchId, branchId));
-    if (itemType) conditions.push(eq(products.itemType, itemType));
-    if (search) {
-      const pattern = `%${search}%`;
-      conditions.push(
-        or(ilike(products.name, pattern), ilike(products.description, pattern)) as any,
-      );
-    }
-    const where = conditions.length ? and(...conditions) : undefined;
-    let query = db.select().from(products).$dynamic();
-    if (where) query = query.where(where);
-    if (typeof limit === "number") query = query.limit(limit);
-    if (typeof offset === "number") query = query.offset(offset);
-    const items = await query;
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(products.categoryId, categoryId)];
+      if (branchId) conditions.push(eq(products.branchId, branchId));
+      if (itemType) conditions.push(eq(products.itemType, itemType));
+      if (search) {
+        const pattern = `%${search}%`;
+        conditions.push(
+          or(ilike(products.name, pattern), ilike(products.description, pattern)) as any,
+        );
+      }
+      const where = conditions.length ? and(...conditions) : undefined;
+      let query = tx.select().from(products).$dynamic();
+      if (where) query = query.where(where);
+      if (typeof limit === "number") query = query.limit(limit);
+      if (typeof offset === "number") query = query.offset(offset);
+      const items = await query;
 
-    const countQuery = db
-      .select({ count: sql<number>`count(*)` })
-      .from(products)
-      .$dynamic();
-    const [{ count }] = where ? await countQuery.where(where) : await countQuery;
-    return { items, total: Number(count) };
+      const countQuery = tx
+        .select({ count: sql<number>`count(*)` })
+        .from(products)
+        .$dynamic();
+      const [{ count }] = where ? await countQuery.where(where) : await countQuery;
+      return { items, total: Number(count) };
+    });
   }
 
-  async getProduct(id: string): Promise<Product | undefined> {
-    const [product] = await db.select().from(products).where(eq(products.id, id));
-    return product || undefined;
+  async getProduct(id: string, branchId?: string): Promise<Product | undefined> {
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(products.id, id)];
+      if (branchId) conditions.push(eq(products.branchId, branchId));
+      const [product] = await tx.select().from(products).where(and(...conditions));
+      return product || undefined;
+    });
   }
 
   async createProduct(productData: InsertProduct & { branchId: string }): Promise<Product> {
-    const [product] = await db
-      .insert(products)
-      .values(productData)
-      .returning();
-    return product;
+    return await this.withTenant(productData.branchId, async (tx) => {
+      const [product] = await tx
+        .insert(products)
+        .values(productData)
+        .returning();
+      return product;
+    });
   }
 
   async updateProduct(
@@ -1826,22 +1853,22 @@ export class DatabaseStorage {
     productData: Partial<InsertProduct>,
     branchId: string,
   ): Promise<Product | undefined> {
-    const [updated] = await db
+    const [updated] = await (await this.withTenant(branchId, async (tx) => tx
       .update(products)
       .set(productData)
       .where(and(eq(products.id, id), eq(products.branchId, branchId)))
-      .returning();
+      .returning())) as any;
     return updated || undefined;
   }
 
   async getProductCategories(branchId: string): Promise<Category[]> {
-    const rows = await db
+    const rows = await (await this.withTenant(branchId, async (tx) => tx
       .select({ category: categories })
       .from(categories)
       .innerJoin(products, eq(products.categoryId, categories.id))
       .where(and(eq(products.branchId, branchId), eq(categories.type, "product")))
-      .groupBy(categories.id);
-    return rows.map((r) => r.category);
+      .groupBy(categories.id))) as any;
+    return (rows as any[]).map((r: any) => r.category);
   }
 
   // Clothing Items methods
@@ -2883,96 +2910,127 @@ export class DatabaseStorage {
     limit?: number,
     offset?: number,
   ): Promise<{ items: Customer[]; total: number }> {
-    const conditions = [] as any[];
-    if (search) {
-      const term = `%${search}%`;
-      conditions.push(
-        or(
-          ilike(customers.name, term),
-          ilike(customers.phoneNumber, term),
-          ilike(customers.email, term),
-          ilike(customers.nickname, term),
-        ),
-      );
-    }
-    if (branchId) {
-      conditions.push(eq(customers.branchId, branchId));
-    }
-    if (!includeInactive) {
-      conditions.push(eq(customers.isActive, true));
-    }
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [] as any[];
+      if (search) {
+        const term = `%${search}%`;
+        conditions.push(
+          or(
+            ilike(customers.name, term),
+            ilike(customers.phoneNumber, term),
+            ilike(customers.email, term),
+            ilike(customers.nickname, term),
+          ),
+        );
+      }
+      if (branchId) {
+        conditions.push(eq(customers.branchId, branchId));
+      }
+      if (!includeInactive) {
+        conditions.push(eq(customers.isActive, true));
+      }
 
-    const where = conditions.length ? and(...conditions) : undefined;
+      const where = conditions.length ? and(...conditions) : undefined;
 
-    let query = db.select().from(customers).$dynamic();
-    if (where) query = query.where(where);
-    if (typeof limit === "number") query = query.limit(limit);
-    if (typeof offset === "number") query = query.offset(offset);
-    const items = await query;
+      let query = tx.select().from(customers).$dynamic();
+      if (where) query = query.where(where);
+      if (typeof limit === "number") query = query.limit(limit);
+      if (typeof offset === "number") query = query.offset(offset);
+      const items = await query;
 
-    let countQuery = db
-      .select({ count: sql<number>`count(*)` })
-      .from(customers)
-      .$dynamic();
-    if (where) countQuery = countQuery.where(where);
-    const [{ count }] = await countQuery;
-    return { items, total: Number(count) };
+      let countQuery = tx
+        .select({ count: sql<number>`count(*)` })
+        .from(customers)
+        .$dynamic();
+      if (where) countQuery = countQuery.where(where);
+      const [{ count }] = await countQuery;
+      return { items, total: Number(count) };
+    });
   }
 
   async getCustomer(id: string, branchId?: string): Promise<Customer | undefined> {
-    const where = branchId
-      ? and(eq(customers.id, id), eq(customers.branchId, branchId))
-      : eq(customers.id, id);
-    const [customer] = await db.select().from(customers).where(where);
-    return customer || undefined;
+    return await this.withTenant(branchId, async (tx) => {
+      const where = branchId
+        ? and(eq(customers.id, id), eq(customers.branchId, branchId))
+        : eq(customers.id, id);
+      const [customer] = await tx.select().from(customers).where(where);
+      return customer || undefined;
+    });
   }
 
-  async getCustomerByPhone(phoneNumber: string): Promise<Customer | undefined> {
-    const [customer] = await db.select().from(customers).where(eq(customers.phoneNumber, phoneNumber));
-    return customer || undefined;
+  async getCustomerByPhone(phoneNumber: string, branchId?: string): Promise<Customer | undefined> {
+    return await this.withTenant(branchId, async (tx) => {
+      const where = branchId
+        ? and(eq(customers.phoneNumber, phoneNumber), eq(customers.branchId, branchId))
+        : eq(customers.phoneNumber, phoneNumber);
+      const [customer] = await tx.select().from(customers).where(where);
+      return customer || undefined;
+    });
   }
 
-  async getCustomerByNickname(nickname: string): Promise<Customer | undefined> {
-    const [customer] = await db.select().from(customers).where(eq(customers.nickname, nickname));
-    return customer || undefined;
+  async getCustomerByNickname(nickname: string, branchId?: string): Promise<Customer | undefined> {
+    return await this.withTenant(branchId, async (tx) => {
+      const where = branchId
+        ? and(eq(customers.nickname, nickname), eq(customers.branchId, branchId))
+        : eq(customers.nickname, nickname);
+      const [customer] = await tx.select().from(customers).where(where);
+      return customer || undefined;
+    });
   }
 
   async createCustomer(customerData: InsertCustomer, branchId: string): Promise<Customer> {
-    const [customer] = await db
-      .insert(customers)
-      .values({ ...customerData, branchId })
-      .returning();
-    return customer;
+    return await this.withTenant(branchId, async (tx) => {
+      const [customer] = await tx
+        .insert(customers)
+        .values({ ...customerData, branchId })
+        .returning();
+      return customer;
+    });
   }
 
-  async updateCustomer(id: string, customerData: Partial<InsertCustomer>): Promise<Customer | undefined> {
-    const [updated] = await db
-      .update(customers)
-      .set({ ...customerData, updatedAt: new Date() })
-      .where(eq(customers.id, id))
-      .returning();
-    return updated || undefined;
+  async updateCustomer(id: string, customerData: Partial<InsertCustomer>, branchId?: string): Promise<Customer | undefined> {
+    return await this.withTenant(branchId, async (tx) => {
+      const where = branchId
+        ? and(eq(customers.id, id), eq(customers.branchId, branchId))
+        : eq(customers.id, id);
+      const [updated] = await tx
+        .update(customers)
+        .set({ ...customerData, updatedAt: new Date() })
+        .where(where)
+        .returning();
+      return updated || undefined;
+    });
   }
 
   async updateCustomerPassword(
     id: string,
     passwordHash: string,
   ): Promise<Customer | undefined> {
-    const [updated] = await db
-      .update(customers)
-      .set({ passwordHash, updatedAt: new Date() })
-      .where(eq(customers.id, id))
-      .returning();
-    return updated || undefined;
+    // Derive tenantId first to set RLS context safely
+    const [c] = await db.select({ branchId: customers.branchId }).from(customers).where(eq(customers.id, id));
+    const tenant = c?.branchId as string | undefined;
+    return await this.withTenant(tenant, async (tx) => {
+      const [updated] = await tx
+        .update(customers)
+        .set({ passwordHash, updatedAt: new Date() })
+        .where(eq(customers.id, id))
+        .returning();
+      return updated || undefined;
+    });
   }
 
-  async deleteCustomer(id: string): Promise<boolean> {
-    const [updated] = await db
-      .update(customers)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(customers.id, id))
-      .returning();
-    return !!updated;
+  async deleteCustomer(id: string, branchId?: string): Promise<boolean> {
+    return await this.withTenant(branchId, async (tx) => {
+      const where = branchId
+        ? and(eq(customers.id, id), eq(customers.branchId, branchId))
+        : eq(customers.id, id);
+      const [updated] = await tx
+        .update(customers)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(where)
+        .returning();
+      return !!updated;
+    });
   }
 
   async updateCustomerBalance(
@@ -3054,71 +3112,81 @@ export class DatabaseStorage {
     sortBy: "createdAt" | "balanceDue" = "createdAt",
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
-    const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    let query = db
-      .select({
-        order: orders,
-        customerNickname: customers.nickname,
-        balanceDue: customers.balanceDue,
-      })
-      .from(orders)
-      .leftJoin(customers, eq(orders.customerId, customers.id))
-      .$dynamic();
+      let query = tx
+        .select({
+          order: orders,
+          customerNickname: customers.nickname,
+          balanceDue: customers.balanceDue,
+        })
+        .from(orders)
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .$dynamic();
 
-    if (conditions.length) {
-      query = query.where(and(...conditions));
-    }
+      if (conditions.length) {
+        query = query.where(and(...conditions));
+      }
 
-    const orderByClause =
-      sortBy === "balanceDue"
-        ? sortOrder === "asc"
-          ? asc(customers.balanceDue)
-          : desc(customers.balanceDue)
-        : sortOrder === "asc"
-        ? asc(orders.createdAt)
-        : desc(orders.createdAt);
+      const orderByClause =
+        sortBy === "balanceDue"
+          ? sortOrder === "asc"
+            ? asc(customers.balanceDue)
+            : desc(customers.balanceDue)
+          : sortOrder === "asc"
+          ? asc(orders.createdAt)
+          : desc(orders.createdAt);
 
-    const results = await query.orderBy(orderByClause);
+      const results = await query.orderBy(orderByClause);
 
-    return results.map(({ order, customerNickname, balanceDue }) => ({
-      ...order,
-      customerNickname,
-      balanceDue: balanceDue ?? "0",
-    }));
+      return (results as any[]).map((row: any) => {
+        const { order, customerNickname, balanceDue } = row;
+        return {
+          ...order,
+          customerNickname,
+          balanceDue: balanceDue ?? "0",
+        };
+      });
+    });
   }
 
 
   async getOrder(id: string, branchId?: string): Promise<Order | undefined> {
-    const conditions = [eq(orders.id, id)];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
-    const [order] = await db.select().from(orders).where(and(...conditions));
-    return order || undefined;
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.id, id)];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
+      const [order] = await tx.select().from(orders).where(and(...conditions));
+      return order || undefined;
+    });
   }
 
   async getOrdersByCustomer(
     customerId: string,
     branchId?: string,
   ): Promise<(Order & { paid: string; remaining: string })[]> {
-    const conditions = [eq(orders.customerId, customerId), eq(orders.isDeliveryRequest, false)];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.customerId, customerId), eq(orders.isDeliveryRequest, false)];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    const results = await db
-      .select({
-        order: orders,
-        paid: sql<string>`COALESCE(SUM(${payments.amount}), 0)`,
-      })
-      .from(orders)
-      .leftJoin(payments, eq(orders.id, payments.orderId))
-      .where(and(...conditions))
-      .groupBy(orders.id);
+      const results = await tx
+        .select({
+          order: orders,
+          paid: sql<string>`COALESCE(SUM(${payments.amount}), 0)`,
+        })
+        .from(orders)
+        .leftJoin(payments, eq(orders.id, payments.orderId))
+        .where(and(...conditions))
+        .groupBy(orders.id);
 
-    return results.map(({ order, paid }) => {
-      const paidNum = Number(paid);
-      const total = Number(order.total);
-      const remaining = (total - paidNum).toFixed(2);
-      return { ...order, paid: paidNum.toFixed(2), remaining };
+      return (results as any[]).map((row: any) => {
+        const { order, paid } = row;
+        const paidNum = Number(paid);
+        const total = Number(order.total);
+        const remaining = (total - paidNum).toFixed(2);
+        return { ...order, paid: paidNum.toFixed(2), remaining };
+      });
     });
   }
 
@@ -3128,39 +3196,45 @@ export class DatabaseStorage {
     sortBy: "createdAt" | "balanceDue" = "createdAt",
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
-    const conditions = [eq(orders.status, status as any), eq(orders.isDeliveryRequest, false)];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.status, status as any), eq(orders.isDeliveryRequest, false)];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    let query = db
-      .select({
-        order: orders,
-        customerNickname: customers.nickname,
-        balanceDue: customers.balanceDue,
-      })
-      .from(orders)
-      .leftJoin(customers, eq(orders.customerId, customers.id))
-      .where(and(...conditions));
+      let query = tx
+        .select({
+          order: orders,
+          customerNickname: customers.nickname,
+          balanceDue: customers.balanceDue,
+        })
+        .from(orders)
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .where(and(...conditions));
 
-    const orderByClause =
-      sortBy === "balanceDue"
-        ? sortOrder === "asc"
-          ? asc(customers.balanceDue)
-          : desc(customers.balanceDue)
-        : sortOrder === "asc"
-        ? asc(orders.createdAt)
-        : desc(orders.createdAt);
+      const orderByClause =
+        sortBy === "balanceDue"
+          ? sortOrder === "asc"
+            ? asc(customers.balanceDue)
+            : desc(customers.balanceDue)
+          : sortOrder === "asc"
+          ? asc(orders.createdAt)
+          : desc(orders.createdAt);
 
-    const results = await query.orderBy(orderByClause);
+      const results = await query.orderBy(orderByClause);
 
-    return results.map(({ order, customerNickname, balanceDue }) => ({
-      ...order,
-      customerNickname,
-      balanceDue: balanceDue ?? "0",
-    }));
+      return (results as any[]).map((row: any) => {
+        const { order, customerNickname, balanceDue } = row;
+        return {
+          ...order,
+          customerNickname,
+          balanceDue: balanceDue ?? "0",
+        };
+      });
+    });
   }
 
   async createOrder(orderData: InsertOrder & { branchId: string }): Promise<Order> {
     return await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL app.branch_id = ${orderData.branchId}`);
       const [branch] = await tx
         .select({ code: branches.code, next: branches.nextOrderNumber })
         .from(branches)
@@ -3229,8 +3303,9 @@ export class DatabaseStorage {
   // Payment methods
   async getPayments(branchId?: string): Promise<Payment[]> {
     if (branchId) {
+      return await this.withTenant(branchId, async (tx) => {
       // Include both order-linked payments AND package payments (orderId = null) for the branch
-      const rows = await db
+      const rows = await tx
         .select({ payment: payments })
         .from(payments)
         .leftJoin(orders, eq(payments.orderId, orders.id))
@@ -3241,7 +3316,8 @@ export class DatabaseStorage {
             and(isNull(payments.orderId), eq(customers.branchId, branchId)) // Package payments
           )
         );
-      return rows.map(r => r.payment);
+      return rows.map((r: any) => r.payment);
+      });
     }
     return await db.select().from(payments);
   }
@@ -3285,11 +3361,13 @@ export class DatabaseStorage {
         branchId = c?.branchId;
       }
     }
-    const [payment] = await db
-      .insert(payments)
-      .values({ ...paymentData, branchId: branchId! })
-      .returning();
-    return payment;
+    return await this.withTenant(branchId, async (tx) => {
+      const [payment] = await tx
+        .insert(payments)
+        .values({ ...paymentData, branchId: branchId! })
+        .returning();
+      return payment;
+    });
   }
 
   async getOrderLogs(status?: string): Promise<OrderLog[]> {
@@ -3425,7 +3503,7 @@ export class DatabaseStorage {
     const format = formatMap[range] ?? "%Y-%m-%d";
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? `AND o.branch_id = '${branchId}'` : "";
+    const branchFilter = branchId ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`) : "";
     const { rows } = await db.execute<any>(sql.raw(`
       SELECT period,
              SUM(count) AS count,
@@ -3472,7 +3550,7 @@ export class DatabaseStorage {
     };
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? `AND o.branch_id = '${branchId}'` : "";
+    const branchFilter = branchId ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`) : "";
     const { rows } = await db.execute<any>(sql.raw(`
       SELECT service,
              SUM(count) AS count,
@@ -3530,7 +3608,7 @@ export class DatabaseStorage {
     };
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? `AND o.branch_id = '${branchId}'` : "";
+    const branchFilter = branchId ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`) : "";
     const { rows } = await db.execute<any>(sql.raw(`
       SELECT product,
              SUM(count) AS count,
@@ -3590,7 +3668,7 @@ export class DatabaseStorage {
 
     // For branch scoping: include order-linked payments for that branch OR package payments (orderId null) for customers of that branch
     const branchJoinFilter = branchId
-      ? `AND (o.branch_id = '${branchId}' OR (p.order_id IS NULL AND c.branch_id = '${branchId}'))`
+      ? (assertUuid(branchId), `AND (o.branch_id = '${branchId.replace(/'/g, "''")}' OR (p.order_id IS NULL AND c.branch_id = '${branchId.replace(/'/g, "''")}'))`)
       : "";
 
     const { rows } = await db.execute<any>(sql.raw(`
@@ -3710,17 +3788,19 @@ export class DatabaseStorage {
 
   // Coupon methods
   async getCoupons(branchId?: string): Promise<Coupon[]> {
-    if (branchId) {
-      return await db.select().from(coupons).where(eq(coupons.branchId, branchId));
-    }
-    return await db.select().from(coupons);
+    return await this.withTenant(branchId, async (tx) => {
+      if (branchId) {
+        return await tx.select().from(coupons).where(eq(coupons.branchId, branchId));
+      }
+      return await tx.select().from(coupons);
+    });
   }
 
   async getCoupon(id: string, branchId?: string): Promise<Coupon | undefined> {
     const conditions = [eq(coupons.id, id)];
     if (branchId) conditions.push(eq(coupons.branchId, branchId));
     
-    const [coupon] = await db.select().from(coupons).where(and(...conditions));
+    const [coupon] = await (await this.withTenant(branchId, async (tx) => tx.select().from(coupons).where(and(...conditions)))) as any;
     return coupon || undefined;
   }
 
@@ -3728,12 +3808,13 @@ export class DatabaseStorage {
     const conditions = [eq(coupons.code, code)];
     if (branchId) conditions.push(eq(coupons.branchId, branchId));
     
-    const [coupon] = await db.select().from(coupons).where(and(...conditions));
+    const [coupon] = await (await this.withTenant(branchId, async (tx) => tx.select().from(coupons).where(and(...conditions)))) as any;
     return coupon || undefined;
   }
 
   async createCoupon(coupon: InsertCoupon, branchId: string, createdBy: string, clothingItemIds?: string[], serviceIds?: string[]): Promise<Coupon> {
     return await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
       const [newCoupon] = await tx
         .insert(coupons)
         .values({ ...coupon, branchId, createdBy })
@@ -3763,6 +3844,7 @@ export class DatabaseStorage {
 
   async updateCoupon(id: string, coupon: Partial<InsertCoupon>, branchId?: string, clothingItemIds?: string[], serviceIds?: string[]): Promise<Coupon | undefined> {
     return await db.transaction(async (tx) => {
+      if (branchId) await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
       const conditions = [eq(coupons.id, id)];
       if (branchId) conditions.push(eq(coupons.branchId, branchId));
       
@@ -3802,7 +3884,7 @@ export class DatabaseStorage {
     const conditions = [eq(coupons.id, id)];
     if (branchId) conditions.push(eq(coupons.branchId, branchId));
     
-    const result = await db.delete(coupons).where(and(...conditions));
+    const result = await this.withTenant(branchId, async (tx) => await tx.delete(coupons).where(and(...conditions)));
     return result.rowCount ? result.rowCount > 0 : false;
   }
 
@@ -3913,11 +3995,13 @@ export class DatabaseStorage {
 
   // Branch QR Code methods
   async getBranchQRCodes(branchId: string): Promise<BranchQRCode[]> {
-    return await db
-      .select()
-      .from(branchQRCodes)
-      .where(eq(branchQRCodes.branchId, branchId))
-      .orderBy(desc(branchQRCodes.createdAt));
+    return await this.withTenant(branchId, async (tx) => {
+      return await tx
+        .select()
+        .from(branchQRCodes)
+        .where(eq(branchQRCodes.branchId, branchId))
+        .orderBy(desc(branchQRCodes.createdAt));
+    });
   }
 
   async getActiveBranchQRCode(branchId: string): Promise<BranchQRCode | undefined> {
@@ -4101,20 +4185,25 @@ export class DatabaseStorage {
   }
 
   async getDeliveryOrderRequests(branchId?: string): Promise<(Order & { delivery: DeliveryOrder })[]> {
-    const conditions = [eq(orders.isDeliveryRequest, true)] as any[];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.isDeliveryRequest, true)] as any[];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    const results = await db
-      .select({ order: orders, delivery: deliveryOrders })
-      .from(orders)
-      .innerJoin(deliveryOrders, eq(deliveryOrders.orderId, orders.id))
-      .where(and(...conditions));
+      const results = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(orders)
+        .innerJoin(deliveryOrders, eq(deliveryOrders.orderId, orders.id))
+        .where(and(...conditions));
 
-    return results.map(({ order, delivery }) => ({ ...order, delivery }));
+      return (results as any[]).map((row: any) => ({ ...row.order, delivery: row.delivery }));
+    });
   }
 
   async acceptDeliveryOrderRequest(id: string): Promise<Order | undefined> {
     return await db.transaction(async (tx) => {
+      if (typeof (tx as any).execute === 'function') {
+        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${id} LIMIT 1)`);
+      }
       const [updated] = await tx
         .update(orders)
         .set({ isDeliveryRequest: false, updatedAt: new Date() })
@@ -4137,55 +4226,61 @@ export class DatabaseStorage {
     branchId?: string,
     status?: DeliveryStatus,
   ): Promise<(DeliveryOrder & { order: Order })[]> {
-    const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
-    if (status) conditions.push(eq(deliveryOrders.deliveryStatus, status));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
+      if (status) conditions.push(eq(deliveryOrders.deliveryStatus, status));
 
-    const results = await db
-      .select({ order: orders, delivery: deliveryOrders })
-      .from(deliveryOrders)
-      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
-      .where(and(...conditions));
+      const results = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(and(...conditions));
 
-    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+      return (results as any[]).map((row: any) => ({ ...row.delivery, order: row.order }));
+    });
   }
 
   async getDeliveryOrdersByStatus(
     status: string,
     branchId?: string,
   ): Promise<(DeliveryOrder & { order: Order })[]> {
-    const conditions = [
-      eq(deliveryOrders.deliveryStatus, status as any),
-      eq(orders.isDeliveryRequest, false),
-    ] as any[];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [
+        eq(deliveryOrders.deliveryStatus, status as any),
+        eq(orders.isDeliveryRequest, false),
+      ] as any[];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    const results = await db
-      .select({ order: orders, delivery: deliveryOrders })
-      .from(deliveryOrders)
-      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
-      .where(and(...conditions));
+      const results = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(and(...conditions));
 
-    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+      return (results as any[]).map((row: any) => ({ ...row.delivery, order: row.order }));
+    });
   }
 
   async getDeliveryOrdersByDriver(
     driverId: string,
     branchId?: string,
   ): Promise<(DeliveryOrder & { order: Order })[]> {
-    const conditions = [
-      eq(deliveryOrders.driverId, driverId),
-      eq(orders.isDeliveryRequest, false),
-    ] as any[];
-    if (branchId) conditions.push(eq(orders.branchId, branchId));
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [
+        eq(deliveryOrders.driverId, driverId),
+        eq(orders.isDeliveryRequest, false),
+      ] as any[];
+      if (branchId) conditions.push(eq(orders.branchId, branchId));
 
-    const results = await db
-      .select({ order: orders, delivery: deliveryOrders })
-      .from(deliveryOrders)
-      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
-      .where(and(...conditions));
+      const results = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(and(...conditions));
 
-    return results.map(({ order, delivery }) => ({ ...delivery, order }));
+      return (results as any[]).map((row: any) => ({ ...row.delivery, order: row.order }));
+    });
   }
 
   async assignDeliveryOrder(
@@ -4193,6 +4288,9 @@ export class DatabaseStorage {
     driverId: string,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
+      if (typeof (tx as any).execute === 'function') {
+        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${orderId} LIMIT 1)`);
+      }
       const [existing] = await tx
         .select({ order: orders, delivery: deliveryOrders })
         .from(deliveryOrders)
@@ -4220,6 +4318,9 @@ export class DatabaseStorage {
     status: DeliveryStatus,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
+      if (typeof (tx as any).execute === 'function') {
+        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${orderId} LIMIT 1)`);
+      }
       const [existing] = await tx
         .select({ order: orders, delivery: deliveryOrders })
         .from(deliveryOrders)
@@ -4344,21 +4445,23 @@ export class DatabaseStorage {
 
   // Expenses
   async getExpenses(branchId?: string, start?: Date, end?: Date, search?: string, limit?: number, offset?: number): Promise<Expense[]> {
-    const conditions: any[] = [];
-    if (branchId) conditions.push(eq(expenses.branchId, branchId));
-    if (start) conditions.push(gte(expenses.incurredAt, start));
-    if (end) conditions.push(lte(expenses.incurredAt, end));
-    if (search && search.trim()) {
-      const term = `%${search.trim()}%`;
-      conditions.push(or(ilike(expenses.category, term as any), ilike(expenses.notes, term as any)));
-    }
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions: any[] = [];
+      if (branchId) conditions.push(eq(expenses.branchId, branchId));
+      if (start) conditions.push(gte(expenses.incurredAt, start));
+      if (end) conditions.push(lte(expenses.incurredAt, end));
+      if (search && search.trim()) {
+        const term = `%${search.trim()}%`;
+        conditions.push(or(ilike(expenses.category, term as any), ilike(expenses.notes, term as any)));
+      }
 
-    let query: any = db.select().from(expenses);
-    if (conditions.length) query = query.where(and(...conditions));
-    query = query.orderBy(desc(expenses.incurredAt));
-    if (typeof limit === 'number') query = query.limit(limit);
-    if (typeof offset === 'number') query = query.offset(offset);
-    return await query;
+      let query: any = tx.select().from(expenses);
+      if (conditions.length) query = query.where(and(...conditions));
+      query = query.orderBy(desc(expenses.incurredAt));
+      if (typeof limit === 'number') query = query.limit(limit);
+      if (typeof offset === 'number') query = query.offset(offset);
+      return await query;
+    });
   }
 
   async createExpense(
@@ -4374,7 +4477,10 @@ export class DatabaseStorage {
       branchId: (data as any).branchId || branchId,
       createdBy,
     } as any;
-    const [created] = await db.insert(expenses).values(payload as any).returning();
+    const [created] = await (await this.withTenant(branchId, async (tx) => {
+      const [rec] = await tx.insert(expenses).values(payload as any).returning();
+      return [rec] as any;
+    })) as any;
     return created as any;
   }
 
@@ -4415,16 +4521,22 @@ export class DatabaseStorage {
   async updateExpense(id: string, updates: Partial<InsertExpense>, branchId?: string): Promise<Expense | undefined> {
     const conditions: any[] = [eq(expenses.id, id)];
     if (branchId) conditions.push(eq(expenses.branchId, branchId));
-    const [existing] = await db.select().from(expenses).where(and(...conditions));
+    const [existing] = await (await this.withTenant(branchId, async (tx) => {
+      const rows = await tx.select().from(expenses).where(and(...conditions));
+      return rows as any;
+    })) as any;
     if (!existing) return undefined;
-    const [updated] = await db.update(expenses).set({ ...(updates as any) }).where(eq(expenses.id, id)).returning();
+    const [updated] = await (await this.withTenant(branchId, async (tx) => {
+      const rows = await tx.update(expenses).set({ ...(updates as any) }).where(eq(expenses.id, id)).returning();
+      return rows as any;
+    })) as any;
     return updated as any;
   }
 
   async deleteExpense(id: string, branchId?: string): Promise<boolean> {
     const conditions: any[] = [eq(expenses.id, id)];
     if (branchId) conditions.push(eq(expenses.branchId, branchId));
-    const result = await db.delete(expenses).where(and(...conditions));
+    const result = await this.withTenant(branchId, async (tx) => await tx.delete(expenses).where(and(...conditions)));
     return (result as any).rowCount ? (result as any).rowCount > 0 : true;
   }
 }

@@ -29,7 +29,9 @@
     "db:backfill-item-service-prices-branch": "dotenv -e .env -- tsx server/backfill-item-service-prices-branch.ts",
     "seed": "dotenv -e .env -- tsx scripts/seed.ts",
     "db:truncate": "npm run db:psql scripts/sql/truncate_all_user_tables.sql",
-    "db:truncate:node": "dotenv -e .env -- tsx scripts/truncate-db.ts"
+    "db:truncate:node": "dotenv -e .env -- tsx scripts/truncate-db.ts",
+    "db:rls:enable": "dotenv -e .env -- tsx scripts/toggle-rls.ts enable",
+    "db:rls:disable": "dotenv -e .env -- tsx scripts/toggle-rls.ts disable"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

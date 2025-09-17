@@ -53,6 +53,7 @@ import {
   requireCustomerOrAdmin,
   getSession,
 } from "./auth";
+import { attachTenant } from "./middleware/tenant-context";
 import { seedSuperAdmin } from "./seed-superadmin";
 import { seedPackages } from "./seed-packages";
 import { seedBranches } from "./seed-branches";
@@ -62,7 +63,7 @@ import type { IStorage } from "./storage";
 import multer from "multer";
 import ExcelJS from "exceljs";
 import { z, ZodError } from "zod";
-import { eq, sql, and, inArray, like, or, ilike } from "drizzle-orm";
+import { eq, sql, and, inArray, like, or, ilike, gt } from "drizzle-orm";
 import {
   generateCatalogTemplate,
   parsePrice,
@@ -464,9 +465,14 @@ export async function registerRoutes(
 
   // Setup authentication
   await setupAuth(app);
-  await seedSuperAdmin();
-  await seedBranches();
-  await seedPackages();
+  // Attach derived tenantId (branch) to each request for downstream use
+  app.use(attachTenant);
+  // Optional: seed data only when explicitly enabled
+  if (process.env.SEED_ON_START === 'true') {
+    await seedSuperAdmin();
+    await seedBranches();
+    await seedPackages();
+  }
 
   registerHealthRoutes(app);
 
@@ -623,14 +629,14 @@ export async function registerRoutes(
         return res.status(429).json({ message: "Too many attempts with this phone number. Please try again later." });
       }
       
-      const existing = await storage.getCustomerByPhone(data.phoneNumber);
-      if (existing) {
-        return res.status(400).json({ message: "Customer already exists" });
-      }
       const branch = await storage.getBranchByCode(data.branchCode);
       if (!branch) return res.status(404).json({ message: "Branch not found" });
       if (branch.serviceCityIds?.length && !branch.serviceCityIds.includes(data.city)) {
         return res.status(400).json({ message: "areas.notServed" });
+      }
+      const existing = await storage.getCustomerByPhone(data.phoneNumber, branch.id);
+      if (existing) {
+        return res.status(400).json({ message: "Customer already exists" });
       }
       const passwordHash = await bcrypt.hash(data.password, 10);
       const customer = await storage.createCustomer(
@@ -2664,7 +2670,7 @@ export async function registerRoutes(
       const user = req.user as UserWithBranch;
       const categoryId = req.query.categoryId as string | undefined;
       const resolved = await resolveUuidByPublicId(products, req.params.id);
-      const product = await storage.getProduct(resolved);
+      const product = await storage.getProduct(resolved, user.branchId || undefined);
       if (!product?.clothingItemId) {
         return res.status(404).json({ message: "Product not found" });
       }
@@ -2892,6 +2898,10 @@ export async function registerRoutes(
         const conditions: any[] = [
           eq(itemServicePrices.clothingItemId, req.params.id as any),
           eq(itemServicePrices.branchId, branch.id),
+          // Ensure we only return services tied to the same owner as the clothing item
+          eq(laundryServices.userId, clothingItems.userId),
+          // Only show services that have an explicit non-zero price for this branch/item
+          gt(itemServicePrices.price, '0' as any),
         ];
         if (categoryId && categoryId !== "all") {
           conditions.push(eq(laundryServices.categoryId, categoryId));
@@ -2911,6 +2921,7 @@ export async function registerRoutes(
           })
           .from(itemServicePrices)
           .innerJoin(laundryServices, eq(itemServicePrices.serviceId, laundryServices.id))
+          .innerJoin(clothingItems, eq(clothingItems.id, req.params.id as any))
           .where(and(...conditions));
         res.json(services);
       } catch (error) {
@@ -3515,7 +3526,7 @@ export async function registerRoutes(
       const page = parseInt(req.query.page as string) || 1;
       const pageSize = parseInt(req.query.pageSize as string) || 20;
       if (q) {
-        const byPhone = await storage.getCustomerByPhone(q);
+        const byPhone = await storage.getCustomerByPhone(q, branchId);
         if (
           byPhone &&
           (!branchId || byPhone.branchId === branchId) &&
@@ -3524,7 +3535,7 @@ export async function registerRoutes(
           const data = page > 1 ? [] : [byPhone];
           return res.json({ data, total: 1 });
         }
-        const byNickname = await storage.getCustomerByNickname(q);
+        const byNickname = await storage.getCustomerByNickname(q, branchId);
         if (
           byNickname &&
           (!branchId || byNickname.branchId === branchId) &&
@@ -3588,7 +3599,7 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
-      const customer = await storage.getCustomerByPhone(req.params.phoneNumber);
+      const customer = await storage.getCustomerByPhone(req.params.phoneNumber, branchId);
       if (!customer || (branchId && customer.branchId !== branchId)) {
         return res.status(404).json({ message: "Customer not found" });
       }
@@ -3602,7 +3613,7 @@ export async function registerRoutes(
     try {
       const user = req.user as UserWithBranch;
       const branchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
-      const customer = await storage.getCustomerByNickname(req.params.nickname);
+      const customer = await storage.getCustomerByNickname(req.params.nickname, branchId);
       if (!customer || (branchId && customer.branchId !== branchId)) {
         return res.status(404).json({ message: "Customer not found" });
       }
@@ -3636,7 +3647,7 @@ export async function registerRoutes(
       if (!existing) {
         return res.status(404).json({ message: "Customer not found" });
       }
-      const customer = await storage.updateCustomer(id, data);
+      const customer = await storage.updateCustomer(id, data, branchId);
       res.json(customer);
     } catch (error) {
       res.status(500).json({ message: "Failed to update customer" });
@@ -3692,7 +3703,7 @@ export async function registerRoutes(
       if (!existing) {
         return res.status(404).json({ message: "Customer not found" });
       }
-      const deleted = await storage.deleteCustomer(id);
+      const deleted = await storage.deleteCustomer(id, branchId);
       if (!deleted) {
         return res.status(404).json({ message: "Customer not found" });
       }
@@ -3710,8 +3721,8 @@ export async function registerRoutes(
       const sortField = sortBy === "balanceDue" ? "balanceDue" : "createdAt";
       const orderDirection = sortOrder === "asc" ? "asc" : "desc";
       
-      // Use branchId from query if provided (for admin queries), otherwise use user's branch
-      const targetBranchId = branchId || (user.branchId || undefined);
+      // Only super_admin may override branch via query; others are scoped to their own branch
+      const targetBranchId = user.role === 'super_admin' ? (branchId || undefined) : (user.branchId || undefined);
       
       let orders;
       if (status && typeof status === 'string') {
