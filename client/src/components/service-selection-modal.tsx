@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ClothingItem, LaundryService } from "@shared/schema";
+import { apiRequest } from "@/lib/queryClient";
 import { useCurrency } from "@/lib/currency";
 import { useTranslation } from "@/lib/i18n";
 
@@ -52,11 +53,8 @@ export function ServiceSelectionModal({
   const { data: fetchedCategories = [], isLoading: categoriesLoading } = useQuery<ServiceCategory[]>({
     queryKey: ["/api/categories", "service"],
     queryFn: async () => {
-      const response = await fetch("/api/categories?type=service", {
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error("Failed to fetch service categories");
-      return response.json();
+      const res = await apiRequest("GET", "/api/categories?type=service");
+      return res.json();
     },
     enabled: isOpen,
   });
@@ -82,21 +80,10 @@ export function ServiceSelectionModal({
     queryFn: async () => {
       if (!clothingItem) return [];
       const params = new URLSearchParams();
-      if (selectedCategory !== "all")
-        params.append("categoryId", selectedCategory);
+      if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
       if (branchCode) params.append("branchCode", branchCode);
-      const response = await fetch(
-        `/api/clothing-items/${clothingItem.id}/services?${params}`,
-        {
-          credentials: "include",
-        },
-      );
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch services: ${response.status} ${errorText}`);
-      }
-      const rawServices = await response.json();
-      // Filter out services with zero or invalid prices
+      const res = await apiRequest("GET", `/api/clothing-items/${clothingItem.id}/services?${params}`);
+      const rawServices = await res.json();
       return rawServices.filter((service: any) => {
         const price = parseFloat(service.itemPrice || service.price || "0");
         return price > 0;

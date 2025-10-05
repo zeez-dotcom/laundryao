@@ -201,7 +201,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
           variant="outline"
           className="text-blue-600 border-blue-600 hover:bg-blue-50"
         >
-          "Retry"
+          Retry
         </Button>
       </div>
     );

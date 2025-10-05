@@ -170,11 +170,8 @@ function CustomerOrderingContent() {
   const { data: clothingItems = [], isLoading: itemsLoading } = useQuery<ClothingItem[]>({
     queryKey: ["/api/clothing-items", branchCode],
     queryFn: async () => {
-      const response = await fetch(`/api/clothing-items?branchCode=${branchCode}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch clothing items');
-      }
-      return await response.json();
+      const res = await apiRequest("GET", `/api/clothing-items?branchCode=${branchCode}`);
+      return await res.json();
     },
     enabled: !!branchCode && orderState.step === "item_selection",
   });
@@ -184,13 +181,8 @@ function CustomerOrderingContent() {
     queryKey: ["/api/clothing-items", orderState.selectedClothingItem?.id, "services", branchCode],
     queryFn: async () => {
       if (!orderState.selectedClothingItem) return [];
-      const response = await fetch(
-        `/api/clothing-items/${orderState.selectedClothingItem.id}/services?branchCode=${branchCode}`
-      );
-      if (!response.ok) {
-        throw new Error('Failed to fetch services');
-      }
-      return await response.json();
+      const res = await apiRequest("GET", `/api/clothing-items/${orderState.selectedClothingItem.id}/services?branchCode=${branchCode}`);
+      return await res.json();
     },
     enabled: !!orderState.selectedClothingItem && orderState.step === "service_selection",
   });

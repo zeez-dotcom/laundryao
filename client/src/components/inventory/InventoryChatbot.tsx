@@ -132,7 +132,7 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
           const url =
             value === "item" ? "/api/clothing-items" : "/api/laundry-services";
           const res = await fetch(url, { credentials: "include" });
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error("Failed to load entries");
           const data = await res.json();
           setEntries(data);
           setMessages((m) => [
@@ -172,7 +172,7 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
             `/api/clothing-items/${selectedEntry.id}/services`,
             { credentials: "include" },
           );
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error("Failed to load services");
           const svcData = await res.json();
           setServices(svcData);
           setMessages((m) => [
@@ -250,7 +250,7 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
         if (!pendingAssignItemId || !pendingAssignItemName) return;
         try {
           const res = await fetch("/api/laundry-services", { credentials: "include" });
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error("Failed to load services");
           const list = await res.json();
           setServices(list);
           setSelectedType("item");
@@ -449,7 +449,7 @@ export function InventoryChatbot({ open, onClose }: InventoryChatbotProps) {
       if (value === "yes") {
         try {
           const res = await fetch("/api/laundry-services", { credentials: "include" });
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error("Failed to load services");
           const list = await res.json();
           setServices(list);
           setMessages((m) => [
@@ -504,7 +504,7 @@ const handleAddSubmit = async () => {
           const res = await fetch("/api/categories?type=clothing", {
             credentials: "include",
           });
-          if (!res.ok) throw new Error();
+          if (!res.ok) throw new Error("Failed to add item");
           const cats = await res.json();
           setMessages((m) => [
             ...m,
@@ -528,7 +528,7 @@ const handleAddSubmit = async () => {
         const res = await fetch("/api/categories?type=service", {
           credentials: "include",
         });
-        if (!res.ok) throw new Error();
+        if (!res.ok) throw new Error("Failed to load categories");
         const cats = await res.json();
         setMessages((m) => [
           ...m,

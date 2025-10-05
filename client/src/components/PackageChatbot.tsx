@@ -198,12 +198,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
         setLaundryServices(servicesData);
       }
 
-      console.log("PackageChatbot loadInitialData:", { 
-        clothingItemsCount: clothingData.length, 
-        servicesCount: servicesData.length,
-        clothingItems: clothingData.slice(0, 2),
-        services: servicesData.slice(0, 2)
-      });
+      // debug logs removed
 
       return { clothingData, servicesData };
       
@@ -318,7 +313,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
       metadata: item
     }));
     
-    console.log("PackageChatbot setting clothing options:", { itemsCount: items.length, options: clothingOptions });
+    // debug logs removed
     
     // Move to next step first, then set options to avoid clearing
     goToNextStep();
@@ -343,30 +338,31 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
       
       if (!res.ok) {
         const errorText = await res.text();
-        console.error("Services API error:", { status: res.status, statusText: res.statusText, error: errorText });
+        // swallow details but still throw
+        console.error("Services API error");
         throw new Error(`Failed to fetch services: ${res.status} ${errorText}`);
       }
       
       const result = await res.json();
-      console.log("PackageChatbot raw API response:", result);
+      // debug logs removed
       
       const servicesForItem = Array.isArray(result) ? result : (result.data || []);
-      console.log("PackageChatbot parsed services:", servicesForItem);
+      // debug logs removed
       
       if (!Array.isArray(servicesForItem)) {
-        console.error("PackageChatbot services not array:", typeof servicesForItem, servicesForItem);
+        console.error("PackageChatbot services not array");
         throw new Error('Invalid services response format');
       }
       
       if (servicesForItem.length === 0) {
-        console.log("PackageChatbot no services found for:", clothingItem.name);
+        // debug logs removed
         addMessage("assistant", t.packageChatbot.noServicesAvailable.replace("{item}", clothingItem.name));
         return;
       }
       
       addMessage("assistant", t.packageChatbot.selectService.replace("{item}", clothingItem.name));
       
-      console.log("PackageChatbot creating service options for services:", servicesForItem);
+      // debug logs removed
       
       const serviceOptions: Option[] = servicesForItem.map((service: LaundryService & { itemPrice?: string }) => {
         // Robust price coercion to avoid formatCurrency TypeError
@@ -382,11 +378,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
         };
       });
       
-      console.log("PackageChatbot setting service options:", { 
-        servicesCount: servicesForItem.length, 
-        options: serviceOptions,
-        rawResponse: result
-      });
+      // debug logs removed
       
       // Move to next step first, then set options to avoid clearing
       goToNextStep();
@@ -948,4 +940,3 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
 }
 
 export default PackageChatbot;
-

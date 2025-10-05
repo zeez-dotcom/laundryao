@@ -20,6 +20,7 @@
     "start": "node dist/server/index.js",
     "build": "tsc -p tsconfig.json",
     "check": "tsc",
+    "lint:no-console": "node scripts/no-console-check.cjs",
     "test": "vitest run --pool=vmThreads && node --import tsx --test server/*.test.ts",
     "validate:srs": "node scripts/validate-srs.js",
     "db:psql": "psql \"$DATABASE_URL\" -f",

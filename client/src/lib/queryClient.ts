@@ -28,7 +28,8 @@ export async function apiRequest(
 const orderPayloadSchema = z
   .object({
     cartItems: z.array(z.any()).min(1, "cartItems required"),
-    customerId: z.string().min(1, "customerId required"),
+    // Allow missing customerId to support Walk-in flow; server should default
+    customerId: z.string().min(1).optional(),
     branchCode: z.string().min(1, "branchCode required"),
   })
   .passthrough();
