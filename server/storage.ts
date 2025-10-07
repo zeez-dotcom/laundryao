@@ -1388,7 +1388,8 @@ export class DatabaseStorage {
     // Always run in a transaction; set app.branch_id if provided
     return await db.transaction(async (tx) => {
       if (branchId) {
-        await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
+        // Use set_config to support parameter binding in Postgres
+        await tx.execute(sql`SELECT set_config('app.branch_id', ${branchId}, true)`);
       }
       return await fn(tx);
     });
@@ -3234,7 +3235,8 @@ export class DatabaseStorage {
 
   async createOrder(orderData: InsertOrder & { branchId: string }): Promise<Order> {
     return await db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL app.branch_id = ${orderData.branchId}`);
+      // Use set_config instead of SET LOCAL with a parameter
+      await tx.execute(sql`SELECT set_config('app.branch_id', ${orderData.branchId}, true)`);
       const [branch] = await tx
         .select({ code: branches.code, next: branches.nextOrderNumber })
         .from(branches)
@@ -3814,7 +3816,7 @@ export class DatabaseStorage {
 
   async createCoupon(coupon: InsertCoupon, branchId: string, createdBy: string, clothingItemIds?: string[], serviceIds?: string[]): Promise<Coupon> {
     return await db.transaction(async (tx) => {
-      await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
+      await tx.execute(sql`SELECT set_config('app.branch_id', ${branchId}, true)`);
       const [newCoupon] = await tx
         .insert(coupons)
         .values({ ...coupon, branchId, createdBy })
@@ -3844,7 +3846,7 @@ export class DatabaseStorage {
 
   async updateCoupon(id: string, coupon: Partial<InsertCoupon>, branchId?: string, clothingItemIds?: string[], serviceIds?: string[]): Promise<Coupon | undefined> {
     return await db.transaction(async (tx) => {
-      if (branchId) await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
+      if (branchId) await tx.execute(sql`SELECT set_config('app.branch_id', ${branchId}, true)`);
       const conditions = [eq(coupons.id, id)];
       if (branchId) conditions.push(eq(coupons.branchId, branchId));
       
@@ -4202,7 +4204,11 @@ export class DatabaseStorage {
   async acceptDeliveryOrderRequest(id: string): Promise<Order | undefined> {
     return await db.transaction(async (tx) => {
       if (typeof (tx as any).execute === 'function') {
-        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${id} LIMIT 1)`);
+        // Fetch branchId first, then set RLS context with set_config
+        const [o] = await tx.select({ branchId: orders.branchId }).from(orders).where(eq(orders.id, id));
+        if (o?.branchId) {
+          await (tx as any).execute(sql`SELECT set_config('app.branch_id', ${o.branchId}, true)`);
+        }
       }
       const [updated] = await tx
         .update(orders)
@@ -4289,7 +4295,10 @@ export class DatabaseStorage {
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
       if (typeof (tx as any).execute === 'function') {
-        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${orderId} LIMIT 1)`);
+        const [o] = await tx.select({ branchId: orders.branchId }).from(orders).where(eq(orders.id, orderId));
+        if (o?.branchId) {
+          await (tx as any).execute(sql`SELECT set_config('app.branch_id', ${o.branchId}, true)`);
+        }
       }
       const [existing] = await tx
         .select({ order: orders, delivery: deliveryOrders })
@@ -4319,7 +4328,10 @@ export class DatabaseStorage {
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
       if (typeof (tx as any).execute === 'function') {
-        await (tx as any).execute(sql`SET LOCAL app.branch_id = (SELECT ${orders.branchId} FROM ${orders} WHERE ${orders.id} = ${orderId} LIMIT 1)`);
+        const [o] = await tx.select({ branchId: orders.branchId }).from(orders).where(eq(orders.id, orderId));
+        if (o?.branchId) {
+          await (tx as any).execute(sql`SELECT set_config('app.branch_id', ${o.branchId}, true)`);
+        }
       }
       const [existing] = await tx
         .select({ order: orders, delivery: deliveryOrders })

@@ -31,6 +31,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { useTranslation } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthContext } from "@/context/AuthContext";
 
 interface ClothingItemPayload {
   name: string;
@@ -53,26 +54,33 @@ export function ClothingItemsSection() {
   const { t } = useTranslation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user, branch } = useAuthContext();
 
-  const { data: clothingItems = [] } = useQuery({
-    queryKey: ["/api/clothing-items"],
+  const needsBranchParam = user?.role === "super_admin";
+  const branchIdParam = needsBranchParam ? branch?.id : undefined;
+
+  const { data: clothingItems = [] } = useQuery<ClothingItem[]>({
+    queryKey: [
+      "/api/clothing-items",
+      needsBranchParam ? branchIdParam ?? "missing-branch" : "implicit-branch",
+    ],
+    enabled: !needsBranchParam || Boolean(branchIdParam),
     queryFn: async () => {
-      const response = await fetch("/api/clothing-items", {
-        credentials: "include",
-      });
+      const url = needsBranchParam && branchIdParam
+        ? `/api/clothing-items?branchId=${encodeURIComponent(branchIdParam)}`
+        : "/api/clothing-items";
+      const response = await apiRequest("GET", url);
       return response.json();
     },
-  }) as { data: ClothingItem[] };
+  });
 
-  const { data: services = [] } = useQuery({
+  const { data: services = [] } = useQuery<LaundryService[]>({
     queryKey: ["/api/laundry-services"],
     queryFn: async () => {
-      const response = await fetch("/api/laundry-services", {
-        credentials: "include",
-      });
+      const response = await apiRequest("GET", "/api/laundry-services");
       return response.json();
     },
-  }) as { data: LaundryService[] };
+  });
 
   const clothingForm = useForm<ClothingItemPayload>({
     resolver: zodResolver(insertClothingItemSchema),
@@ -148,10 +156,11 @@ export function ClothingItemsSection() {
       serviceId: string;
       price: string;
     }) => {
+      const payload = needsBranchParam && branchIdParam ? { ...data, branchId: branchIdParam } : data;
       const response = await apiRequest(
         "POST",
         "/api/item-service-prices",
-        data,
+        payload,
       );
       return response.json();
     },
@@ -223,6 +232,11 @@ export function ClothingItemsSection() {
 
   return (
     <>
+      {needsBranchParam && !branchIdParam && (
+        <div className="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          Super admin: select a branch to view clothing items.
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">
           Clothing Items ({filteredClothing.length})

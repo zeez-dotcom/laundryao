@@ -2931,22 +2931,30 @@ export async function registerRoutes(
     },
     requireAuth,
     async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      const categoryId = req.query.categoryId as string | undefined;
-      const clothingId = await resolveUuidByPublicId(clothingItems, req.params.id);
-      const services = await storage.getServicesForClothingItem(
-        clothingId,
-        user.id,
-        user.branchId!,
-        categoryId,
-      );
-      res.json(services);
-    } catch (error) {
-      logger.error("Error fetching item services:", error as any);
-      res.status(500).json({ message: "Failed to fetch services" });
+      try {
+        const user = req.user as UserWithBranch;
+        const categoryId = req.query.categoryId as string | undefined;
+        const clothingId = await resolveUuidByPublicId(clothingItems, req.params.id);
+        const effectiveBranchId =
+          user.role === 'super_admin'
+            ? ((req.query.branchId as string | undefined) ?? user.branchId ?? undefined)
+            : (user.branchId || undefined);
+        if (!effectiveBranchId) {
+          return res.status(400).json({ message: 'branchId is required' });
+        }
+        const services = await storage.getServicesForClothingItem(
+          clothingId,
+          user.id,
+          effectiveBranchId,
+          categoryId,
+        );
+        res.json(services);
+      } catch (error) {
+        logger.error("Error fetching item services:", error as any);
+        res.status(500).json({ message: "Failed to fetch services" });
+      }
     }
-  });
+  );
 
   // Laundry Services routes
   app.get("/api/laundry-services", requireAuth, async (req, res) => {
@@ -3626,14 +3634,33 @@ export async function registerRoutes(
   app.post("/api/customers", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      if (!user.branchId) {
+      // Super admin may specify branchId in body; admins use their own branch
+      const targetBranchId = user.branchId ?? (req.body?.branchId as string | undefined);
+      if (!targetBranchId) {
         return res.status(400).json({ message: "User branch not set" });
       }
-      const customerData = insertCustomerSchema.parse(req.body);
-      const customer = await storage.createCustomer(customerData, user.branchId);
+      // Ignore client-only fields like 'city'
+      const { phoneNumber, name, nickname, email, address } = req.body as any;
+      const customerData = insertCustomerSchema.parse({ phoneNumber, name, nickname, email, address });
+      // Pre-check uniqueness to return clear errors instead of generic 500s
+      const existingByPhone = await storage.getCustomerByPhone(customerData.phoneNumber, targetBranchId);
+      if (existingByPhone) {
+        return res.status(409).json({ message: "Customer already exists (phone)" });
+      }
+      if (customerData.nickname) {
+        const existingByNick = await storage.getCustomerByNickname(customerData.nickname, targetBranchId);
+        if (existingByNick) {
+          return res.status(409).json({ message: "Customer nickname already in use" });
+        }
+      }
+      const customer = await storage.createCustomer(customerData, targetBranchId);
       res.status(201).json(customer);
     } catch (error) {
-      res.status(400).json({ message: "Invalid customer data" });
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: "Invalid customer data", errors: error.errors });
+      }
+      logger.error({ err: error }, "Error creating customer");
+      res.status(500).json({ message: "Failed to create customer", error: (error as any)?.message || String(error) });
     }
   });
 
@@ -3933,9 +3960,6 @@ export async function registerRoutes(
   app.post("/api/orders", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      if (!user.branchId) {
-        return res.status(400).json({ message: "User branch not set" });
-      }
       const {
         loyaltyPointsEarned = 0,
         loyaltyPointsRedeemed = 0,
@@ -3956,9 +3980,11 @@ export async function registerRoutes(
       if (!branch) {
         return res.status(404).json({ message: "Branch not found" });
       }
-      if (user.branchId !== branch.id) {
+      // Enforce branch ownership except for super admins; if super_admin has no session branch, allow using branchCode
+      if (user.role !== 'super_admin' && user.branchId !== branch.id) {
         return res.status(403).json({ message: "Branch mismatch" });
       }
+      const effectiveBranchId = user.branchId ?? branch.id;
 
       // If no customer was selected, use/create a branch-scoped Walk-in Customer
       let effectiveCustomerId: string | undefined = customerId;
@@ -4014,24 +4040,52 @@ export async function registerRoutes(
         packageComputeResult?.usedCredits || [],
         storage,
         user.id,
-        branch.id,
+        effectiveBranchId,
       );
       data.subtotal = totals.subtotal.toFixed(2);
       data.tax = totals.tax.toFixed(2);
       data.total = totals.total.toFixed(2);
 
-      const orderData = insertOrderSchema.parse({
-        ...data,
-        items: cartItems,
-        customerId: effectiveCustomerId,
-      });
+      const {
+        customerName,
+        customerPhone,
+        subtotal,
+        tax,
+        total,
+        paymentMethod,
+        status,
+        // intentionally ignore estimatedPickup/actualPickup/readyBy to reduce validation friction
+        promisedReadyDate,
+        promisedReadyOption,
+        notes,
+        sellerName,
+        isDeliveryRequest,
+      } = data as any;
 
-      const order = await storage.createOrder({ ...orderData, branchId: branch.id, packageUsages: pkgUsages });
+      const safeData: any = {
+        customerName: customerName || "Walk-in",
+        // Use a sentinel phone number for walk-in orders
+        customerPhone: (customerPhone ?? "0000000000"),
+        subtotal,
+        tax,
+        total,
+        paymentMethod: paymentMethod || 'cash',
+        status: status || 'start_processing',
+        promisedReadyDate,
+        promisedReadyOption,
+        notes,
+        sellerName: sellerName || (user as any)?.username || "POS User",
+        isDeliveryRequest: isDeliveryRequest ?? false,
+      };
+
+      const orderData = insertOrderSchema.parse({ ...safeData, items: cartItems, customerId: effectiveCustomerId });
+
+      const order = await storage.createOrder({ ...orderData, branchId: effectiveBranchId, packageUsages: pkgUsages });
 
       // If payment method is pay_later, update customer balance
       if (order.paymentMethod === 'pay_later' && order.customerId) {
         try {
-          const customer = await storage.getCustomer(order.customerId, user.branchId);
+          const customer = await storage.getCustomer(order.customerId, effectiveBranchId);
           if (customer) {
             const orderAmount = parseFloat(order.total);
             const updatedBalance = parseFloat(customer.balanceDue) + orderAmount;
@@ -4148,8 +4202,11 @@ export async function registerRoutes(
 
       res.status(201).json({ ...order, packages });
     } catch (error) {
-      logger.error("Error creating order:", error as any);
-      res.status(400).json({ message: "Invalid order data" });
+      logger.error({ err: error }, "Error creating order");
+      if (error instanceof ZodError) {
+        return res.status(400).json({ message: "Invalid order data", errors: error.errors });
+      }
+      return res.status(500).json({ message: "Failed to create order", error: (error as any)?.message || String(error) });
     }
   });
 

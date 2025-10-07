@@ -19,6 +19,7 @@ import EmptyState from "@/components/common/EmptyState";
 import { useAuthContext } from "@/context/AuthContext";
 import { buildReceiptData } from "@/lib/receipt";
 import { useApiError } from "@/hooks/use-api-error";
+import { RecordPaymentDialog } from "@/components/record-payment-dialog";
 
 export interface OrderItem {
   clothingItem: string | { name: string };
@@ -96,6 +97,8 @@ export function OrderTracking() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [printInfo, setPrintInfo] = useState<OrderPrint | null>(null);
   const [isReceiptOpen, setReceiptOpen] = useState(false);
+  const [isPaymentOpen, setPaymentOpen] = useState(false);
+  const [paymentOrder, setPaymentOrder] = useState<OrderWithExtras | null>(null);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -391,30 +394,12 @@ export function OrderTracking() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={async () => {
-                          const defaultAmt = order.total;
-                          const input = window.prompt(`Enter payment amount for order #${order.orderNumber}`, String(defaultAmt));
-                          if (!input) return;
-                          const amt = parseFloat(input);
-                          if (!(amt > 0)) {
-                            toast({ title: t.error, description: 'Invalid amount', variant: 'destructive' });
-                            return;
-                          }
-                          try {
-                            await apiRequest('POST', `/api/customers/${order.customerId}/payments`, {
-                              amount: amt.toFixed(2),
-                              paymentMethod: 'cash',
-                              notes: `Payment for order ${order.orderNumber}`,
-                              receivedBy: user?.username || 'System',
-                            });
-                            toast({ title: t.success, description: 'Payment recorded' });
-                            queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
-                          } catch (e) {
-                            toast({ title: t.error, description: t.failedToRecordPayment, variant: 'destructive' });
-                          }
+                        onClick={() => {
+                          setPaymentOrder(order);
+                          setPaymentOpen(true);
                         }}
                       >
-                        Record Payment
+                        {t.recordPayment}
                       </Button>
                     )}
                     {(order.status === 'received' || order.status === 'start_processing') && (
@@ -466,6 +451,23 @@ export function OrderTracking() {
         </div>
       </div>
     </div>
+
+      <RecordPaymentDialog
+        open={isPaymentOpen}
+        onOpenChange={setPaymentOpen}
+        customerId={paymentOrder?.customerId || ""}
+        customerName={paymentOrder?.customerName || undefined}
+        defaultAmount={paymentOrder?.total}
+        orderId={paymentOrder?.id}
+        orderNumber={paymentOrder?.orderNumber}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
+          if (paymentOrder?.customerId) {
+            queryClient.invalidateQueries({ queryKey: ['/api/customers', paymentOrder.customerId, 'payments'] });
+          }
+        }}
+      />
+
       {selectedOrder && printInfo && (
         <ReceiptModal
           order={selectedOrder}

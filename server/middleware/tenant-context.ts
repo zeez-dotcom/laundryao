@@ -9,7 +9,7 @@ import { sql } from 'drizzle-orm';
  */
 export async function withTenant<T>(branchId: string, fn: (tx: typeof db) => Promise<T>): Promise<T> {
   return await db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL app.branch_id = ${branchId}`);
+    await tx.execute(sql`SELECT set_config('app.branch_id', ${branchId}, true)`);
     return await fn(tx as any);
   });
 }
@@ -42,4 +42,3 @@ export const attachTenant: RequestHandler = (req: Request, _res: Response, next:
  *     res.json({ ok: result });
  *   });
  */
-

@@ -31,6 +31,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { useTranslation } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
+import { useAuthContext } from "@/context/AuthContext";
 
 interface ServicePayload {
   name: string;
@@ -53,30 +54,36 @@ export function ServicesSection() {
   const { t } = useTranslation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user, branch } = useAuthContext();
 
-  const { data: clothingItems = [] } = useQuery({
-    queryKey: ["/api/clothing-items"],
+  const needsBranchParam = user?.role === "super_admin";
+  const branchIdParam = needsBranchParam ? branch?.id : undefined;
+
+  const { data: clothingItems = [] } = useQuery<ClothingItem[]>({
+    queryKey: [
+      "/api/clothing-items",
+      needsBranchParam ? branchIdParam ?? "missing-branch" : "implicit-branch",
+    ],
+    enabled: !needsBranchParam || Boolean(branchIdParam),
     queryFn: async () => {
-      const response = await fetch("/api/clothing-items", {
-        credentials: "include",
-      });
+      const url = needsBranchParam && branchIdParam
+        ? `/api/clothing-items?branchId=${encodeURIComponent(branchIdParam)}`
+        : "/api/clothing-items";
+      const response = await apiRequest("GET", url);
       return response.json();
     },
-  }) as { data: ClothingItem[] };
+  });
 
-  const { data: services = [] } = useQuery({
+  const { data: services = [] } = useQuery<(LaundryService & { itemPrice?: string })[]>({
     queryKey: ["/api/laundry-services", clothingItems.map((i) => i.id)],
     queryFn: async () => {
-      const baseRes = await fetch("/api/laundry-services", {
-        credentials: "include",
-      });
+      const baseRes = await apiRequest("GET", "/api/laundry-services");
       const baseServices: LaundryService[] = await baseRes.json();
 
       const itemServiceLists = await Promise.all(
         clothingItems.map(async (item) => {
-          const res = await fetch(`/api/clothing-items/${item.id}/services`, {
-            credentials: "include",
-          });
+          const qs = needsBranchParam && branchIdParam ? `?branchId=${encodeURIComponent(branchIdParam)}` : "";
+          const res = await apiRequest("GET", `/api/clothing-items/${item.id}/services${qs}`);
           return res.json();
         }),
       );
@@ -102,7 +109,7 @@ export function ServicesSection() {
 
       return Array.from(serviceMap.values());
     },
-  }) as { data: (LaundryService & { itemPrice?: string })[] };
+  });
 
   const serviceForm = useForm<ServicePayload>({
     resolver: zodResolver(insertLaundryServiceSchema),
@@ -175,10 +182,11 @@ export function ServicesSection() {
       serviceId: string;
       price: string;
     }) => {
+      const payload = needsBranchParam && branchIdParam ? { ...data, branchId: branchIdParam } : data;
       const response = await apiRequest(
         "POST",
         "/api/item-service-prices",
-        data,
+        payload,
       );
       return response.json();
     },
@@ -243,6 +251,11 @@ export function ServicesSection() {
 
   return (
     <>
+      {needsBranchParam && !branchIdParam && (
+        <div className="mb-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          Super admin: select a branch to manage services and prices.
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-semibold">
           Laundry Services ({filteredServices.length})
