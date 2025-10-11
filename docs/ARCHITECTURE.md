@@ -41,7 +41,7 @@ flowchart LR
 - Storage/Data access (Drizzle + SQL helpers in `server/storage.ts`)
 - Database (PostgreSQL)
 - Realtime (ws)
-- Notifications (Nodemailer; SMS stub)
+- Notifications (Nodemailer; Twilio SMS)
 
 ## Connectivity
 - Client → Server:
@@ -52,7 +52,7 @@ flowchart LR
 - Sessions persisted to Postgres tables `sessions` (admin) and `customer_sessions`.
 - Server → Notifications:
 - Email via SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`).
-- SMS is a stub; when `ENABLE_SMS_NOTIFICATIONS=true`, messages are logged (provider integration point).
+- SMS via Twilio when `ENABLE_SMS_NOTIFICATIONS=true` with `SMS_PROVIDER=twilio`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER` configured. The integration is production-ready once these credentials are present.
 - Dev tooling:
 - Vite middleware attaches to Express in development for HMR and client serving.
 
@@ -110,7 +110,7 @@ All database access occurs server-side. The client never connects directly to Po
 - Required: `DATABASE_URL`.
 - Recommended: `SESSION_SECRET` (required in production).
 - Optional Email: `ENABLE_EMAIL_NOTIFICATIONS`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
-- Optional SMS: `ENABLE_SMS_NOTIFICATIONS`.
+- Optional SMS: `ENABLE_SMS_NOTIFICATIONS`, `SMS_PROVIDER`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, `SMS_FROM_NUMBER`.
 - Misc: `PORT`, `HOST`, `NODE_ENV`, `DEBUG_OTP` (dev only to expose OTP in responses for local testing).
 
 ## Should It Connect There?
