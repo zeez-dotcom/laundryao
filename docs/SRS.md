@@ -32,7 +32,7 @@ FlutterPos is a multi-branch laundry point-of-sale and delivery management platf
 - API: Express REST under `/api/*`, sessions via Postgres (connect-pg-simple), RBAC.
 - Database: PostgreSQL accessed via Drizzle ORM (schema in `shared/schema.ts`).
 - Realtime: WebSockets at `/ws/delivery-orders` and `/ws/driver-location`.
-- Notifications: Email (Nodemailer) and placeholder SMS (pluggable provider).
+- Notifications: Email (Nodemailer) and SMS via Twilio when `SMS_PROVIDER=twilio` with `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER` configured.
 
 See docs/ARCHITECTURE.md for component and data-flow details.
 
@@ -51,7 +51,7 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 ### 2.4 Assumptions and Dependencies
 - Single server process serves both API and client. In dev, Vite middleware is attached to the same server.
 - Sessions stored in Postgres; cookies are HTTP-only; production requires `SESSION_SECRET`.
-- Email/SMS are optional, controlled by env flags; SMS provider integration is pending.
+- Email/SMS are optional, controlled by env flags; SMS delivery uses Twilio when `ENABLE_SMS_NOTIFICATIONS=true` with `SMS_PROVIDER=twilio`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER` configured.
 - DB migrations managed by Drizzle; schema changes originate from `shared/schema.ts`.
 
 ## 3. System Features
@@ -85,7 +85,7 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 - Sales summaries, top products/services, clothing-item analytics, expenses reports, branch performance.
 
 ### 3.7 Notifications
-- Email via SMTP (Nodemailer) with `SMTP_*` env; SMS stub with `ENABLE_SMS_NOTIFICATIONS`.
+- Email via SMTP (Nodemailer) with `SMTP_*` env; SMS via Twilio when enabled and configured with `SMS_PROVIDER=twilio`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER`.
 
 ### 3.8 Branch Customization and Ads
 - Branch-specific customer dashboard settings and ad management with impressions/clicks.
@@ -142,7 +142,7 @@ Customization and Ads
 
 ## 8. Constraints
 - Tech stack: Node 18–20, Express, React, Vite, PostgreSQL, Drizzle, ws.
-- Env vars: `DATABASE_URL` (required), `PORT` (default 5000), `HOST`, `SESSION_SECRET` (prod), `ENABLE_EMAIL_NOTIFICATIONS`, `SMTP_*`, `ENABLE_SMS_NOTIFICATIONS`.
+- Env vars: `DATABASE_URL` (required), `PORT` (default 5000), `HOST`, `SESSION_SECRET` (prod), `ENABLE_EMAIL_NOTIFICATIONS`, `SMTP_*`, `ENABLE_SMS_NOTIFICATIONS`, `SMS_PROVIDER`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, `SMS_FROM_NUMBER`.
 - Deployment: Single-process server exposes API, SPA, and WS on the same origin/port.
 
 ## 9. Connectivity and Ports
