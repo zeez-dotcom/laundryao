@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import request from 'supertest';
 import { z } from 'zod';
+import { NotificationService } from './services/notification';
 
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://user:pass@localhost/db';
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 
-function createApp(storage: any) {
+function createApp(storage: any, notificationService?: NotificationService) {
   const app = express();
   app.use(express.json());
 
@@ -36,6 +37,9 @@ function createApp(storage: any) {
       if (!user) return res.status(404).json({ message: 'userNotFound' });
       const token = 'tok-' + Math.random();
       tokens.set(token, { userId: user.id, expires: new Date(Date.now() + 30 * 60 * 1000) });
+      if (notificationService) {
+        await notificationService.sendSMS(user.phoneNumber, `Reset token: ${token}`);
+      }
       res.json({ token });
     } catch {
       res.status(400).json({ message: 'invalidData' });
@@ -67,7 +71,7 @@ function createApp(storage: any) {
 test('forgot password generates token with rate limiting', async () => {
   const storage = {
     async getUserByUsername(u: string) {
-      if (u === 'alice') return { id: '1', username: 'alice' };
+      if (u === 'alice') return { id: '1', username: 'alice', phoneNumber: '+15550001' };
       return null;
     },
     async updateUserPassword() {},
@@ -84,7 +88,7 @@ test('forgot password generates token with rate limiting', async () => {
 test('reset password validates token and password', async () => {
   let updated: any = null;
   const storage = {
-    async getUserByUsername() { return { id: '1', username: 'alice' }; },
+    async getUserByUsername() { return { id: '1', username: 'alice', phoneNumber: '+15550001' }; },
     async updateUserPassword(id: string, pw: string) { updated = { id, pw }; },
   };
   const { app, tokens } = createApp(storage);
@@ -103,4 +107,37 @@ test('reset password validates token and password', async () => {
   res = await request(app).post('/auth/password/reset').send({ token: token2, newPassword: 'ValidPass1' });
   assert.equal(res.status, 200);
   assert.deepEqual(updated, { id: '1', pw: 'ValidPass1' });
+});
+
+test('forgot password triggers SMS when notifications enabled', async () => {
+  const smsCalls: Array<{ to: string | undefined; body: string }> = [];
+  const notificationService = new NotificationService({
+    smsClient: {
+      async send(to, body) {
+        smsCalls.push({ to, body });
+      },
+    },
+  });
+  const storage = {
+    async getUserByUsername(u: string) {
+      if (u === 'alice') {
+        return { id: '1', username: 'alice', phoneNumber: '+15550001' };
+      }
+      return null;
+    },
+    async updateUserPassword() {},
+  };
+  const previous = process.env.ENABLE_SMS_NOTIFICATIONS;
+  process.env.ENABLE_SMS_NOTIFICATIONS = 'true';
+
+  try {
+    const { app } = createApp(storage, notificationService);
+    const res = await request(app).post('/auth/password/forgot').send({ username: 'alice' });
+    assert.equal(res.status, 200);
+    assert.equal(smsCalls.length, 1);
+    assert.equal(smsCalls[0]?.to, '+15550001');
+    assert.match(smsCalls[0]?.body ?? '', /Reset token: tok-/);
+  } finally {
+    process.env.ENABLE_SMS_NOTIFICATIONS = previous;
+  }
 });

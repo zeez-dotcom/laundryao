@@ -16,6 +16,18 @@ The following variables are required:
 - `SESSION_SECRET`: secret key for signing session cookies.
 - `NODE_ENV`: either `development` or `production`.
 
+### SMS Notifications
+
+SMS notifications are off by default. To enable production-ready SMS delivery, configure the following environment variables (Twilio is the supported provider at this time):
+
+- `ENABLE_SMS_NOTIFICATIONS=true`
+- `SMS_PROVIDER=twilio`
+- `SMS_ACCOUNT_SID`
+- `SMS_AUTH_TOKEN`
+- `SMS_FROM_NUMBER` (E.164 formatted sending number)
+
+Once these values are present the server will send OTP and password-reset messages through Twilio instead of logging them.
+
 ## Database Setup
 
 Generate and run migrations before starting the app:
