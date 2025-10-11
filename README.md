@@ -16,6 +16,12 @@ The following variables are required:
 - `SESSION_SECRET`: secret key for signing session cookies.
 - `NODE_ENV`: either `development` or `production`.
 
+### Client Error Reporting
+
+Front-end error reporting can be configured by setting:
+
+- `VITE_ERROR_REPORT_DSN`: URL for a backend error collection endpoint or third-party service. Leave unset in local development to disable error reporting from the browser.
+
 ### SMS Notifications
 
 SMS notifications are off by default. To enable production-ready SMS delivery, configure the following environment variables (Twilio is the supported provider at this time):
