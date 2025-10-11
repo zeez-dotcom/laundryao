@@ -4019,15 +4019,6 @@ export async function registerRoutes(
         try {
           pkgUsages = packageUsagesSchema.parse(packageComputeResult.packageUsages);
 
-          // Update customer package balances with used credits
-          for (const credit of packageComputeResult.usedCredits) {
-            await storage.updateCustomerPackageBalance(
-              credit.customerPackageId,
-              -credit.quantity, // Negative to deduct credits
-              credit.serviceId,
-              credit.clothingItemId
-            );
-          }
           logger.info({ customerId, pkgUsages }, "Applied server-computed package usages");
         } catch (schemaError) {
           logger.error({ schemaError, packageUsages: packageComputeResult.packageUsages }, "Invalid computed packageUsages schema");
