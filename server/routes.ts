@@ -4142,9 +4142,11 @@ export async function registerRoutes(
           }
 
           for (const usage of pkgUsages) {
-            const pkg = pkgs.find((p: any) => p.id === usage.packageId);
+            const pkg = pkgs.find(
+              (p: any) => p.packageId === usage.packageId || p.id === usage.packageId,
+            );
             if (!pkg) {
-              logger.error("Package not found:", usage.packageId as any);
+              logger.warn({ packageId: usage.packageId }, "Package not found for usage");
               continue;
             }
 
@@ -4167,15 +4169,9 @@ export async function registerRoutes(
             }
 
             for (const item of usage.items || []) {
-              const price = await storage.getItemServicePrice(
-                item.clothingItemId,
-                item.serviceId,
-                user.id,
-                user.branchId!,
-              );
               await storage.updateCustomerPackageBalance(
-                usage.packageId,
-                -(price ?? 0) * item.quantity,
+                pkg.id,
+                -item.quantity,
                 item.serviceId,
                 item.clothingItemId,
               );
