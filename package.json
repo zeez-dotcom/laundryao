@@ -19,7 +19,7 @@
     "dev": "dotenv -e .env -- tsx -r dotenv/config server/index.ts",
     "start": "node dist/server/index.js",
     "build": "npm run build:server",
-    "build:server": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json --resolve-full-paths --resolve-full-extension .js",
+    "build:server": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json --resolve-full-paths --resolve-full-extension .js && node scripts/fix-esm-imports.cjs",
     "build:client": "vite build",
     "check": "tsc --noEmit",
     "lint:no-console": "node scripts/no-console-check.cjs",
