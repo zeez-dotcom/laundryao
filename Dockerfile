@@ -27,12 +27,12 @@ CMD ["npm", "run", "dev"]
 FROM deps-dev AS build
 ENV NODE_ENV=production
 COPY . .
-RUN npx vite build
+RUN npm run build && npm run build:client
 
-# Runtime: run server via tsx and serve built client assets
+# Runtime: run compiled server and serve built client assets
 FROM deps-dev AS runtime
 ENV NODE_ENV=production
 COPY . .
 COPY --from=build /app/dist ./dist
 EXPOSE 5000
-CMD ["node", "--import", "tsx", "server/index.ts"]
+CMD ["node", "dist/server/index.js"]
