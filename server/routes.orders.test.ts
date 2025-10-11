@@ -4,11 +4,14 @@ import express from 'express';
 import request from 'supertest';
 import { insertOrderSchema } from '@shared/schema';
 
+const noopLogger = { error: () => {}, warn: () => {}, info: () => {} };
+
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgres://user:pass@localhost/db';
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret';
 const { requireAuth } = await import('./auth');
 
-function createApp(storage: any) {
+function createApp(storage: any, logger: any = noopLogger) {
+  const log = { ...noopLogger, ...logger };
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => {
@@ -26,11 +29,16 @@ function createApp(storage: any) {
       const orderData = insertOrderSchema.parse({ ...data, items: cartItems, customerId });
       if (Array.isArray(packageUsages)) {
         const pkgs = await storage.getCustomerPackagesWithUsage(customerId);
+        const matchedPackages = new Map<string, any>();
         for (const usage of packageUsages) {
-          const pkg = pkgs.find((p: any) => p.id === usage.packageId);
+          const pkg = pkgs.find(
+            (p: any) => p.packageId === usage.packageId || p.id === usage.packageId,
+          );
           if (!pkg) {
+            log.warn('Package not found for usage', usage.packageId);
             return res.status(400).json({ message: 'Invalid package' });
           }
+          matchedPackages.set(usage.packageId, pkg);
           for (const item of usage.items || []) {
             const pkgItem = pkg.items?.find(
               (i: any) =>
@@ -38,21 +46,18 @@ function createApp(storage: any) {
                 i.clothingItemId === item.clothingItemId,
             );
             if (!pkgItem || pkgItem.balance < item.quantity) {
+              log.error('Insufficient package credits for item', item);
               return res.status(400).json({ message: 'Insufficient package credits' });
             }
           }
         }
         for (const usage of packageUsages) {
+          const pkg = matchedPackages.get(usage.packageId);
+          if (!pkg) continue;
           for (const item of usage.items || []) {
-            const price = await storage.getItemServicePrice(
-              item.clothingItemId,
-              item.serviceId,
-              user.id,
-              user.branchId,
-            );
             await storage.updateCustomerPackageBalance(
-              usage.packageId,
-              -(price ?? 0) * item.quantity,
+              pkg.id,
+              -item.quantity,
               item.serviceId,
               item.clothingItemId,
             );
@@ -492,6 +497,62 @@ test('processes usage from multiple packages', async () => {
     { id: 'cp1', change: -2, serviceId: 's1', clothingItemId: 'c1' },
     { id: 'cp2', change: -1, serviceId: 's1', clothingItemId: 'c1' },
   ]);
+});
+
+test('matches package usage by packageId and deducts quantities without error logs', async () => {
+  const updates: any[] = [];
+  const errors: any[] = [];
+  const storage: any = {
+    createOrder: async (data: any) => ({ id: 'o1', ...data }),
+    getCustomerPackagesWithUsage: async () => [
+      {
+        id: 'cp1',
+        packageId: 'pkg-123',
+        items: [{ serviceId: 's1', clothingItemId: 'c1', balance: 10, totalCredits: 10 }],
+      },
+    ],
+    updateCustomerPackageBalance: async (
+      id: string,
+      change: number,
+      serviceId?: string,
+      clothingItemId?: string,
+    ) => {
+      updates.push({ id, change, serviceId, clothingItemId });
+    },
+  };
+  const logger = {
+    ...noopLogger,
+    error: (...args: any[]) => {
+      errors.push(args);
+    },
+  };
+  const app = createApp(storage, logger);
+
+  const res = await request(app)
+    .post('/api/orders')
+    .send({
+      cartItems: [
+        { id: 'i1', clothingItem: 'Shirt', service: 'Wash', quantity: 3, price: 5, total: 15 },
+      ],
+      customerId: '33333333-3333-3333-3333-333333333333',
+      branchCode: 'b1',
+      customerName: 'Nina',
+      customerPhone: '555',
+      subtotal: '15',
+      tax: '0',
+      total: '15',
+      paymentMethod: 'cash',
+      status: 'start_processing',
+      sellerName: 'Eve',
+      packageUsages: [
+        { packageId: 'pkg-123', items: [{ serviceId: 's1', clothingItemId: 'c1', quantity: 3 }] },
+      ],
+    });
+  assert.equal(res.status, 200);
+  assert.deepEqual(updates, [
+    { id: 'cp1', change: -3, serviceId: 's1', clothingItemId: 'c1' },
+  ]);
+  assert.equal(errors.length, 0);
 });
 
 test('GET /api/orders returns packages with used counts for multiple packages', async () => {
