@@ -4158,9 +4158,9 @@ export class DatabaseStorage {
         SELECT
           DATE_FORMAT(o.created_at, '${format}') AS period,
           1 AS count,
-          p.amount AS revenue
+          COALESCE(p.amount, 0) AS revenue
         FROM orders o
-        JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
+        LEFT JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
           AND o.is_delivery_request = false
