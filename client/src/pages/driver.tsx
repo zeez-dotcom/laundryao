@@ -32,7 +32,8 @@ export default function DriverDashboard() {
 
   useEffect(() => {
     if (!driverId) return;
-    const orderWs = new WebSocket(`ws://${window.location.host}/ws/delivery-orders`);
+    const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const orderWs = new WebSocket(`${wsScheme}://${window.location.host}/ws/delivery-orders`);
     orderWs.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -44,7 +45,7 @@ export default function DriverDashboard() {
       }
     };
 
-    const locWs = new WebSocket(`ws://${window.location.host}/ws/driver-location`);
+    const locWs = new WebSocket(`${wsScheme}://${window.location.host}/ws/driver-location`);
     let watchId: number | undefined;
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition((pos) => {
