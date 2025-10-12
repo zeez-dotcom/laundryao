@@ -10,7 +10,7 @@ test('getClothingItemStats aggregates items with services', async () => {
   const orders = [
     {
       id: 'o1',
-      branchId: 'b1',
+      branchId: '00000000-0000-0000-0000-000000000001',
       paymentMethod: 'card',
       items: [
         { clothingItem: 'Shirt', service: 'Wash', quantity: 2, total: 20 },
@@ -19,7 +19,7 @@ test('getClothingItemStats aggregates items with services', async () => {
     },
     {
       id: 'o2',
-      branchId: 'b1',
+      branchId: '00000000-0000-0000-0000-000000000001',
       paymentMethod: 'pay_later',
       items: [
         { clothingItem: 'Shirt', service: 'Iron', quantity: 1, total: 10 },
@@ -27,7 +27,7 @@ test('getClothingItemStats aggregates items with services', async () => {
     },
     {
       id: 'o3',
-      branchId: 'b2',
+      branchId: '00000000-0000-0000-0000-000000000002',
       paymentMethod: 'card',
       items: [
         { clothingItem: 'Coat', service: 'Dry Clean', quantity: 1, total: 40 },
@@ -60,10 +60,34 @@ test('getClothingItemStats aggregates items with services', async () => {
     return typeof limit === 'number' ? arr.slice(0, limit) : arr;
   }
 
-  const branchId = 'b1';
+  const branchId = '00000000-0000-0000-0000-000000000001';
   const limit = 5;
   const originalExecute = db.execute;
-  (db as any).execute = async () => ({ rows: compute(branchId, limit) });
+  let receivedSql = '';
+  (db as any).execute = async (query: any) => {
+    if (typeof query === 'string') {
+      receivedSql = query;
+    } else if (query) {
+      if (Array.isArray(query.queryChunks)) {
+        receivedSql = query.queryChunks
+          .map((chunk: any) => {
+            const value = chunk?.value;
+            if (Array.isArray(value)) {
+              return value.join('');
+            }
+            return value ?? '';
+          })
+          .join('');
+      }
+      if (!receivedSql) {
+        receivedSql = query.sql ?? query.text ?? query.query ?? '';
+      }
+      if (!receivedSql && typeof query.toString === 'function') {
+        receivedSql = query.toString();
+      }
+    }
+    return { rows: compute(branchId, limit) };
+  };
 
   const storage = new DatabaseStorage();
   const result = await storage.getClothingItemStats('daily', branchId, limit);
@@ -71,4 +95,6 @@ test('getClothingItemStats aggregates items with services', async () => {
   (db as any).execute = originalExecute;
 
   assert.deepEqual(result, compute(branchId, limit));
+  assert.match(receivedSql, /jsonb_to_recordset/i);
+  assert.ok(!/JSON_TABLE/i.test(receivedSql));
 });
