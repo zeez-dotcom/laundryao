@@ -5,6 +5,8 @@ import {
   type ParsedRow,
   generateCustomerPasswordOtp,
   verifyCustomerPasswordOtp,
+  DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS,
+  type CustomerEngagementPlanUpdateInput,
 } from "./storage";
 import { db } from "./db";
 import {
@@ -130,6 +132,8 @@ const RATE_LIMIT_CONFIG = {
   REGISTER_MAX_ATTEMPTS: 5,
   LOCKOUT_DURATION_MS: 30 * 60 * 1000, // 30 minutes lockout
 } as const;
+
+const MAX_BULK_CUSTOMER_ACTIONS = 50;
 
 /**
  * Enhanced rate limiting with exponential backoff and temporary lockouts
@@ -4006,6 +4010,235 @@ export async function registerRoutes(
       res.json({ items: insights, total: insights.length });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch customer insights" });
+    }
+  });
+
+  app.get("/api/customer-insights/:id/actions", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const rawId = await resolveUuidByPublicId(customers, req.params.id);
+      const branchScope = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomer(rawId, branchScope);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      const plan = await storage.getCustomerEngagementPlan(rawId);
+      res.json({
+        customer: {
+          id: customer.id,
+          name: customer.name,
+          phoneNumber: customer.phoneNumber,
+          email: customer.email,
+          branchId: customer.branchId,
+        },
+        plan: plan || null,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Failed to load customer engagement plan");
+      res.status(500).json({ message: "Failed to load customer engagement plan" });
+    }
+  });
+
+  app.put("/api/customer-insights/:id/actions", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const rawId = await resolveUuidByPublicId(customers, req.params.id);
+      const branchScope = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customer = await storage.getCustomer(rawId, branchScope);
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+
+      const schema = z
+        .object({
+          recommendedAction: z.string().trim().max(500).optional().nullable(),
+          recommendedChannel: z.enum(["sms", "email"]).optional().nullable(),
+          nextContactAt: z.string().datetime().optional().nullable(),
+          lastOutcome: z.string().trim().max(500).optional().nullable(),
+          planSource: z.enum(["auto", "manual"]).optional(),
+          clearRateLimit: z.boolean().optional(),
+        })
+        .partial();
+
+      const parsed = schema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return res.status(400).json({ message: issue?.message || "Invalid payload" });
+      }
+
+      const data = parsed.data;
+      const updates: CustomerEngagementPlanUpdateInput = {};
+      if (typeof data.recommendedAction !== "undefined") {
+        updates.recommendedAction = data.recommendedAction ? data.recommendedAction.trim() : null;
+      }
+      if (typeof data.recommendedChannel !== "undefined") {
+        updates.recommendedChannel = data.recommendedChannel ?? null;
+      }
+      if (typeof data.nextContactAt !== "undefined") {
+        if (data.nextContactAt === null) {
+          updates.nextContactAt = null;
+        } else {
+          const parsedDate = new Date(data.nextContactAt);
+          if (Number.isNaN(parsedDate.getTime())) {
+            return res.status(400).json({ message: "Invalid nextContactAt" });
+          }
+          updates.nextContactAt = parsedDate;
+        }
+      }
+      if (typeof data.lastOutcome !== "undefined") {
+        updates.lastOutcome = data.lastOutcome ? data.lastOutcome.trim() : null;
+      }
+      if (typeof data.planSource !== "undefined") {
+        updates.source = data.planSource;
+      }
+      if (data.clearRateLimit) {
+        updates.rateLimitedUntil = null;
+      }
+
+      const plan = await storage.updateCustomerEngagementPlan(rawId, updates, customer.branchId);
+      res.json(plan ?? null);
+    } catch (error) {
+      logger.error({ err: error }, "Failed to update customer engagement plan");
+      res.status(500).json({ message: "Failed to update customer engagement plan" });
+    }
+  });
+
+  app.post("/api/customer-insights/actions/bulk-send", requireAdminOrSuperAdmin, async (req, res) => {
+    const schema = z.object({
+      customerIds: z.array(z.string().min(1)).min(1).max(MAX_BULK_CUSTOMER_ACTIONS),
+      channel: z.enum(["sms", "email"]),
+      message: z.string().trim().min(1).max(2000),
+      subject: z.string().trim().max(150).optional(),
+      templateKey: z.string().trim().max(120).optional(),
+      rateLimitHours: z.number().min(1).max(168).optional(),
+      nextContactAt: z.string().datetime().optional().nullable(),
+    });
+
+    try {
+      const user = req.user as UserWithBranch;
+      const parsed = schema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return res.status(400).json({ message: issue?.message || "Invalid payload" });
+      }
+
+      const { customerIds, channel, message, subject, templateKey, rateLimitHours, nextContactAt } = parsed.data;
+      if (channel === "email" && (!subject || !subject.trim())) {
+        return res.status(400).json({ message: "Email subject is required" });
+      }
+
+      const effectiveBranchId = user.role === "super_admin" ? undefined : user.branchId || undefined;
+      const customersList = await storage.getCustomersByIds(customerIds, effectiveBranchId);
+      const customerMap = new Map(customersList.map((customer) => [customer.id, customer]));
+      const rateLimitMs = Math.max(1, Math.min(rateLimitHours ?? DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS, 168)) *
+        60 * 60 * 1000;
+      const nextContactDate = typeof nextContactAt === "string" && nextContactAt
+        ? (() => {
+            const parsedDate = new Date(nextContactAt);
+            return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+          })()
+        : nextContactAt === null
+        ? null
+        : undefined;
+
+      const results: Array<{
+        customerId: string;
+        status: "sent" | "skipped" | "failed";
+        reason?: string;
+      }> = [];
+
+      for (const customerId of customerIds) {
+        const customer = customerMap.get(customerId);
+        if (!customer) {
+          results.push({ customerId, status: "skipped", reason: "Customer not accessible" });
+          continue;
+        }
+
+        const plan = await storage.getCustomerEngagementPlan(customerId);
+        if (plan?.rateLimitedUntil) {
+          const until = new Date(plan.rateLimitedUntil);
+          if (!Number.isNaN(until.getTime()) && until.getTime() > Date.now()) {
+            results.push({
+              customerId,
+              status: "skipped",
+              reason: `Rate limited until ${until.toISOString()}`,
+            });
+            continue;
+          }
+        }
+
+        const personalizedMessage = message.replace(/\{name\}/gi, customer.name);
+        const personalizedSubject = subject ? subject.replace(/\{name\}/gi, customer.name) : undefined;
+
+        let status: "sent" | "skipped" | "failed" = "sent";
+        let reason: string | undefined;
+
+        try {
+          if (channel === "sms") {
+            if (!customer.phoneNumber) {
+              status = "skipped";
+              reason = "Missing phone number";
+            } else {
+              const sent = await notificationService.sendSMS(customer.phoneNumber, personalizedMessage);
+              if (!sent) {
+                status = "skipped";
+                reason = "SMS notifications disabled";
+              }
+            }
+          } else {
+            if (!customer.email) {
+              status = "skipped";
+              reason = "Missing email address";
+            } else {
+              const htmlMessage = /<[^>]+>/.test(personalizedMessage)
+                ? personalizedMessage
+                : personalizedMessage.replace(/\n/g, "<br />");
+              const sent = await notificationService.sendEmail(customer.email, personalizedSubject!, htmlMessage);
+              if (!sent) {
+                status = "skipped";
+                reason = "Email notifications disabled";
+              }
+            }
+          }
+        } catch (error) {
+          status = "failed";
+          const err = error instanceof Error ? error.message : "Unknown error";
+          reason = err;
+          logger.error({ err: error, customerId }, "Failed to queue outreach notification");
+        }
+
+        const now = new Date();
+        const planUpdates: CustomerEngagementPlanUpdateInput = {
+          lastActionAt: now,
+          lastActionChannel: channel,
+          lastOutcome:
+            status === "sent"
+              ? `sent:${channel}${templateKey ? `:${templateKey}` : ""}`
+              : status === "skipped"
+              ? `skipped:${reason ?? "unknown"}`
+              : `failed:${reason ?? "unknown"}`,
+          source: "manual",
+          rateLimitedUntil: new Date(now.getTime() + rateLimitMs),
+        };
+
+        if (!plan || plan.source === "auto") {
+          planUpdates.recommendedAction = personalizedMessage;
+          planUpdates.recommendedChannel = channel;
+        }
+
+        if (typeof nextContactDate !== "undefined") {
+          planUpdates.nextContactAt = nextContactDate;
+        }
+
+        await storage.updateCustomerEngagementPlan(customerId, planUpdates, customer.branchId);
+
+        results.push({ customerId, status, reason });
+      }
+
+      res.json({ results });
+    } catch (error) {
+      logger.error({ err: error }, "Failed to queue outreach notifications");
+      res.status(500).json({ message: "Failed to queue outreach notifications" });
     }
   });
 

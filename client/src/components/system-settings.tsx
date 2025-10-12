@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useCurrency, Currency } from "@/lib/currency";
 import { useTranslation, Language } from "@/lib/i18n";
-import { Settings, DollarSign, Globe, Store, Percent, Wrench } from "lucide-react";
+import { Settings, DollarSign, Globe, Store, Percent, Wrench, Sparkles } from "lucide-react";
 
 export function SystemSettings() {
   const { toast } = useToast();
@@ -40,6 +40,7 @@ export function SystemSettings() {
 
   const currencies = getAllCurrencies();
   const [backfillLoading, setBackfillLoading] = useState(false);
+  const outreachRateLimitHours = 24;
 
   const runBackfill = async () => {
     try {
@@ -207,6 +208,30 @@ export function SystemSettings() {
             <Button onClick={runBackfill} disabled={backfillLoading} variant="outline">
               {backfillLoading ? 'Running…' : 'Backfill Bilingual Names'}
             </Button>
+          </CardContent>
+        </Card>
+
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5" />
+              Engagement Automation
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-gray-600">
+            <p>
+              Bulk outreach tools in the insights dashboard let admins queue SMS or email follow-ups based on churn tiers
+              and preferred services.
+            </p>
+            <ul className="list-disc space-y-1 pl-4">
+              <li>Templates accept <code>{`{name}`}</code> placeholders for personalization.</li>
+              <li>Default cooldown is {outreachRateLimitHours} hours; manual sends update the next-contact timestamp.</li>
+              <li>Disabled channels are skipped automatically with a recorded outcome.</li>
+            </ul>
+            <p>
+              Configure cadence and confirm selections from the insights view. Future releases will surface template
+              management controls here.
+            </p>
           </CardContent>
         </Card>
       </div>

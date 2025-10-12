@@ -1,13 +1,22 @@
-import { useEffect, useState, useRef, type CSSProperties } from "react";
+import { useEffect, useState, useRef, useMemo, type CSSProperties } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Customer, InsertCustomer, Payment, InsertPayment, LoyaltyHistory, insertCustomerSchema } from "@shared/schema";
@@ -28,8 +37,15 @@ import {
   Download,
   BarChart3,
   AlertTriangle,
+  Sparkles,
+  Clock,
+  MessageCircle,
+  Mail,
+  Send,
+  Filter,
+  CheckCircle2,
 } from "lucide-react";
-import { format, differenceInDays } from "date-fns";
+import { format } from "date-fns";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslation } from "@/lib/i18n";
@@ -240,8 +256,12 @@ interface CustomerInsightClothing {
   revenue: number;
 }
 
+type EngagementChannel = "sms" | "email";
+type CustomerChurnTier = "no_orders" | "new" | "steady" | "loyal" | "at_risk" | "dormant";
+
 interface CustomerInsightRecord {
   customerId: string;
+  branchId: string;
   name: string;
   phoneNumber: string;
   loyaltyPoints: number;
@@ -250,6 +270,19 @@ interface CustomerInsightRecord {
   lastOrderDate: string | null;
   orderCount: number;
   averageOrderValue: number;
+  churnTier: CustomerChurnTier;
+  preferredServices: string[];
+  recommendedAction: string | null;
+  recommendedChannel: EngagementChannel | null;
+  nextContactAt: string | null;
+  lastActionAt: string | null;
+  lastActionChannel: EngagementChannel | null;
+  lastOutcome: string | null;
+  planSource: "auto" | "manual";
+  rateLimitedUntil: string | null;
+  suggestedAction: string;
+  suggestedChannel: EngagementChannel;
+  suggestedNextContactAt: string | null;
   monthlySpend: CustomerInsightMonthly[];
   topServices: CustomerInsightService[];
   topClothing: CustomerInsightClothing[];
@@ -259,6 +292,49 @@ interface CustomerInsightResponse {
   items: CustomerInsightRecord[];
   total: number;
 }
+
+const DEFAULT_RATE_LIMIT_HOURS = 24;
+
+const OUTREACH_TEMPLATES: Array<{
+  id: string;
+  label: string;
+  channel: EngagementChannel;
+  message: string;
+  subject?: string;
+}> = [
+  {
+    id: "winback",
+    label: "Win-back SMS (7-day reminder)",
+    channel: "sms",
+    message: "Hi {name}, we miss you at LaundryAO! Enjoy 20% off your next order this week. Reply STOP to opt out.",
+  },
+  {
+    id: "loyalty",
+    label: "Loyalty appreciation email",
+    channel: "email",
+    subject: "Thank you for being part of LaundryAO Rewards",
+    message:
+      "Hi {name},<br />Thanks for trusting LaundryAO. Enjoy a complimentary stain treatment on your next pickup this month.",
+  },
+  {
+    id: "seasonal",
+    label: "Seasonal bundle email",
+    channel: "email",
+    subject: "Freshen up for the season with 15% off bundles",
+    message:
+      "Hi {name},<br />Keep your wardrobe ready for the season. Schedule a pickup this week and save 15% on bundle services.",
+  },
+];
+
+type BulkSendPayload = {
+  customerIds: string[];
+  channel: EngagementChannel;
+  message: string;
+  subject?: string;
+  templateKey?: string;
+  rateLimitHours?: number;
+  nextContactAt?: string | null;
+};
 
   const { data: customerOrders = [] } = useQuery<CustomerOrder[]>({
     queryKey: ["/api/customers", reportCustomer?.id, "orders"],
@@ -340,7 +416,58 @@ interface CustomerInsightResponse {
     },
   });
 
+  const [churnFilter, setChurnFilter] = useState<"all" | CustomerChurnTier>("all");
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set());
+  const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false);
+  const [bulkTemplate, setBulkTemplate] = useState<string>(OUTREACH_TEMPLATES[0]?.id ?? "winback");
+  const [bulkChannel, setBulkChannel] = useState<EngagementChannel>(OUTREACH_TEMPLATES[0]?.channel ?? "sms");
+  const [bulkMessage, setBulkMessage] = useState<string>(OUTREACH_TEMPLATES[0]?.message ?? "");
+  const [bulkSubject, setBulkSubject] = useState<string>(OUTREACH_TEMPLATES[0]?.subject ?? "");
+  const [bulkNextContact, setBulkNextContact] = useState<string>("");
+  const [bulkRateLimitHours, setBulkRateLimitHours] = useState<number>(DEFAULT_RATE_LIMIT_HOURS);
+
+  const templatesById = useMemo(
+    () => new Map(OUTREACH_TEMPLATES.map((template) => [template.id, template])),
+    [],
+  );
+
+  useEffect(() => {
+    const template = templatesById.get(bulkTemplate);
+    if (template) {
+      setBulkChannel(template.channel);
+      setBulkMessage(template.message);
+      setBulkSubject(template.subject ?? "");
+    }
+  }, [bulkTemplate, templatesById]);
+
+  useEffect(() => {
+    setSelectedCustomerIds((prev) => {
+      const available = new Set((insightsData?.items ?? []).map((insight) => insight.customerId));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (available.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [insightsData]);
+
+  useEffect(() => {
+    if (!isBulkDialogOpen) {
+      setBulkNextContact("");
+    }
+  }, [isBulkDialogOpen]);
+
   const insights = insightsData?.items ?? [];
+  const filteredInsights = useMemo(
+    () => (churnFilter === "all" ? insights : insights.filter((item) => item.churnTier === churnFilter)),
+    [insights, churnFilter],
+  );
+  const selectedCount = selectedCustomerIds.size;
 
   const addCustomerMutation = useMutation({
     mutationFn: async (customer: CustomerWithCity) => {
@@ -461,6 +588,34 @@ interface CustomerInsightResponse {
       toast({
         title: t.error,
         description: t.failedToResetPassword,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const bulkSendMutation = useMutation({
+    mutationFn: async (payload: BulkSendPayload) => {
+      const response = await apiRequest("POST", "/api/customer-insights/actions/bulk-send", payload);
+      return response.json() as Promise<{
+        results: { customerId: string; status: "sent" | "skipped" | "failed"; reason?: string }[];
+      }>;
+    },
+    onSuccess: (data) => {
+      const sent = data.results.filter((result) => result.status === "sent").length;
+      const skipped = data.results.filter((result) => result.status === "skipped").length;
+      const failed = data.results.filter((result) => result.status === "failed").length;
+      toast({
+        title: "Outreach processed",
+        description: `Sent: ${sent}, Skipped: ${skipped}, Failed: ${failed}`,
+      });
+      setIsBulkDialogOpen(false);
+      clearInsightSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/customer-insights", branch?.id] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: t.error,
+        description: error?.message || "Failed to queue outreach",
         variant: "destructive",
       });
     },
@@ -606,47 +761,84 @@ interface CustomerInsightResponse {
     }
   };
 
-  const getChurnRisk = (lastOrderDate: string | null) => {
-    if (!lastOrderDate) {
-      return {
-        label: "No orders yet",
-        className: "border-slate-200 bg-slate-100 text-slate-700",
-        icon: <Minus className="h-3 w-3" />,
-      };
+  const toggleInsightSelection = (customerId: string, nextValue: boolean) => {
+    setSelectedCustomerIds((prev) => {
+      const next = new Set(prev);
+      if (nextValue) {
+        next.add(customerId);
+      } else {
+        next.delete(customerId);
+      }
+      return next;
+    });
+  };
+
+  const clearInsightSelection = () => {
+    setSelectedCustomerIds(new Set());
+  };
+
+  const selectFilteredCustomers = () => {
+    setSelectedCustomerIds((prev) => {
+      const next = new Set(prev);
+      filteredInsights.forEach((insight) => next.add(insight.customerId));
+      return next;
+    });
+  };
+
+  const formatOutcome = (outcome?: string | null) => {
+    if (!outcome) return "";
+    const [status, ...rest] = outcome.split(":");
+    const detail = rest.join(":");
+    const label =
+      status === "sent" ? "Sent" : status === "skipped" ? "Skipped" : status === "failed" ? "Failed" : status;
+    return detail ? `${label} (${detail})` : label;
+  };
+
+  const getChurnBadge = (tier: CustomerChurnTier) => {
+    switch (tier) {
+      case "loyal":
+        return {
+          label: "Loyalist",
+          className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+          icon: <CheckCircle2 className="h-3 w-3" />,
+        };
+      case "steady":
+        return {
+          label: "Steady",
+          className: "border-sky-200 bg-sky-100 text-sky-700",
+          icon: <TrendingUp className="h-3 w-3" />,
+        };
+      case "at_risk":
+        return {
+          label: "At risk",
+          className: "border-amber-200 bg-amber-100 text-amber-700",
+          icon: <AlertTriangle className="h-3 w-3" />,
+        };
+      case "dormant":
+        return {
+          label: "Dormant",
+          className: "border-rose-200 bg-rose-100 text-rose-700",
+          icon: <TrendingDown className="h-3 w-3" />,
+        };
+      case "new":
+        return {
+          label: "New",
+          className: "border-blue-200 bg-blue-100 text-blue-700",
+          icon: <Sparkles className="h-3 w-3" />,
+        };
+      case "no_orders":
+      default:
+        return {
+          label: "No orders yet",
+          className: "border-slate-200 bg-slate-100 text-slate-700",
+          icon: <Minus className="h-3 w-3" />,
+        };
     }
-    const days = differenceInDays(new Date(), new Date(lastOrderDate));
-    if (!Number.isFinite(days)) {
-      return {
-        label: "Unknown",
-        className: "border-slate-200 bg-slate-100 text-slate-700",
-        icon: <AlertTriangle className="h-3 w-3" />,
-      };
-    }
-    if (days <= 30) {
-      return {
-        label: "Low risk",
-        className: "border-emerald-200 bg-emerald-100 text-emerald-700",
-        icon: <TrendingUp className="h-3 w-3" />,
-      };
-    }
-    if (days <= 60) {
-      return {
-        label: "Moderate risk",
-        className: "border-amber-200 bg-amber-100 text-amber-700",
-        icon: <AlertTriangle className="h-3 w-3" />,
-      };
-    }
-    return {
-      label: "High risk",
-      className: "border-red-200 bg-red-100 text-red-700",
-      icon: <TrendingDown className="h-3 w-3" />,
-    };
   };
 
   const handleInsightsExportCSV = () => {
-    if (!insights.length) return;
-    const rows = insights.map((insight) => {
-      const churn = getChurnRisk(insight.lastOrderDate);
+    if (!filteredInsights.length) return;
+    const rows = filteredInsights.map((insight) => {
       const topServices = insight.topServices
         .slice(0, 3)
         .map((svc) => `${svc.service} (${svc.quantity})`)
@@ -655,20 +847,99 @@ interface CustomerInsightResponse {
         .slice(0, 3)
         .map((item) => `${item.item} (${item.quantity})`)
         .join("; ");
+      const nextContact = insight.nextContactAt
+        ? format(new Date(insight.nextContactAt), "yyyy-MM-dd HH:mm")
+        : insight.suggestedNextContactAt
+        ? format(new Date(insight.suggestedNextContactAt), "yyyy-MM-dd HH:mm")
+        : "";
       return {
         customer: insight.name,
         phone: insight.phoneNumber,
+        churnTier: insight.churnTier,
+        preferredServices: insight.preferredServices.join("; "),
+        suggestedAction: insight.suggestedAction,
+        planAction: insight.recommendedAction ?? "",
+        planSource: insight.planSource,
+        channel: (insight.recommendedChannel ?? insight.suggestedChannel).toUpperCase(),
+        nextContact,
+        lastOutcome: insight.lastOutcome ?? "",
         totalSpend: insight.totalSpend.toFixed(2),
-        lastOrder: insight.lastOrderDate ? format(new Date(insight.lastOrderDate), "yyyy-MM-dd") : "",
-        loyaltyPoints: insight.loyaltyPoints,
-        churnRisk: churn.label,
         orderCount: insight.orderCount,
         averageOrderValue: insight.averageOrderValue.toFixed(2),
+        lastOrder: insight.lastOrderDate ? format(new Date(insight.lastOrderDate), "yyyy-MM-dd") : "",
+        loyaltyPoints: insight.loyaltyPoints,
         topServices,
         topClothing,
       };
     });
     downloadCSV(rows, "customer_insights.csv");
+  };
+
+  const handleBulkSend = () => {
+    const ids = Array.from(selectedCustomerIds);
+    if (!ids.length) {
+      toast({
+        title: t.error,
+        description: "Select at least one customer",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!bulkMessage.trim()) {
+      toast({
+        title: t.error,
+        description: "Message cannot be empty",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (bulkChannel === "email" && !bulkSubject.trim()) {
+      toast({
+        title: t.error,
+        description: "Email subject is required",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!Number.isFinite(bulkRateLimitHours) || bulkRateLimitHours < 1) {
+      toast({
+        title: t.error,
+        description: "Rate limit hours must be at least 1",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    let nextContactValue: string | null | undefined;
+    if (bulkNextContact) {
+      const parsed = new Date(bulkNextContact);
+      if (Number.isNaN(parsed.getTime())) {
+        toast({
+          title: t.error,
+          description: "Invalid next contact date",
+          variant: "destructive",
+        });
+        return;
+      }
+      nextContactValue = parsed.toISOString();
+    } else if (bulkNextContact === "") {
+      nextContactValue = undefined;
+    }
+
+    const payload: BulkSendPayload = {
+      customerIds: ids,
+      channel: bulkChannel,
+      message: bulkMessage,
+      templateKey: bulkTemplate,
+      rateLimitHours: Math.max(1, Math.min(168, Math.round(bulkRateLimitHours))),
+      nextContactAt: typeof nextContactValue === "undefined" ? undefined : nextContactValue,
+    };
+
+    if (bulkChannel === "email") {
+      payload.subject = bulkSubject;
+    }
+
+    bulkSendMutation.mutate(payload);
   };
 
   const handlePaymentsExportPDF = async () => {
@@ -960,12 +1231,59 @@ interface CustomerInsightResponse {
               Understand loyalty momentum and service preferences at a glance.
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={churnFilter}
+              onValueChange={(value) => setChurnFilter(value as "all" | CustomerChurnTier)}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Filter by churn" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All churn tiers</SelectItem>
+                <SelectItem value="no_orders">No orders yet</SelectItem>
+                <SelectItem value="new">New</SelectItem>
+                <SelectItem value="steady">Steady</SelectItem>
+                <SelectItem value="loyal">Loyalist</SelectItem>
+                <SelectItem value="at_risk">At risk</SelectItem>
+                <SelectItem value="dormant">Dormant</SelectItem>
+              </SelectContent>
+            </Select>
+            {selectedCount > 0 ? (
+              <Badge variant="secondary" className="bg-primary/10 text-primary">
+                {selectedCount} selected
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground">
+                {filteredInsights.length} shown
+              </Badge>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={selectFilteredCustomers}
+              disabled={!filteredInsights.length}
+            >
+              Select visible
+            </Button>
+            {selectedCount > 0 && (
+              <Button variant="ghost" size="sm" onClick={clearInsightSelection}>
+                Clear selection
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={() => setIsBulkDialogOpen(true)}
+              disabled={!selectedCount || bulkSendMutation.isPending}
+            >
+              <Send className="mr-2 h-4 w-4" />
+              Queue outreach
+            </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleInsightsExportCSV}
-              disabled={insightsLoading || insights.length === 0}
+              disabled={insightsLoading || filteredInsights.length === 0}
             >
               <Download className="mr-2 h-4 w-4" />
               {t.exportCSV}
@@ -975,11 +1293,11 @@ interface CustomerInsightResponse {
         <CardContent className="space-y-4">
           {insightsLoading ? (
             <p className="text-sm text-muted-foreground">{t.loading}</p>
-          ) : insights.length === 0 ? (
+          ) : filteredInsights.length === 0 ? (
             <p className="text-sm text-muted-foreground">No insight data available yet.</p>
           ) : (
             <div className="space-y-4">
-              {insights.map((insight) => {
+              {filteredInsights.map((insight) => {
                 const monthlySorted = [...insight.monthlySpend].sort((a, b) =>
                   a.month.localeCompare(b.month),
                 );
@@ -1006,10 +1324,12 @@ interface CustomerInsightResponse {
                     : trendValue < 0
                     ? "text-amber-600"
                     : "text-slate-600";
-                const churn = getChurnRisk(insight.lastOrderDate);
+                const churn = getChurnBadge(insight.churnTier);
                 const lastOrderLabel = insight.lastOrderDate
                   ? format(new Date(insight.lastOrderDate), "MMM dd, yyyy")
                   : "No orders yet";
+                const isSelected = selectedCustomerIds.has(insight.customerId);
+                const formattedOutcome = formatOutcome(insight.lastOutcome);
 
                 return (
                   <div
@@ -1017,15 +1337,31 @@ interface CustomerInsightResponse {
                     className="rounded-lg border bg-card p-4 shadow-sm"
                   >
                     <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold">{insight.name}</h3>
-                          <Badge variant="outline" className={`flex items-center gap-1 ${churn.className}`}>
-                            {churn.icon}
-                            {churn.label}
-                          </Badge>
+                      <div className="space-y-3 md:flex-1">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-lg font-semibold">{insight.name}</h3>
+                              <Badge variant="outline" className={`flex items-center gap-1 ${churn.className}`}>
+                                {churn.icon}
+                                {churn.label}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground">{insight.phoneNumber}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(checked) =>
+                                toggleInsightSelection(insight.customerId, Boolean(checked))
+                              }
+                              aria-label={`Select ${insight.name}`}
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              {isSelected ? "Selected" : "Select"}
+                            </span>
+                          </div>
                         </div>
-                        <p className="text-sm text-muted-foreground">{insight.phoneNumber}</p>
                         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
                           <span>
                             {t.totalSpent}: <strong>{formatCurrency(insight.totalSpend)}</strong>
@@ -1041,7 +1377,7 @@ interface CustomerInsightResponse {
                           </span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 text-sm">
+                      <div className="flex flex-col gap-2 text-sm md:min-w-[200px]">
                         <div>
                           <div className="text-xs uppercase text-muted-foreground">Last order</div>
                           <div className="font-medium">{lastOrderLabel}</div>
@@ -1053,26 +1389,101 @@ interface CustomerInsightResponse {
                             <span>{trendText}</span>
                           </div>
                         </div>
+                        {insight.rateLimitedUntil && (
+                          <div className="text-xs text-amber-600 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            Rate limited until {format(new Date(insight.rateLimitedUntil), "MMM dd, HH:mm")}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
-                      <div>
-                        <div className="text-xs uppercase text-muted-foreground mb-2">Top services</div>
-                        {insight.topServices.length ? (
-                          <div className="flex flex-wrap gap-2">
-                            {insight.topServices.slice(0, 4).map((svc) => (
-                              <Badge
-                                key={`${insight.customerId}-${svc.service}`}
-                                variant="outline"
-                                className="border-blue-200 bg-blue-50 text-blue-700"
-                              >
-                                {svc.service} • {svc.quantity}x
-                              </Badge>
-                            ))}
+                    <div className="mt-4 grid gap-4 md:grid-cols-3">
+                      <div className="space-y-2 rounded-lg border border-dashed bg-muted/40 p-3">
+                        <div className="flex items-center justify-between text-xs uppercase text-muted-foreground">
+                          <span>Engagement plan</span>
+                          <Badge
+                            variant="outline"
+                            className={
+                              insight.planSource === "manual"
+                                ? "border-blue-200 bg-blue-50 text-blue-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }
+                          >
+                            {insight.planSource === "manual" ? "Manual" : "Auto"}
+                          </Badge>
+                        </div>
+                        <div className="flex items-start gap-2 text-sm">
+                          {(insight.recommendedChannel ?? insight.suggestedChannel) === "sms" ? (
+                            <MessageCircle className="h-4 w-4 text-primary mt-0.5" />
+                          ) : (
+                            <Mail className="h-4 w-4 text-primary mt-0.5" />
+                          )}
+                          <div>
+                            <p className="font-medium">
+                              {insight.recommendedAction ?? insight.suggestedAction}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Channel: {(insight.recommendedChannel ?? insight.suggestedChannel).toUpperCase()}
+                            </p>
                           </div>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">No service data</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          <span>
+                            Next contact:{" "}
+                            {insight.nextContactAt
+                              ? format(new Date(insight.nextContactAt), "MMM dd, yyyy HH:mm")
+                              : insight.suggestedNextContactAt
+                              ? format(new Date(insight.suggestedNextContactAt), "MMM dd, yyyy HH:mm")
+                              : "Not scheduled"}
+                          </span>
+                        </div>
+                        {insight.lastActionAt && (
+                          <div className="text-xs text-muted-foreground">
+                            Last touch: {format(new Date(insight.lastActionAt), "MMM dd, yyyy HH:mm")}
+                          </div>
                         )}
+                        {formattedOutcome && (
+                          <div className="text-xs text-muted-foreground">Last outcome: {formattedOutcome}</div>
+                        )}
+                      </div>
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground mb-2">Preferred services</div>
+                          {insight.preferredServices.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {insight.preferredServices.map((service) => (
+                                <Badge
+                                  key={`${insight.customerId}-${service}-preferred`}
+                                  variant="outline"
+                                  className="border-indigo-200 bg-indigo-50 text-indigo-700"
+                                >
+                                  {service}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No preference data</p>
+                          )}
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground mb-2">Top services</div>
+                          {insight.topServices.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {insight.topServices.slice(0, 4).map((svc) => (
+                                <Badge
+                                  key={`${insight.customerId}-${svc.service}`}
+                                  variant="outline"
+                                  className="border-blue-200 bg-blue-50 text-blue-700"
+                                >
+                                  {svc.service} • {svc.quantity}x
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No service data</p>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <div className="text-xs uppercase text-muted-foreground mb-2">Top clothing</div>
@@ -1117,6 +1528,102 @@ interface CustomerInsightResponse {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={isBulkDialogOpen} onOpenChange={setIsBulkDialogOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Queue outreach</DialogTitle>
+            <DialogDescription>
+              Send a templated message to {selectedCount} selected customer
+              {selectedCount === 1 ? "" : "s"}. Notifications respect rate limits and communication opt-outs.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label>Template</Label>
+              <Select value={bulkTemplate} onValueChange={setBulkTemplate}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a template" />
+                </SelectTrigger>
+                <SelectContent>
+                  {OUTREACH_TEMPLATES.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Templates support the <code className="rounded bg-muted px-1">{`{name}`}</code> placeholder for personalization.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Channel</Label>
+                <Select value={bulkChannel} onValueChange={(value) => setBulkChannel(value as EngagementChannel)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select channel" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sms">SMS</SelectItem>
+                    <SelectItem value="email">Email</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Rate limit (hours)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={168}
+                  value={bulkRateLimitHours}
+                  onChange={(event) => setBulkRateLimitHours(Number(event.target.value) || 0)}
+                />
+              </div>
+            </div>
+            {bulkChannel === "email" && (
+              <div className="grid gap-2">
+                <Label>Email subject</Label>
+                <Input
+                  value={bulkSubject}
+                  onChange={(event) => setBulkSubject(event.target.value)}
+                  placeholder="Thank you for choosing LaundryAO"
+                />
+              </div>
+            )}
+            <div className="grid gap-2">
+              <Label>Message</Label>
+              <Textarea
+                value={bulkMessage}
+                onChange={(event) => setBulkMessage(event.target.value)}
+                rows={5}
+              />
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Next contact (optional)</Label>
+                <Input
+                  type="datetime-local"
+                  value={bulkNextContact}
+                  onChange={(event) => setBulkNextContact(event.target.value)}
+                />
+              </div>
+              <div className="grid gap-1">
+                <Label>Selected customers</Label>
+                <p className="text-sm text-muted-foreground">{selectedCount}</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsBulkDialogOpen(false)} disabled={bulkSendMutation.isPending}>
+              {t.cancel}
+            </Button>
+            <Button onClick={handleBulkSend} disabled={bulkSendMutation.isPending}>
+              {bulkSendMutation.isPending ? "Queuing..." : "Send now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="relative">
         <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />

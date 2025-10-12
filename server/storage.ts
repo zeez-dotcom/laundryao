@@ -5,7 +5,12 @@ import {
   type User, type InsertUser, type UpsertUser, type UserWithBranch,
   type Category, type InsertCategory,
   type Branch, type InsertBranch,
-    type Customer, type InsertCustomer, type CustomerAddress, type InsertCustomerAddress,
+    type Customer,
+    type InsertCustomer,
+    type CustomerAddress,
+    type InsertCustomerAddress,
+    type CustomerEngagementPlan,
+    type InsertCustomerEngagementPlan,
     type Order, type InsertOrder,
     type OrderPrint,
   type Payment, type InsertPayment,
@@ -21,8 +26,29 @@ import {
   type SecuritySettings, type InsertSecuritySettings,
   type ItemServicePrice, type InsertItemServicePrice,
   type BulkUploadResult,
-  clothingItems, laundryServices, itemServicePrices,
-    transactions, users, categories, branches, customers, customerAddresses, orders, orderPrints, payments, products, packages, packageItems, customerPackages, customerPackageItems, loyaltyHistory, notifications, securitySettings, cities, branchServiceCities,
+    clothingItems,
+    laundryServices,
+    itemServicePrices,
+    transactions,
+    users,
+    categories,
+    branches,
+    customers,
+    customerAddresses,
+    customerEngagementPlans,
+    orders,
+    orderPrints,
+    payments,
+    products,
+    packages,
+    packageItems,
+    customerPackages,
+    customerPackageItems,
+    loyaltyHistory,
+    notifications,
+    securitySettings,
+    cities,
+    branchServiceCities,
   type City, type InsertCity,
   type OrderLog,
   coupons,
@@ -108,6 +134,82 @@ const PAY_LATER_AGGREGATE = `
   GROUP BY order_id
 `;
 
+export const DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS = 24;
+
+const MS_IN_DAY = 24 * 60 * 60 * 1000;
+
+const CHURN_RECOMMENDATIONS: Record<
+  CustomerChurnTier,
+  { action: string; channel: CustomerEngagementChannel; cadenceDays: number }
+> = {
+  no_orders: {
+    action: "Send welcome offer with sign-up incentive",
+    channel: "sms",
+    cadenceDays: 2,
+  },
+  new: {
+    action: "Share onboarding tips and loyalty enrollment",
+    channel: "email",
+    cadenceDays: 7,
+  },
+  steady: {
+    action: "Promote seasonal bundle to keep momentum",
+    channel: "email",
+    cadenceDays: 30,
+  },
+  loyal: {
+    action: "Send VIP appreciation reward",
+    channel: "email",
+    cadenceDays: 45,
+  },
+  at_risk: {
+    action: "Offer limited-time win-back discount",
+    channel: "sms",
+    cadenceDays: 7,
+  },
+  dormant: {
+    action: "Schedule personal outreach with renewal incentive",
+    channel: "sms",
+    cadenceDays: 3,
+  },
+};
+
+function computeChurnTier(lastOrderDate: string | null, orderCount: number): CustomerChurnTier {
+  if (!orderCount) {
+    return "no_orders";
+  }
+  if (!lastOrderDate) {
+    return "new";
+  }
+  const parsed = new Date(lastOrderDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return "new";
+  }
+  const diffDays = Math.floor((Date.now() - parsed.getTime()) / MS_IN_DAY);
+  if (diffDays <= 30) {
+    return orderCount >= 5 ? "loyal" : "new";
+  }
+  if (diffDays <= 60) {
+    return "steady";
+  }
+  if (diffDays <= 90) {
+    return "at_risk";
+  }
+  return "dormant";
+}
+
+function computeSuggestedNextContact(cadenceDays: number): Date | null {
+  if (!Number.isFinite(cadenceDays) || cadenceDays <= 0) {
+    return null;
+  }
+  return new Date(Date.now() + cadenceDays * MS_IN_DAY);
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
 const customerPasswordOtps = new Map<string, { otp: string; expires: Date }>();
 
 export function generateCustomerPasswordOtp(phoneNumber: string) {
@@ -158,8 +260,13 @@ export interface CustomerInsightClothingBreakdown {
   revenue: number;
 }
 
+export type CustomerChurnTier = "new" | "steady" | "loyal" | "at_risk" | "dormant" | "no_orders";
+
+export type CustomerEngagementChannel = "sms" | "email";
+
 export interface CustomerInsight {
   customerId: string;
+  branchId: string;
   name: string;
   phoneNumber: string;
   loyaltyPoints: number;
@@ -168,10 +275,36 @@ export interface CustomerInsight {
   lastOrderDate: string | null;
   orderCount: number;
   averageOrderValue: number;
+  churnTier: CustomerChurnTier;
+  preferredServices: string[];
+  recommendedAction: string | null;
+  recommendedChannel: CustomerEngagementChannel | null;
+  nextContactAt: string | null;
+  lastActionAt: string | null;
+  lastActionChannel: CustomerEngagementChannel | null;
+  lastOutcome: string | null;
+  planSource: "auto" | "manual";
+  rateLimitedUntil: string | null;
+  suggestedAction: string;
+  suggestedChannel: CustomerEngagementChannel;
+  suggestedNextContactAt: string | null;
   monthlySpend: CustomerInsightBreakdown[];
   topServices: CustomerInsightServiceBreakdown[];
   topClothing: CustomerInsightClothingBreakdown[];
 }
+
+export type CustomerEngagementPlanUpdateInput = Partial<{
+  churnTier: CustomerChurnTier;
+  preferredServices: string[];
+  recommendedAction: string | null;
+  recommendedChannel: CustomerEngagementChannel | null;
+  nextContactAt: Date | null;
+  lastActionAt: Date | null;
+  lastActionChannel: CustomerEngagementChannel | null;
+  lastOutcome: string | null;
+  source: "auto" | "manual";
+  rateLimitedUntil: Date | null;
+}>;
 
 export interface CustomerInsightOptions {
   branchId?: string;
@@ -340,6 +473,7 @@ export interface IStorage {
     limit?: number,
     offset?: number,
   ): Promise<{ items: Customer[]; total: number }>;
+  getCustomersByIds(ids: string[], branchId?: string): Promise<Customer[]>;
   getCustomer(id: string, branchId?: string): Promise<Customer | undefined>;
   getCustomerByPhone(phoneNumber: string, branchId?: string): Promise<Customer | undefined>;
   getCustomerByNickname(nickname: string, branchId?: string): Promise<Customer | undefined>;
@@ -373,6 +507,12 @@ export interface IStorage {
   // Customer addresses
   getCustomerAddresses(customerId: string): Promise<CustomerAddress[]>;
   getCustomerInsights(options?: CustomerInsightOptions): Promise<CustomerInsight[]>;
+  getCustomerEngagementPlan(customerId: string): Promise<CustomerEngagementPlan | undefined>;
+  updateCustomerEngagementPlan(
+    customerId: string,
+    updates: CustomerEngagementPlanUpdateInput,
+    branchId?: string,
+  ): Promise<CustomerEngagementPlan | undefined>;
   createCustomerAddress(address: InsertCustomerAddress): Promise<CustomerAddress>;
   updateCustomerAddress(
     id: string,
@@ -3294,6 +3434,24 @@ export class DatabaseStorage {
     });
   }
 
+  async getCustomersByIds(ids: string[], branchId?: string): Promise<Customer[]> {
+    if (!ids.length) return [];
+    const uniqueIds = Array.from(new Set(ids));
+    for (const id of uniqueIds) {
+      assertUuid(id);
+    }
+    return await this.withTenant(branchId, async (tx) => {
+      const conditions = [inArray(customers.id, uniqueIds)];
+      if (branchId) {
+        conditions.push(eq(customers.branchId, branchId));
+      }
+      return await tx
+        .select()
+        .from(customers)
+        .where(conditions.length > 1 ? and(...conditions) : conditions[0]);
+    });
+  }
+
   async getCustomer(id: string, branchId?: string): Promise<Customer | undefined> {
     return await this.withTenant(branchId, async (tx) => {
       const where = branchId
@@ -3833,6 +3991,92 @@ export class DatabaseStorage {
     return record;
   }
 
+  async getCustomerEngagementPlan(customerId: string): Promise<CustomerEngagementPlan | undefined> {
+    assertUuid(customerId);
+    const [plan] = await db
+      .select()
+      .from(customerEngagementPlans)
+      .where(eq(customerEngagementPlans.customerId, customerId));
+    return plan || undefined;
+  }
+
+  async updateCustomerEngagementPlan(
+    customerId: string,
+    updates: CustomerEngagementPlanUpdateInput,
+    branchId?: string,
+  ): Promise<CustomerEngagementPlan | undefined> {
+    assertUuid(customerId);
+    const sanitized: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (typeof updates.churnTier !== "undefined") {
+      sanitized.churnTier = updates.churnTier ?? "no_orders";
+    }
+    if (typeof updates.preferredServices !== "undefined") {
+      sanitized.preferredServices = updates.preferredServices ?? [];
+    }
+    if (typeof updates.recommendedAction !== "undefined") {
+      sanitized.recommendedAction = updates.recommendedAction ?? null;
+    }
+    if (typeof updates.recommendedChannel !== "undefined") {
+      const channel = updates.recommendedChannel;
+      sanitized.recommendedChannel = channel === "sms" || channel === "email" ? channel : null;
+    }
+    if (typeof updates.nextContactAt !== "undefined") {
+      sanitized.nextContactAt = updates.nextContactAt ?? null;
+    }
+    if (typeof updates.lastActionAt !== "undefined") {
+      sanitized.lastActionAt = updates.lastActionAt ?? null;
+    }
+    if (typeof updates.lastActionChannel !== "undefined") {
+      const channel = updates.lastActionChannel;
+      sanitized.lastActionChannel = channel === "sms" || channel === "email" ? channel : null;
+    }
+    if (typeof updates.lastOutcome !== "undefined") {
+      sanitized.lastOutcome = updates.lastOutcome ?? null;
+    }
+    if (typeof updates.source !== "undefined") {
+      sanitized.source = updates.source ?? "manual";
+    }
+    if (typeof updates.rateLimitedUntil !== "undefined") {
+      sanitized.rateLimitedUntil = updates.rateLimitedUntil ?? null;
+    }
+
+    const [updated] = await db
+      .update(customerEngagementPlans)
+      .set(sanitized)
+      .where(eq(customerEngagementPlans.customerId, customerId))
+      .returning();
+
+    if (updated) {
+      return updated;
+    }
+
+    const targetBranchId = branchId ?? (await this.getCustomer(customerId))?.branchId;
+    if (!targetBranchId) {
+      throw new Error("Branch context is required to create engagement plan");
+    }
+
+    const insertValue: InsertCustomerEngagementPlan = {
+      customerId,
+      branchId: targetBranchId,
+      churnTier: (sanitized.churnTier as CustomerChurnTier | undefined) ?? "no_orders",
+      preferredServices: (sanitized.preferredServices as string[] | undefined) ?? [],
+      recommendedAction: (sanitized.recommendedAction as string | null | undefined) ?? null,
+      recommendedChannel:
+        (sanitized.recommendedChannel as CustomerEngagementChannel | null | undefined) ?? null,
+      nextContactAt: (sanitized.nextContactAt as Date | null | undefined) ?? null,
+      lastActionAt: (sanitized.lastActionAt as Date | null | undefined) ?? null,
+      lastActionChannel:
+        (sanitized.lastActionChannel as CustomerEngagementChannel | null | undefined) ?? null,
+      lastOutcome: (sanitized.lastOutcome as string | null | undefined) ?? null,
+      source: (sanitized.source as "auto" | "manual" | undefined) ?? "manual",
+      rateLimitedUntil: (sanitized.rateLimitedUntil as Date | null | undefined) ?? null,
+    };
+
+    const [created] = await db.insert(customerEngagementPlans).values(insertValue).returning();
+    return created || undefined;
+  }
+
   // Report methods
   async getCustomerInsights({ branchId, limit }: CustomerInsightOptions = {}): Promise<CustomerInsight[]> {
     const sanitizedBranchId = branchId ? (assertUuid(branchId), branchId.replace(/'/g, "''")) : undefined;
@@ -3884,6 +4128,7 @@ export class DatabaseStorage {
         c.phone_number,
         c.loyalty_points,
         c.balance_due,
+        c.branch_id AS branch_id,
         COALESCE(SUM(of.total_value), 0) + COALESCE(pp.total_amount, 0) AS total_spend,
         MAX(of.created_at) AS last_order_date,
         COUNT(of.total_value) AS order_count
@@ -3891,7 +4136,7 @@ export class DatabaseStorage {
       LEFT JOIN order_financials of ON of.customer_id = c.id
       LEFT JOIN package_payments pp ON pp.customer_id = c.id
       ${whereClause}
-      GROUP BY c.id, c.name, c.phone_number, c.loyalty_points, c.balance_due, pp.total_amount
+      GROUP BY c.id, c.name, c.phone_number, c.loyalty_points, c.balance_due, c.branch_id, pp.total_amount
       ORDER BY total_spend DESC
       ${limitClause};
     `));
@@ -3905,6 +4150,7 @@ export class DatabaseStorage {
       const lastOrderDate = row.last_order_date ? new Date(row.last_order_date).toISOString() : null;
       const insight: CustomerInsight = {
         customerId: row.customer_id,
+        branchId: row.branch_id,
         name: row.name,
         phoneNumber: row.phone_number,
         loyaltyPoints: Number(row.loyalty_points ?? 0),
@@ -3913,6 +4159,19 @@ export class DatabaseStorage {
         lastOrderDate,
         orderCount,
         averageOrderValue: orderCount > 0 ? Math.round(averageOrderValue * 100) / 100 : 0,
+        churnTier: "no_orders",
+        preferredServices: [],
+        recommendedAction: null,
+        recommendedChannel: null,
+        nextContactAt: null,
+        lastActionAt: null,
+        lastActionChannel: null,
+        lastOutcome: null,
+        planSource: "auto",
+        rateLimitedUntil: null,
+        suggestedAction: CHURN_RECOMMENDATIONS.no_orders.action,
+        suggestedChannel: CHURN_RECOMMENDATIONS.no_orders.channel,
+        suggestedNextContactAt: null,
         monthlySpend: [],
         topServices: [],
         topClothing: [],
@@ -4117,6 +4376,138 @@ export class DatabaseStorage {
       insight.topClothing.sort((a, b) => b.revenue - a.revenue);
       insight.topServices = insight.topServices.slice(0, 5);
       insight.topClothing = insight.topClothing.slice(0, 5);
+      insight.preferredServices = insight.topServices.slice(0, 3).map((svc) => svc.service);
+    }
+
+    const existingPlans = customerIds.length
+      ? await db
+          .select()
+          .from(customerEngagementPlans)
+          .where(inArray(customerEngagementPlans.customerId, customerIds))
+      : [];
+
+    const planMap = new Map(existingPlans.map((plan) => [plan.customerId, plan]));
+    const planInserts: InsertCustomerEngagementPlan[] = [];
+    const planUpdates: { id: string; data: Partial<InsertCustomerEngagementPlan> & {
+      recommendedAction?: string | null;
+      recommendedChannel?: string | null;
+      nextContactAt?: Date | null;
+    } }[] = [];
+
+    for (const insight of insightsMap.values()) {
+      const churnTier = computeChurnTier(insight.lastOrderDate, insight.orderCount);
+      insight.churnTier = churnTier;
+      const recommendation = CHURN_RECOMMENDATIONS[churnTier] ?? CHURN_RECOMMENDATIONS.new;
+      insight.suggestedAction = recommendation.action;
+      insight.suggestedChannel = recommendation.channel;
+      const suggestedNextContact = computeSuggestedNextContact(recommendation.cadenceDays);
+      insight.suggestedNextContactAt = suggestedNextContact ? suggestedNextContact.toISOString() : null;
+
+      const existingPlan = planMap.get(insight.customerId);
+      if (!existingPlan) {
+        planInserts.push({
+          customerId: insight.customerId,
+          branchId: insight.branchId,
+          churnTier,
+          preferredServices: insight.preferredServices,
+          recommendedAction: recommendation.action,
+          recommendedChannel: recommendation.channel,
+          nextContactAt: suggestedNextContact ?? null,
+        });
+        insight.recommendedAction = recommendation.action;
+        insight.recommendedChannel = recommendation.channel;
+        insight.nextContactAt = suggestedNextContact ? suggestedNextContact.toISOString() : null;
+        insight.planSource = "auto";
+        continue;
+      }
+
+      const planSource = existingPlan.source === "manual" ? "manual" : "auto";
+      insight.planSource = planSource;
+      const planPreferred = Array.isArray(existingPlan.preferredServices)
+        ? (existingPlan.preferredServices as string[])
+        : [];
+      const preferredChanged = !arraysEqual(planPreferred, insight.preferredServices);
+      const normalizedChannel =
+        existingPlan.recommendedChannel === "sms" || existingPlan.recommendedChannel === "email"
+          ? existingPlan.recommendedChannel
+          : null;
+      const planNextContact = existingPlan.nextContactAt ? new Date(existingPlan.nextContactAt) : null;
+      const nextContactChanged = (() => {
+        if (!suggestedNextContact && !planNextContact) return false;
+        if (!suggestedNextContact && planNextContact && planSource === "auto") return true;
+        if (suggestedNextContact && !planNextContact) return true;
+        if (suggestedNextContact && planNextContact) {
+          return Math.abs(planNextContact.getTime() - suggestedNextContact.getTime()) > MS_IN_DAY / 2;
+        }
+        return false;
+      })();
+
+      const updatePayload: Partial<InsertCustomerEngagementPlan> & {
+        recommendedAction?: string | null;
+        recommendedChannel?: string | null;
+        nextContactAt?: Date | null;
+      } = {};
+
+      if (existingPlan.churnTier !== churnTier) {
+        updatePayload.churnTier = churnTier;
+      }
+      if (preferredChanged) {
+        updatePayload.preferredServices = insight.preferredServices;
+      }
+      if (planSource === "auto") {
+        if (existingPlan.recommendedAction !== recommendation.action) {
+          updatePayload.recommendedAction = recommendation.action;
+        }
+        if (normalizedChannel !== recommendation.channel) {
+          updatePayload.recommendedChannel = recommendation.channel;
+        }
+        if (nextContactChanged) {
+          updatePayload.nextContactAt = suggestedNextContact ?? null;
+        }
+      }
+
+      if (Object.keys(updatePayload).length) {
+        planUpdates.push({ id: existingPlan.id, data: updatePayload });
+      }
+
+      const resolvedAction = existingPlan.recommendedAction ?? (planSource === "auto" ? recommendation.action : null);
+      insight.recommendedAction = resolvedAction;
+      insight.recommendedChannel = normalizedChannel ?? (planSource === "auto" ? recommendation.channel : null);
+      insight.nextContactAt = planNextContact
+        ? planNextContact.toISOString()
+        : suggestedNextContact
+        ? suggestedNextContact.toISOString()
+        : null;
+      insight.lastActionAt = existingPlan.lastActionAt ? new Date(existingPlan.lastActionAt).toISOString() : null;
+      insight.lastActionChannel =
+        existingPlan.lastActionChannel === "sms" || existingPlan.lastActionChannel === "email"
+          ? existingPlan.lastActionChannel
+          : null;
+      insight.lastOutcome = existingPlan.lastOutcome ?? null;
+      insight.rateLimitedUntil = existingPlan.rateLimitedUntil
+        ? new Date(existingPlan.rateLimitedUntil).toISOString()
+        : null;
+    }
+
+    if (planInserts.length) {
+      await db.insert(customerEngagementPlans).values(planInserts).onConflictDoNothing();
+    }
+
+    if (planUpdates.length) {
+      await Promise.all(
+        planUpdates.map(({ id, data }) => {
+          const sanitized: Record<string, unknown> = { updatedAt: new Date() };
+          for (const [key, value] of Object.entries(data)) {
+            if (typeof value !== "undefined") {
+              sanitized[key] = value;
+            }
+          }
+          return db
+            .update(customerEngagementPlans)
+            .set(sanitized)
+            .where(eq(customerEngagementPlans.id, id));
+        }),
+      );
     }
 
     return Array.from(insightsMap.values());

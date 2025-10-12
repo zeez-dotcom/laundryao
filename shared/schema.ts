@@ -286,6 +286,35 @@ export const customerAddresses = pgTable("customer_addresses", {
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const customerEngagementPlans = pgTable(
+  "customer_engagement_plans",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    customerId: uuid("customer_id").references(() => customers.id).notNull(),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    churnTier: text("churn_tier").notNull().default("new"),
+    preferredServices: jsonb("preferred_services")
+      .$type<string[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    recommendedAction: text("recommended_action"),
+    recommendedChannel: text("recommended_channel"),
+    nextContactAt: timestamptz("next_contact_at"),
+    lastActionAt: timestamptz("last_action_at"),
+    lastActionChannel: text("last_action_channel"),
+    lastOutcome: text("last_outcome"),
+    source: text("source").notNull().default("auto"),
+    rateLimitedUntil: timestamptz("rate_limited_until"),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    customerUnique: uniqueIndex("customer_engagement_plans_customer_unique").on(
+      table.customerId,
+    ),
+  }),
+);
+
 // Prepaid packages for customers
 export const packages = pgTable("packages", {
   publicId: serial("public_id").unique(),
@@ -957,6 +986,8 @@ export type Customer = typeof customers.$inferSelect;
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type CustomerAddress = typeof customerAddresses.$inferSelect;
 export type InsertCustomerAddress = z.infer<typeof insertCustomerAddressSchema>;
+export type CustomerEngagementPlan = typeof customerEngagementPlans.$inferSelect;
+export type InsertCustomerEngagementPlan = typeof customerEngagementPlans.$inferInsert;
 export type Package = typeof packages.$inferSelect;
 export type InsertPackage = z.infer<typeof insertPackageSchema>;
 export type PackageItem = typeof packageItems.$inferSelect;
