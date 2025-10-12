@@ -1,5 +1,5 @@
 // @ts-nocheck
-import type { Express } from "express";
+import type { Express, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import {
   storage,
@@ -52,6 +52,7 @@ import {
   requireAdminOrSuperAdmin,
   requireCustomerOrAdmin,
   getSession,
+  getAdminSession,
 } from "./auth";
 import { attachTenant } from "./middleware/tenant-context";
 import { seedSuperAdmin } from "./seed-superadmin";
@@ -407,6 +408,20 @@ export async function registerRoutes(
   const httpServer = createServer(app);
   const deliveryOrderWss = new WebSocketServer({ noServer: true });
   const driverLocationWss = new WebSocketServer({ noServer: true });
+  const sessionMiddleware = getAdminSession();
+  const passportInitialize = passport.initialize();
+  const passportSession = passport.session();
+
+  const runMiddleware = (req: any, middleware: RequestHandler) =>
+    new Promise<void>((resolve, reject) => {
+      middleware(req, {} as any, (err?: unknown) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
 
   const broadcastDeliveryUpdate = (data: {
     orderId: string;
@@ -421,7 +436,13 @@ export async function registerRoutes(
     }
   };
 
-  driverLocationWss.on("connection", (ws) => {
+  driverLocationWss.on("connection", (ws, req) => {
+    const user = (req as any).user as User | undefined;
+    if (!user || user.role !== "driver") {
+      ws.close(1008, "Unauthorized");
+      return;
+    }
+
     storage.getLatestDriverLocations().then((locs) => {
       for (const loc of locs) {
         ws.send(JSON.stringify({
@@ -433,10 +454,18 @@ export async function registerRoutes(
     });
 
     ws.on("message", async (msg) => {
+      if (!user || user.role !== "driver") {
+        return;
+      }
+
       try {
-        const { driverId, lat, lng } = JSON.parse(msg.toString());
-        await storage.updateDriverLocation(driverId, lat, lng);
-        const payload = JSON.stringify({ driverId, lat, lng });
+        const { lat, lng } = JSON.parse(msg.toString());
+        if (typeof lat !== "number" || typeof lng !== "number") {
+          return;
+        }
+
+        await storage.updateDriverLocation(user.id, lat, lng);
+        const payload = JSON.stringify({ driverId: user.id, lat, lng });
         for (const client of driverLocationWss.clients) {
           if (client.readyState === client.OPEN) {
             client.send(payload);
@@ -448,13 +477,34 @@ export async function registerRoutes(
     });
   });
 
-  httpServer.on("upgrade", (req, socket, head) => {
+  httpServer.on("upgrade", async (req, socket, head) => {
     const { pathname } = new URL(req.url || "", "http://localhost");
     if (pathname === "/ws/delivery-orders") {
       deliveryOrderWss.handleUpgrade(req, socket, head, (ws) => {
         deliveryOrderWss.emit("connection", ws, req);
       });
     } else if (pathname === "/ws/driver-location") {
+      try {
+        await runMiddleware(req, sessionMiddleware);
+        await runMiddleware(req, passportInitialize);
+        await runMiddleware(req, passportSession);
+      } catch {
+        socket.destroy();
+        return;
+      }
+
+      const user = (req as any).user as User | undefined;
+      if (!user) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      if (user.role !== "driver") {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
       driverLocationWss.handleUpgrade(req, socket, head, (ws) => {
         driverLocationWss.emit("connection", ws, req);
       });
@@ -464,7 +514,11 @@ export async function registerRoutes(
   });
 
   // Setup authentication
-  await setupAuth(app);
+  await setupAuth(app, {
+    sessionMiddleware,
+    passportInitialize,
+    passportSession,
+  });
   // Attach derived tenantId (branch) to each request for downstream use
   app.use(attachTenant);
   // Optional: seed data only when explicitly enabled

@@ -46,24 +46,28 @@ const hardcodedAdmin: User = {
 
 export function getAdminSession() {
   const PgStore = pgSession(session);
-  
+
   // Get the environment-specific cookie settings
   const isProduction = process.env.NODE_ENV === 'production';
   const isReplit = (process.env.REPLIT_ENVIRONMENT === 'production') || Boolean(process.env.REPL_ID);
-  
+  const useMemoryStore =
+    process.env.SESSION_STORE === 'memory' || process.env.NODE_ENV === 'test';
+
   // Enhanced security cookie configuration for production
   const cookieConfig = {
     sameSite: isProduction ? "strict" as const : "lax" as const, // Stricter in production
     secure: Boolean(isProduction || isReplit), // Secure cookies in production and Replit
   };
-  
+
   return session({
-    name: 'sid', // Unified session name 
-    store: new PgStore({ 
-      pool, 
-      createTableIfMissing: true,
-      tableName: 'sessions' // Sessions table
-    }),
+    name: 'sid', // Unified session name
+    store: useMemoryStore
+      ? new session.MemoryStore()
+      : new PgStore({
+          pool,
+          createTableIfMissing: true,
+          tableName: 'sessions', // Sessions table
+        }),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
@@ -117,14 +121,24 @@ export function getSession() {
   return getAdminSession();
 }
 
-export async function setupAuth(app: Express) {
+interface SetupAuthOptions {
+  sessionMiddleware?: RequestHandler;
+  passportInitialize?: RequestHandler;
+  passportSession?: RequestHandler;
+}
+
+export async function setupAuth(app: Express, options: SetupAuthOptions = {}) {
   app.set("trust proxy", 1);
-  
+
   // Use unified secure session configuration
-  app.use(getAdminSession());
-  
-  app.use(passport.initialize());
-  app.use(passport.session());
+  const sessionMiddleware = options.sessionMiddleware ?? getAdminSession();
+  const passportInitialize = options.passportInitialize ?? passport.initialize();
+  const passportSession = options.passportSession ?? passport.session();
+
+  app.use(sessionMiddleware);
+
+  app.use(passportInitialize);
+  app.use(passportSession);
 
   // Local strategy for username/password authentication
   passport.use(
