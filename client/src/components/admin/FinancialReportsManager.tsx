@@ -6,22 +6,25 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DatePicker } from "@/components/ui/date-picker";
+import { Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
   ResponsiveContainer,
   LineChart,
   Line,
   AreaChart,
-  Area
+  Area,
+  PieChart,
+  Pie,
+  Cell
 } from "recharts";
-import { PieChart, Pie, Cell } from "recharts";
 import { 
   DollarSign,
   TrendingUp,
@@ -165,34 +168,75 @@ export function FinancialReportsManager() {
     orders: 0,
     avgOrderValue: 0,
   };
-  const previousMonthData = financialData[financialData.length - 2] || currentMonthData;
-  
-  const revenueGrowth = previousMonthData 
-    ? ((currentMonthData.revenue - previousMonthData.revenue) / previousMonthData.revenue * 100)
-    : 0;
-  
-  const profitGrowth = previousMonthData 
-    ? ((currentMonthData.profit - previousMonthData.profit) / previousMonthData.profit * 100)
-    : 0;
+  const previousMonthData = financialData.length > 1 ? financialData[financialData.length - 2] : null;
+
+  const computeGrowth = (current: number, previous?: number | null) => {
+    if (previous === undefined || previous === null || previous === 0) {
+      return {
+        value: 0,
+        hasBaseline: false,
+        isNew: current !== 0,
+      };
+    }
+
+    return {
+      value: ((current - previous) / previous) * 100,
+      hasBaseline: true,
+      isNew: false,
+    };
+  };
+
+  const revenueGrowth = computeGrowth(currentMonthData.revenue, previousMonthData?.revenue ?? null);
+
+  const profitGrowth = computeGrowth(currentMonthData.profit, previousMonthData?.profit ?? null);
 
   const totalExpenses = (expenseReport?.byCategory || []).reduce((s, c) => s + c.total, 0);
   const profitMargin = currentMonthData.revenue > 0 
     ? (currentMonthData.profit / currentMonthData.revenue * 100) 
     : 0;
 
-  const renderGrowthIndicator = (growth: number) => {
-    const isPositive = growth >= 0;
-    const Icon = isPositive ? TrendingUp : TrendingDown;
-    const colorClass = isPositive ? "text-green-600" : "text-red-600";
-    
-    return (
+  const renderGrowthIndicator = (growth: { value: number; hasBaseline: boolean; isNew: boolean }) => {
+    const isPositive = growth.value >= 0;
+    const Icon = growth.hasBaseline ? (isPositive ? TrendingUp : TrendingDown) : RefreshCw;
+    const colorClass = growth.hasBaseline
+      ? isPositive
+        ? "text-green-600"
+        : "text-red-600"
+      : "text-muted-foreground";
+
+    const prefix = growth.hasBaseline && isPositive ? "+" : "";
+
+    const growthDisplay = (
       <div className={`flex items-center gap-1 ${colorClass}`}>
         <Icon className="h-4 w-4" />
         <span className="text-sm font-medium">
-          {isPositive ? "+" : ""}{growth.toFixed(1)}%
+          {prefix}
+          {growth.value.toFixed(1)}%
         </span>
       </div>
     );
+
+    if (!growth.hasBaseline) {
+      return (
+        <div className="flex items-center gap-2">
+          {growthDisplay}
+          <TooltipProvider delayDuration={0}>
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="outline" className="text-[10px] font-semibold uppercase tracking-wide">
+                  {growth.isNew ? "New" : "No prior data"}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>No prior period available for comparison.</p>
+              </TooltipContent>
+            </UITooltip>
+          </TooltipProvider>
+        </div>
+      );
+    }
+
+    return growthDisplay;
   };
 
   if (!user || (user.role !== "admin" && user.role !== "super_admin")) {
@@ -308,7 +352,7 @@ export function FinancialReportsManager() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="period" />
                   <YAxis tickFormatter={(value) => formatCurrency(value)} />
-                  <Tooltip 
+                  <RechartsTooltip
                     formatter={(value: number, name: string) => [formatCurrency(value), name]}
                   />
                   <Area 
@@ -398,7 +442,7 @@ export function FinancialReportsManager() {
                           <Cell key={entry.category} fill={COLORS[idx % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(value: number) => [formatCurrency(value), 'Expense']} />
+                      <RechartsTooltip formatter={(value: number) => [formatCurrency(value), "Expense"]} />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
@@ -452,7 +496,7 @@ export function FinancialReportsManager() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="method" />
                     <YAxis tickFormatter={(value) => formatCurrency(value)} />
-                    <Tooltip 
+                    <RechartsTooltip
                       formatter={(value: number) => [formatCurrency(value), 'Revenue']}
                     />
                     <Bar dataKey="amount" fill="#8884d8" />
@@ -513,7 +557,7 @@ export function FinancialReportsManager() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="period" />
                   <YAxis tickFormatter={(value) => formatCurrency(value)} />
-                  <Tooltip 
+                  <RechartsTooltip
                     formatter={(value: number) => [formatCurrency(value), ""]}
                   />
                   <Line 
@@ -543,17 +587,12 @@ export function FinancialReportsManager() {
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
-                  {revenueGrowth >= 0 ? (
-                    <TrendingUp className="h-5 w-5 text-green-600" />
-                  ) : (
-                    <TrendingDown className="h-5 w-5 text-red-600" />
-                  )}
-                  <span className="text-lg font-bold">
-                    {revenueGrowth >= 0 ? "+" : ""}{revenueGrowth.toFixed(1)}%
-                  </span>
+                  {renderGrowthIndicator(revenueGrowth)}
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Month-over-month growth
+                  {revenueGrowth.hasBaseline
+                    ? "Month-over-month growth"
+                    : "Awaiting prior period data"}
                 </p>
               </CardContent>
             </Card>
