@@ -26,7 +26,7 @@ describe("OrderLogsTable", () => {
     cleanup();
   });
 
-  it("renders logs with formatted dates", async () => {
+  it("renders order timeline with events", async () => {
     const mockLogs = [
       {
         id: "1",
@@ -34,11 +34,24 @@ describe("OrderLogsTable", () => {
         customerName: "Alice",
         packageName: "Basic",
         status: "ready",
-        statusHistory: [],
-        receivedAt: "2023-01-01T00:00:00.000Z",
-        processedAt: "2023-01-02T00:00:00.000Z",
-        readyAt: "2023-01-03T00:00:00.000Z",
-        deliveredAt: "2023-01-04T00:00:00.000Z",
+        createdAt: "2023-01-01T00:00:00.000Z",
+        promisedReadyDate: "2023-01-02T00:00:00.000Z",
+        events: [
+          {
+            id: "evt1",
+            status: "received",
+            actor: "System",
+            timestamp: "2023-01-01T00:00:00.000Z",
+            context: "order",
+          },
+          {
+            id: "evt2",
+            status: "ready",
+            actor: "Alice",
+            timestamp: "2023-01-01T10:00:00.000Z",
+            context: "order",
+          },
+        ],
       },
     ];
 
@@ -52,10 +65,12 @@ describe("OrderLogsTable", () => {
     renderWithClient();
 
     await waitFor(() => {
-      expect(screen.getByText("001")).toBeTruthy();
+      expect(screen.getByText("Order 001")).toBeTruthy();
     });
     expect(screen.getByText("Alice")).toBeTruthy();
-    expect(screen.getByText("Basic")).toBeTruthy();
-    expect(screen.getByText("Jan 1, 2023")).toBeTruthy();
+    expect(screen.getByText("Package: Basic")).toBeTruthy();
+    expect(screen.getByText(/Ready within SLA/)).toBeTruthy();
+    expect(screen.getByText("Received")).toBeTruthy();
+    expect(screen.getByText("by Alice")).toBeTruthy();
   });
 });

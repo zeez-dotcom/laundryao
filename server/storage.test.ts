@@ -468,6 +468,17 @@ test('acceptDeliveryOrderRequest updates order and delivery status', async () =>
 
   (db as any).transaction = async (fn: any) => {
     return await fn({
+      execute: async () => {},
+      select: () => ({
+        from: () => ({
+          where: () => [{ status: 'pending' }],
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
+          returning: () => [{}],
+        }),
+      }),
       update: (table: any) => ({
         set: (data: any) => ({
           where: () => ({

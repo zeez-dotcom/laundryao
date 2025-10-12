@@ -403,6 +403,25 @@ export const orders = pgTable(
   }),
 );
 
+export const orderStatusHistory = pgTable(
+  "order_status_history",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    orderId: uuid("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    status: text("status").notNull(),
+    actor: text("actor"),
+    occurredAt: timestamptz("occurred_at")
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => ({
+    orderIdx: index("order_status_history_order_id_idx").on(table.orderId),
+    occurredIdx: index("order_status_history_occurred_at_idx").on(table.occurredAt),
+  }),
+);
+
 
 export const orderPrints = pgTable(
   "order_prints",
@@ -864,6 +883,11 @@ export const insertOrderPrintSchema = createInsertSchema(orderPrints).omit({
   printedAt: true,
 });
 
+export const insertOrderStatusHistorySchema = createInsertSchema(orderStatusHistory).omit({
+  id: true,
+  occurredAt: true,
+});
+
 export const insertPaymentSchema = createInsertSchema(payments).omit({
   id: true,
   createdAt: true,
@@ -1039,6 +1063,8 @@ export type InsertOrder = z.infer<typeof insertOrderSchema>;
 export type GuestOrderInput = z.infer<typeof guestOrderSchema>;
 export type OrderPrint = typeof orderPrints.$inferSelect;
 export type InsertOrderPrint = z.infer<typeof insertOrderPrintSchema>;
+export type OrderStatusHistory = typeof orderStatusHistory.$inferSelect;
+export type InsertOrderStatusHistory = z.infer<typeof insertOrderStatusHistorySchema>;
 export type Payment = typeof payments.$inferSelect;
 export type InsertPayment = z.infer<typeof insertPaymentSchema>;
 export type Expense = typeof expenses.$inferSelect;
@@ -1059,17 +1085,23 @@ export type SecuritySettings = typeof securitySettings.$inferSelect;
 export type InsertSecuritySettings = z.infer<typeof insertSecuritySettingsSchema>;
 export type UserWithBranch = User & { branch: Branch | null };
 
+export interface OrderTimelineEvent {
+  id: string;
+  status: string;
+  actor: string | null;
+  timestamp: string;
+  context: "order" | "delivery";
+}
+
 export interface OrderLog {
   id: string;
   orderNumber: string;
   customerName: string;
   packageName?: string | null;
   status: string;
-  statusHistory: { status: string; timestamp: string }[];
-  receivedAt?: string | null;
-  processedAt?: string | null;
-  readyAt?: string | null;
-  deliveredAt?: string | null;
+  createdAt?: string | null;
+  promisedReadyDate?: string | null;
+  events: OrderTimelineEvent[];
 }
 
 export const bulkUploadResultSchema = z.object({
