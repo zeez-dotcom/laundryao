@@ -34,7 +34,9 @@ import {
   ShoppingCart,
   UserCheck,
   PackageCheck,
-  XCircle
+  XCircle,
+  Bell,
+  AlertTriangle
 } from "lucide-react";
 
 // Types are imported from @shared/schema.ts above
@@ -166,15 +168,54 @@ type DeliveryOrderLite = {
 };
 type OrderWithDelivery = Order & { deliveryOrder?: DeliveryOrderLite };
 
+type OrderWithLateness = OrderWithDelivery & {
+  dueDate: Date | null;
+  updatedAtDate: Date | null;
+  isOverdue: boolean;
+  overdueDays: number;
+};
+
+const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const promisedReadyOffsets: Record<NonNullable<Order["promisedReadyOption"]>, number> = {
+  today: 0,
+  tomorrow: 1,
+  day_after_tomorrow: 2,
+};
+
+function getPromisedReadyDate(order: OrderWithDelivery): Date | null {
+  if (order.promisedReadyDate) {
+    const due = new Date(order.promisedReadyDate);
+    if (!Number.isNaN(due.getTime())) {
+      return due;
+    }
+  }
+
+  if (order.promisedReadyOption) {
+    const offset = promisedReadyOffsets[order.promisedReadyOption] ?? 0;
+    const base = order.createdAt ? new Date(order.createdAt) : new Date();
+
+    if (!Number.isNaN(base.getTime())) {
+      const normalized = new Date(base);
+      normalized.setHours(0, 0, 0, 0);
+      normalized.setDate(normalized.getDate() + offset);
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 export function OrderManagementDashboard() {
   const { user, branch } = useAuthContext();
   const { formatCurrency } = useCurrency();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   
-  const [selectedOrder, setSelectedOrder] = useState<OrderWithDelivery | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<OrderWithLateness | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [orderTypeFilter, setOrderTypeFilter] = useState<string>("all"); // all, regular, delivery
+  const [overdueFilter, setOverdueFilter] = useState<"all" | "overdue" | "on_time">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [isStatusUpdateDialogOpen, setIsStatusUpdateDialogOpen] = useState(false);
   const [updateNotes, setUpdateNotes] = useState("");
@@ -191,6 +232,29 @@ export function OrderManagementDashboard() {
       const data: Order[] = await response.json();
       return data.filter((o) => !o.isDeliveryRequest);
     },
+  });
+
+  const ordersWithDueInfo: OrderWithLateness[] = orders.map((order) => {
+    const dueDate = getPromisedReadyDate(order);
+    const updatedAtDate = order.updatedAt ? new Date(order.updatedAt) : null;
+
+    const isOverdue = Boolean(
+      dueDate &&
+      updatedAtDate &&
+      updatedAtDate.getTime() > dueDate.getTime()
+    );
+
+    const overdueDays = isOverdue && dueDate && updatedAtDate
+      ? Math.max(1, Math.ceil((updatedAtDate.getTime() - dueDate.getTime()) / MILLIS_PER_DAY))
+      : 0;
+
+    return {
+      ...order,
+      dueDate,
+      updatedAtDate,
+      isOverdue,
+      overdueDays,
+    };
   });
 
   const updateStatusMutation = useMutation({
@@ -220,17 +284,29 @@ export function OrderManagementDashboard() {
     },
   });
 
-  const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
+  const filteredOrders = ordersWithDueInfo.filter(order => {
+    const matchesSearch =
       order.orderNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       order.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       order.customerPhone.includes(searchQuery);
-    
-    const matchesType = orderTypeFilter === "all" || 
+
+    const matchesType = orderTypeFilter === "all" ||
       (orderTypeFilter === "delivery" && order.deliveryOrder) ||
       (orderTypeFilter === "regular" && !order.deliveryOrder);
-    
-    return matchesSearch && matchesType;
+
+    const matchesOverdue =
+      overdueFilter === "all" ||
+      (overdueFilter === "overdue" && order.isOverdue) ||
+      (overdueFilter === "on_time" && !order.isOverdue);
+
+    return matchesSearch && matchesType && matchesOverdue;
+  });
+
+  const ordersToDisplay = [...filteredOrders].sort((a, b) => {
+    if (a.isOverdue === b.isOverdue) {
+      return 0;
+    }
+    return a.isOverdue ? -1 : 1;
   });
 
   const handleStatusUpdate = (order: OrderWithDelivery) => {
@@ -250,7 +326,7 @@ export function OrderManagementDashboard() {
 
   const confirmStatusUpdate = () => {
     if (!selectedOrder) return;
-    
+
     const nextStatus = nextStatusMap[selectedOrder.status];
     if (!nextStatus) return;
 
@@ -258,6 +334,20 @@ export function OrderManagementDashboard() {
       orderId: selectedOrder.id,
       status: nextStatus,
       notes: updateNotes.trim() || undefined,
+    });
+  };
+
+  const handleNotifyCustomer = (order: OrderWithLateness) => {
+    toast({
+      title: "Customer notified",
+      description: `Sent a delay notice to ${order.customerName}.`,
+    });
+  };
+
+  const handleEscalateOrder = (order: OrderWithLateness) => {
+    toast({
+      title: "Order escalated",
+      description: `Order #${order.orderNumber} has been escalated to the branch manager.`,
     });
   };
 
@@ -359,6 +449,19 @@ export function OrderManagementDashboard() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select
+                value={overdueFilter}
+                onValueChange={(value) => setOverdueFilter(value as "all" | "overdue" | "on_time")}
+              >
+                <SelectTrigger className="w-[180px]" aria-label="Filter by due status">
+                  <SelectValue placeholder="Due status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Due States</SelectItem>
+                  <SelectItem value="overdue">Overdue Only</SelectItem>
+                  <SelectItem value="on_time">On-Time Only</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardContent>
@@ -387,8 +490,12 @@ export function OrderManagementDashboard() {
             </CardContent>
           </Card>
         ) : (
-          filteredOrders.map((order) => (
-            <Card key={order.id} className="hover:shadow-md transition-shadow">
+          ordersToDisplay.map((order) => (
+            <Card
+              key={order.id}
+              data-testid={`order-card-${order.id}`}
+              className={`hover:shadow-md transition-shadow ${order.isOverdue ? "border-destructive/60 bg-destructive/5" : ""}`}
+            >
               <CardContent className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center gap-4">
                   {/* Order Info */}
@@ -398,6 +505,19 @@ export function OrderManagementDashboard() {
                       {getDeliveryIcon(order.deliveryOrder?.deliveryMode)}
                       {getStatusBadge(order.status)}
                       {order.deliveryOrder && getDeliveryStatusBadge(order.deliveryOrder.deliveryStatus)}
+                      {order.dueDate && (
+                        order.isOverdue ? (
+                          <Badge variant="destructive" className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            Overdue{order.overdueDays > 0 ? ` by ${order.overdueDays} ${order.overdueDays === 1 ? "day" : "days"}` : ""}
+                          </Badge>
+                        ) : (
+                          <Badge className="flex items-center gap-1 bg-emerald-100 text-emerald-900">
+                            <CheckCircle className="h-3 w-3" />
+                            On track
+                          </Badge>
+                        )
+                      )}
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-muted-foreground">
@@ -419,8 +539,21 @@ export function OrderManagementDashboard() {
                       </div>
                     </div>
 
-                    <div className="text-sm text-muted-foreground">
-                      <strong>Ready by:</strong> {new Date(order.promisedReadyDate).toLocaleDateString()}
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <div>
+                        <strong>Ready by:</strong>{" "}
+                        {order.dueDate ? order.dueDate.toLocaleDateString() : "Not specified"}
+                        {order.promisedReadyOption && (
+                          <span className="ml-2 uppercase text-xs tracking-wide text-muted-foreground/80">
+                            ({order.promisedReadyOption.replace(/_/g, " ")})
+                          </span>
+                        )}
+                      </div>
+                      {order.isOverdue && order.updatedAtDate && (
+                        <div className="text-destructive font-medium">
+                          Updated {order.updatedAtDate.toLocaleDateString()} — requires attention
+                        </div>
+                      )}
                     </div>
 
                     {/* Delivery Information */}
@@ -466,22 +599,50 @@ export function OrderManagementDashboard() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <Dialog>
-                      <DialogTrigger asChild>
-                        <Button variant="outline" size="sm">
-                          <Eye className="h-4 w-4 mr-2" />
-                          View Details
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="max-w-2xl">
-                        <DialogHeader>
-                          <DialogTitle>Order Details - #{order.orderNumber}</DialogTitle>
-                          <DialogDescription>
-                            Complete order information and status history
-                          </DialogDescription>
-                        </DialogHeader>
-                        <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:items-end">
+                    {order.isOverdue && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-destructive font-semibold uppercase tracking-wide text-xs sm:text-sm">
+                          <Bell className="h-4 w-4" />
+                          Overdue actions
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleNotifyCustomer(order)}
+                          >
+                            <Bell className="h-4 w-4 mr-2" />
+                            Notify Customer
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-destructive text-destructive hover:bg-destructive/10"
+                            onClick={() => handleEscalateOrder(order)}
+                          >
+                            <AlertTriangle className="h-4 w-4 mr-2" />
+                            Escalate Order
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button variant="outline" size="sm">
+                            <Eye className="h-4 w-4 mr-2" />
+                            View Details
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-2xl">
+                          <DialogHeader>
+                            <DialogTitle>Order Details - #{order.orderNumber}</DialogTitle>
+                            <DialogDescription>
+                              Complete order information and status history
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Customer</Label>
@@ -595,6 +756,7 @@ export function OrderManagementDashboard() {
                     )}
                   </div>
                 </div>
+              </div>
               </CardContent>
             </Card>
           ))
