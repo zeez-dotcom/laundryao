@@ -3949,12 +3949,12 @@ export class DatabaseStorage {
       ),
       non_pay_later AS (
         SELECT
-          jt.clothingItem AS product,
+          jt."clothingItem" AS product,
           jt.quantity,
           jt.total
         FROM base_orders o
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
-          clothingItem text,
+          "clothingItem" text,
           quantity int,
           total numeric
         ) ON TRUE
@@ -3962,13 +3962,13 @@ export class DatabaseStorage {
       ),
       pay_later_orders AS (
         SELECT
-          jt.clothingItem AS product,
+          jt."clothingItem" AS product,
           jt.quantity,
           jt.total
         FROM base_orders o
         JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
-          clothingItem text,
+          "clothingItem" text,
           quantity int,
           total numeric
         ) ON TRUE
@@ -4080,12 +4080,12 @@ export class DatabaseStorage {
       ),
       non_pay_later AS (
         SELECT
-          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          CONCAT_WS(' - ', jt."clothingItem", jt.service) AS item,
           jt.quantity,
           jt.total
         FROM base_orders o
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
-          clothingItem text,
+          "clothingItem" text,
           service text,
           quantity int,
           total numeric
@@ -4094,13 +4094,13 @@ export class DatabaseStorage {
       ),
       pay_later_orders AS (
         SELECT
-          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          CONCAT_WS(' - ', jt."clothingItem", jt.service) AS item,
           jt.quantity,
           jt.total
         FROM base_orders o
         JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
-          clothingItem text,
+          "clothingItem" text,
           service text,
           quantity int,
           total numeric
