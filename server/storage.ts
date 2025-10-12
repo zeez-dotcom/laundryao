@@ -3984,6 +3984,7 @@ export class DatabaseStorage {
         customerName: orders.customerName,
         status: orders.status,
         createdAt: orders.createdAt,
+        updatedAt: orders.updatedAt,
         promisedReadyDate: orders.promisedReadyDate,
         packageName: sql<string>`max(${packages.nameEn})`,
       })
@@ -4013,6 +4014,7 @@ export class DatabaseStorage {
         orders.customerName,
         orders.status,
         orders.createdAt,
+        orders.updatedAt,
         orders.promisedReadyDate,
       )
       .orderBy(desc(orders.createdAt));
@@ -4068,18 +4070,37 @@ export class DatabaseStorage {
       historyMap.set(event.orderId, arr);
     }
 
-    return rows.map((r) => ({
-      id: r.id,
-      orderNumber: r.orderNumber,
-      customerName: r.customerName,
-      packageName: r.packageName,
-      status: r.status,
-      createdAt: r.createdAt ? r.createdAt.toISOString() : null,
-      promisedReadyDate: r.promisedReadyDate ? r.promisedReadyDate.toISOString() : null,
-      events: (historyMap.get(r.id) ?? []).sort((a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-      ),
-    }));
+    return rows.map((r) => {
+      const events = [...(historyMap.get(r.id) ?? [])].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+
+      if (!events.length) {
+        const fallbackTimestamp = new Date(
+          r.updatedAt ?? r.createdAt ?? new Date(),
+        ).toISOString();
+        events.push({
+          id: `synthetic-${r.id}`,
+          status: r.status,
+          actor: null,
+          timestamp: fallbackTimestamp,
+          context: "order",
+        });
+      }
+
+      return {
+        id: r.id,
+        orderNumber: r.orderNumber,
+        customerName: r.customerName,
+        packageName: r.packageName,
+        status: r.status,
+        createdAt: r.createdAt ? r.createdAt.toISOString() : null,
+        promisedReadyDate: r.promisedReadyDate
+          ? new Date(r.promisedReadyDate).toISOString()
+          : null,
+        events,
+      };
+    });
   }
 
   async createNotification(notificationData: InsertNotification): Promise<Notification> {
