@@ -4771,7 +4771,6 @@ export class DatabaseStorage {
           total numeric
         ) ON TRUE
         WHERE o.payment_method = 'pay_later'
-          AND o.is_delivery_request = false
       )
       SELECT
         item,
