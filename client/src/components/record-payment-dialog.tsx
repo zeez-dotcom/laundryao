@@ -41,12 +41,12 @@ export function RecordPaymentDialog({ open, onOpenChange, customerId, customerNa
   async function handleSubmit() {
     const amt = parseFloat(amount);
     if (!(amt > 0)) {
-      toast({ title: t.error, description: t.invalidAmount || "Invalid amount", variant: "destructive" });
+      toast({ title: t.error, description: t.invalidPaymentAmount || "Invalid amount", variant: "destructive" });
       return;
     }
     const allowed = new Set(["cash", "card", "bank_transfer"]);
     if (!allowed.has(method)) {
-      toast({ title: t.error, description: t.invalidPaymentMethod || "Invalid payment method", variant: "destructive" });
+      toast({ title: t.error, description: t.invalidData || "Invalid payment method", variant: "destructive" });
       return;
     }
     setSubmitting(true);
@@ -74,7 +74,7 @@ export function RecordPaymentDialog({ open, onOpenChange, customerId, customerNa
         <DialogHeader>
           <DialogTitle>{t.recordPayment} {customerName ? `- ${customerName}` : ""}</DialogTitle>
           <DialogDescription>
-            {orderNumber ? `${t.order || "Order"} #${orderNumber}` : t.enterPaymentDetails || "Enter payment details"}
+            {orderNumber ? `${t.order || "Order"} #${orderNumber}` : "Enter payment details"}
           </DialogDescription>
         </DialogHeader>
 
@@ -95,7 +95,7 @@ export function RecordPaymentDialog({ open, onOpenChange, customerId, customerNa
               <Label htmlFor="method">{t.paymentMethod}</Label>
               <Select value={method} onValueChange={setMethod}>
                 <SelectTrigger id="method" className="w-full">
-                  <SelectValue placeholder={t.selectPaymentMethod || "Select method"} />
+                  <SelectValue placeholder={t.select || "Select method"} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cash">{t.cash}</SelectItem>

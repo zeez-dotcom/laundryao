@@ -4553,6 +4553,6 @@ export class DatabaseStorage {
   }
 }
 
-export const storage: any = new DatabaseStorage();
+export const storage: IStorage = new DatabaseStorage() as unknown as IStorage;
 // Note: DatabaseStorage is structurally compatible with IStorage at runtime.
 // Some optional admin/customer features may be implemented as no-ops.
