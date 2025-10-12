@@ -3862,9 +3862,9 @@ export class DatabaseStorage {
         SELECT
           o.customer_id,
           o.created_at,
-          pl.amount::numeric AS total_value
+          COALESCE(pl.amount, 0)::numeric AS total_value
         FROM orders o
-        JOIN pay_later pl ON pl.order_id = o.id
+        LEFT JOIN pay_later pl ON pl.order_id = o.id
         WHERE o.customer_id IS NOT NULL
           AND o.is_delivery_request = false
           AND o.payment_method = 'pay_later'
@@ -3945,9 +3945,9 @@ export class DatabaseStorage {
         SELECT
           o.customer_id,
           o.created_at,
-          pl.amount::numeric AS total_value
+          COALESCE(pl.amount, 0)::numeric AS total_value
         FROM orders o
-        JOIN pay_later pl ON pl.order_id = o.id
+        LEFT JOIN pay_later pl ON pl.order_id = o.id
         WHERE o.customer_id IS NOT NULL
           AND o.is_delivery_request = false
           AND o.payment_method = 'pay_later'
@@ -4010,7 +4010,7 @@ export class DatabaseStorage {
           jt.quantity,
           jt.total
         FROM base_orders o
-        JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
           service text,
           quantity int,
@@ -4079,7 +4079,7 @@ export class DatabaseStorage {
           jt.quantity,
           jt.total
         FROM base_orders o
-        JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
           clothingItem text,
           service text,
@@ -4221,7 +4221,7 @@ export class DatabaseStorage {
           jt.quantity,
           jt.total
         FROM base_orders o
-        JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
           service text,
           quantity int,
@@ -4294,7 +4294,7 @@ export class DatabaseStorage {
           jt.quantity,
           jt.total
         FROM base_orders o
-        JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
           clothingItem text,
           quantity int,
@@ -4426,7 +4426,7 @@ export class DatabaseStorage {
           jt.quantity,
           jt.total
         FROM base_orders o
-        JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN pay_later p ON p.order_id = o.id
         JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
           clothingItem text,
           service text,
