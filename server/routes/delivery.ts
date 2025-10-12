@@ -84,6 +84,16 @@ function isValidStatus(value: string): value is DeliveryStatus {
   return (deliveryStatusValues as readonly DeliveryStatus[]).includes(value as DeliveryStatus);
 }
 
+function resolveActorName(user?: { firstName?: string | null; lastName?: string | null; username?: string | null }) {
+  if (!user) return "system";
+  const parts = [user.firstName, user.lastName]
+    .filter((part): part is string => Boolean(part && part.trim()));
+  if (parts.length) {
+    return parts.join(" ");
+  }
+  return user.username || "system";
+}
+
 export function registerDeliveryRoutes({
   app,
   storage,
@@ -194,7 +204,10 @@ export function registerDeliveryRoutes({
       if (user.role !== "super_admin" && user.branchId !== order.branchId) {
         return res.status(403).json({ message: "Access denied" });
       }
-      const updated = await storage.acceptDeliveryOrderRequest(req.params.id);
+      const updated = await storage.acceptDeliveryOrderRequest(
+        req.params.id,
+        resolveActorName(user),
+      );
       res.json(updated);
     } catch (error) {
       logger.error({ err: error }, "Failed to accept delivery order request");
@@ -372,7 +385,11 @@ export function registerDeliveryRoutes({
         return res.status(400).json({ message: "Invalid status transition" });
       }
 
-      const updated = await storage.updateDeliveryStatus(req.params.id, status);
+      const updated = await storage.updateDeliveryStatus(
+        req.params.id,
+        status,
+        resolveActorName(user),
+      );
       if (!updated) {
         return res.status(404).json({ message: "Delivery order not found" });
       }

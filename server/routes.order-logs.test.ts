@@ -31,11 +31,17 @@ test('returns order logs with expected shape', async () => {
       customerName: 'Alice',
       packageName: 'Basic',
       status: 'ready',
-      statusHistory: [],
-      receivedAt: '2023-01-01T00:00:00.000Z',
-      processedAt: null,
-      readyAt: null,
-      deliveredAt: null,
+      createdAt: '2023-01-01T00:00:00.000Z',
+      promisedReadyDate: '2023-01-02T00:00:00.000Z',
+      events: [
+        {
+          id: 'evt1',
+          status: 'received',
+          actor: 'System',
+          timestamp: '2023-01-01T00:00:00.000Z',
+          context: 'order',
+        },
+      ],
     },
   ];
   const storage = {
@@ -46,7 +52,7 @@ test('returns order logs with expected shape', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.length, 1);
   assert.equal(res.body[0].orderNumber, '001');
-  assert.ok('receivedAt' in res.body[0]);
+  assert.ok(Array.isArray(res.body[0].events));
 });
 
 test('filters order logs by status', async () => {
@@ -57,11 +63,9 @@ test('filters order logs by status', async () => {
       customerName: 'Alice',
       packageName: 'Basic',
       status: 'ready',
-      statusHistory: [],
-      receivedAt: '2023-01-01T00:00:00.000Z',
-      processedAt: null,
-      readyAt: null,
-      deliveredAt: null,
+      createdAt: '2023-01-01T00:00:00.000Z',
+      promisedReadyDate: null,
+      events: [],
     },
     {
       id: '2',
@@ -69,11 +73,9 @@ test('filters order logs by status', async () => {
       customerName: 'Bob',
       packageName: 'Premium',
       status: 'delivered',
-      statusHistory: [],
-      receivedAt: '2023-01-01T00:00:00.000Z',
-      processedAt: null,
-      readyAt: null,
-      deliveredAt: '2023-01-04T00:00:00.000Z',
+      createdAt: '2023-01-01T00:00:00.000Z',
+      promisedReadyDate: null,
+      events: [],
     },
   ];
   const storage = {
@@ -95,11 +97,9 @@ test('returns unique orders when customer has multiple packages', async () => {
       customerName: 'Alice',
       packageName: 'Basic',
       status: 'ready',
-      statusHistory: [],
-      receivedAt: '2023-01-01T00:00:00.000Z',
-      processedAt: null,
-      readyAt: null,
-      deliveredAt: null,
+      createdAt: '2023-01-01T00:00:00.000Z',
+      promisedReadyDate: null,
+      events: [],
     },
     {
       id: '1',
@@ -107,11 +107,9 @@ test('returns unique orders when customer has multiple packages', async () => {
       customerName: 'Alice',
       packageName: 'Premium',
       status: 'ready',
-      statusHistory: [],
-      receivedAt: '2023-01-01T00:00:00.000Z',
-      processedAt: null,
-      readyAt: null,
-      deliveredAt: null,
+      createdAt: '2023-01-01T00:00:00.000Z',
+      promisedReadyDate: null,
+      events: [],
     },
   ];
   const storage = {

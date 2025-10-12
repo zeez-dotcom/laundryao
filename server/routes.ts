@@ -93,6 +93,16 @@ async function resolveUuidByPublicId(table: any, idParam: string) {
   return idParam;
 }
 
+function getActorName(user?: { firstName?: string | null; lastName?: string | null; username?: string | null }): string {
+  if (!user) return "system";
+  const parts = [user.firstName, user.lastName]
+    .filter((part): part is string => Boolean(part && part.trim()));
+  if (parts.length) {
+    return parts.join(" ");
+  }
+  return user.username || "system";
+}
+
 const parseAmount = (value: string | number | null | undefined) =>
   Number.parseFloat(typeof value === "string" ? value : value != null ? String(value) : "0");
 import { WebSocketServer } from "ws";
@@ -1810,7 +1820,10 @@ export async function registerRoutes(
       }
 
       // Update order status
-      const updatedOrder = await storage.updateOrderStatus(orderId, status, notes);
+      const updatedOrder = await storage.updateOrderStatus(orderId, status, {
+        actor: getActorName(user),
+        notes,
+      });
       res.json(updatedOrder);
     } catch (error) {
       res.status(500).json({ message: "Failed to update order status" });
@@ -3885,7 +3898,9 @@ export async function registerRoutes(
       const user = req.user as UserWithBranch;
       const { status, notify } = req.body as { status: string; notify?: boolean };
       const id = await resolveUuidByPublicId(orders, req.params.id);
-      const order = await storage.updateOrderStatus(id, status);
+      const order = await storage.updateOrderStatus(id, status, {
+        actor: getActorName(user),
+      });
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
       }

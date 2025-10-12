@@ -37,6 +37,7 @@ import {
     customerAddresses,
     customerEngagementPlans,
     orders,
+    orderStatusHistory,
     orderPrints,
     payments,
     products,
@@ -51,6 +52,7 @@ import {
     branchServiceCities,
   type City, type InsertCity,
   type OrderLog,
+  type OrderTimelineEvent,
   coupons,
   couponUsage,
   couponClothingItems,
@@ -88,6 +90,8 @@ import {
   driverLocations,
   type DriverLocation,
   expenses, type Expense, type InsertExpense,
+  orderStatusEnum,
+  deliveryStatusEnum,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { db } from "./db";
@@ -123,6 +127,10 @@ function assertUuid(id: string) {
     throw new Error("Invalid UUID format");
   }
 }
+
+const ORDER_STATUS_SET = new Set(orderStatusEnum);
+const DELIVERY_STATUS_SET = new Set(deliveryStatusEnum);
+const SYSTEM_ACTOR = "system";
 
 const VALID_DELIVERY_STATUSES = [
   "pending",
@@ -542,7 +550,11 @@ export interface IStorage {
   createBranchCustomization(customization: BranchCustomizationInsert): Promise<BranchCustomization>;
 
   // Order status management
-  updateOrderStatus(orderId: string, status: string, notes?: string): Promise<Order>;
+  updateOrderStatus(
+    orderId: string,
+    status: string,
+    options?: { actor?: string; notes?: string },
+  ): Promise<Order | undefined>;
   getOrdersByBranch(branchId: string, options?: { status?: string; limit?: number }): Promise<Order[]>;
 
   // Customer addresses
@@ -581,16 +593,19 @@ export interface IStorage {
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]>;
   createOrder(order: InsertOrder & { branchId: string }): Promise<Order>;
   updateOrder(id: string, order: Partial<Omit<Order, 'id' | 'orderNumber' | 'createdAt'>>): Promise<Order | undefined>;
-  updateOrderStatus(id: string, status: string): Promise<Order | undefined>;
   getDeliveryOrderRequests(branchId?: string): Promise<(Order & { delivery: DeliveryOrder })[]>;
-  acceptDeliveryOrderRequest(id: string): Promise<Order | undefined>;
+  acceptDeliveryOrderRequest(id: string, actor?: string): Promise<Order | undefined>;
 
   // Delivery orders
   getDeliveryOrders(branchId?: string, status?: DeliveryStatus): Promise<(DeliveryOrder & { order: Order })[]>;
   getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
   assignDeliveryOrder(orderId: string, driverId: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
   getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
-  updateDeliveryStatus(orderId: string, status: DeliveryStatus): Promise<(DeliveryOrder & { order: Order }) | undefined>;
+  updateDeliveryStatus(
+    orderId: string,
+    status: DeliveryStatus,
+    actor?: string,
+  ): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
   updateDriverLocation(driverId: string, lat: number, lng: number): Promise<DriverLocationSnapshot>;
   getLatestDriverLocations(driverIds?: string[]): Promise<DriverLocationSnapshot[]>;
@@ -1933,6 +1948,28 @@ export class DatabaseStorage {
         await tx.execute(sql`SELECT set_config('app.branch_id', ${branchId}, true)`);
       }
       return await fn(tx);
+    });
+  }
+
+  private async recordStatusEvent(
+    tx: any,
+    orderId: string,
+    status: string,
+    actor?: string | null,
+    occurredAt?: Date | string | null,
+  ): Promise<void> {
+    const occurredDate =
+      occurredAt instanceof Date
+        ? occurredAt
+        : occurredAt
+        ? new Date(occurredAt)
+        : new Date();
+
+    await tx.insert(orderStatusHistory).values({
+      orderId,
+      status,
+      actor: actor ?? null,
+      occurredAt: occurredDate,
     });
   }
   // User methods
@@ -3818,6 +3855,15 @@ export class DatabaseStorage {
           isDeliveryRequest: orderData.isDeliveryRequest ?? false,
         })
         .returning();
+      if (order) {
+        await this.recordStatusEvent(
+          tx,
+          order.id,
+          `order:${order.status}`,
+          orderData.sellerName || SYSTEM_ACTOR,
+          order.createdAt ?? null,
+        );
+      }
       return order;
     });
   }
@@ -3938,10 +3984,8 @@ export class DatabaseStorage {
         customerName: orders.customerName,
         status: orders.status,
         createdAt: orders.createdAt,
-        updatedAt: orders.updatedAt,
+        promisedReadyDate: orders.promisedReadyDate,
         packageName: sql<string>`max(${packages.nameEn})`,
-        estimatedPickup: orders.estimatedPickup,
-        actualPickup: orders.actualPickup,
       })
       .from(orders)
       .leftJoin(payments, eq(payments.orderId, orders.id))
@@ -3962,16 +4006,67 @@ export class DatabaseStorage {
       ? baseQuery.where(eq(orders.status, status as any))
       : baseQuery;
 
-    const rows = await query.groupBy(
-      orders.id,
-      orders.orderNumber,
-      orders.customerName,
-      orders.status,
-      orders.createdAt,
-      orders.updatedAt,
-      orders.estimatedPickup,
-      orders.actualPickup,
-    );
+    const rows = await query
+      .groupBy(
+        orders.id,
+        orders.orderNumber,
+        orders.customerName,
+        orders.status,
+        orders.createdAt,
+        orders.promisedReadyDate,
+      )
+      .orderBy(desc(orders.createdAt));
+
+    if (!rows.length) {
+      return [];
+    }
+
+    const orderIds = rows.map((r) => r.id);
+    const historyRows = await db
+      .select({
+        id: orderStatusHistory.id,
+        orderId: orderStatusHistory.orderId,
+        status: orderStatusHistory.status,
+        actor: orderStatusHistory.actor,
+        occurredAt: orderStatusHistory.occurredAt,
+      })
+      .from(orderStatusHistory)
+      .where(inArray(orderStatusHistory.orderId, orderIds))
+      .orderBy(asc(orderStatusHistory.orderId), asc(orderStatusHistory.occurredAt));
+
+    const historyMap = new Map<string, OrderTimelineEvent[]>();
+
+    for (const event of historyRows) {
+      const [prefix, remainder] = event.status.includes(":")
+        ? event.status.split(":", 2)
+        : ["", event.status];
+      let context: "order" | "delivery" = "order";
+      let statusValue = remainder;
+
+      if (prefix === "order" || prefix === "delivery") {
+        context = prefix;
+      } else if (ORDER_STATUS_SET.has(event.status as any)) {
+        context = "order";
+        statusValue = event.status;
+      } else if (DELIVERY_STATUS_SET.has(event.status as any)) {
+        context = "delivery";
+        statusValue = event.status;
+      } else {
+        statusValue = event.status;
+      }
+
+      const timelineEvent: OrderTimelineEvent = {
+        id: event.id,
+        status: statusValue,
+        actor: event.actor ?? null,
+        timestamp: (event.occurredAt ?? new Date()).toISOString(),
+        context,
+      };
+
+      const arr = historyMap.get(event.orderId) ?? [];
+      arr.push(timelineEvent);
+      historyMap.set(event.orderId, arr);
+    }
 
     return rows.map((r) => ({
       id: r.id,
@@ -3979,20 +4074,11 @@ export class DatabaseStorage {
       customerName: r.customerName,
       packageName: r.packageName,
       status: r.status,
-      statusHistory: [
-        {
-          status: r.status,
-          timestamp: (r.updatedAt || r.createdAt).toISOString(),
-        },
-      ],
-      receivedAt: r.createdAt?.toISOString(),
-      processedAt: r.status !== "start_processing" ? r.updatedAt?.toISOString() : null,
-      readyAt: ["ready", "handed_over", "completed"].includes(r.status)
-        ? r.updatedAt?.toISOString()
-        : null,
-      deliveredAt: ["handed_over", "completed"].includes(r.status)
-        ? r.updatedAt?.toISOString()
-        : null,
+      createdAt: r.createdAt ? r.createdAt.toISOString() : null,
+      promisedReadyDate: r.promisedReadyDate ? r.promisedReadyDate.toISOString() : null,
+      events: (historyMap.get(r.id) ?? []).sort((a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      ),
     }));
   }
 
@@ -5519,23 +5605,49 @@ export class DatabaseStorage {
   }
 
   // Order status management
-  async updateOrderStatus(orderId: string, status: string, notes?: string): Promise<Order> {
-    const updateData: any = { 
-      status, 
-      updatedAt: new Date()
-    };
-    
-    if (notes) {
-      updateData.notes = notes;
-    }
+  async updateOrderStatus(
+    orderId: string,
+    status: string,
+    options: { actor?: string; notes?: string } = {},
+  ): Promise<Order | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ status: orders.status, branchId: orders.branchId })
+        .from(orders)
+        .where(eq(orders.id, orderId));
 
-    const [updated] = await db
-      .update(orders)
-      .set(updateData)
-      .where(eq(orders.id, orderId))
-      .returning();
-    
-    return updated;
+      if (!existing) return undefined;
+
+      if (existing.branchId) {
+        await tx.execute(sql`SELECT set_config('app.branch_id', ${existing.branchId}, true)`);
+      }
+
+      const updateData: any = {
+        status,
+        updatedAt: new Date(),
+      };
+
+      if (options.notes) {
+        updateData.notes = options.notes;
+      }
+
+      const [updated] = await tx
+        .update(orders)
+        .set(updateData)
+        .where(eq(orders.id, orderId))
+        .returning();
+
+      if (updated && existing.status !== status) {
+        await this.recordStatusEvent(
+          tx,
+          orderId,
+          `order:${status}`,
+          options.actor || null,
+        );
+      }
+
+      return updated || undefined;
+    });
   }
 
   async getDeliveryOrderRequests(branchId?: string): Promise<(Order & { delivery: DeliveryOrder })[]> {
@@ -5553,7 +5665,7 @@ export class DatabaseStorage {
     });
   }
 
-  async acceptDeliveryOrderRequest(id: string): Promise<Order | undefined> {
+  async acceptDeliveryOrderRequest(id: string, actor?: string): Promise<Order | undefined> {
     return await db.transaction(async (tx) => {
       if (typeof (tx as any).execute === 'function') {
         // Fetch branchId first, then set RLS context with set_config
@@ -5562,6 +5674,11 @@ export class DatabaseStorage {
           await (tx as any).execute(sql`SELECT set_config('app.branch_id', ${o.branchId}, true)`);
         }
       }
+      const [existingDelivery] = await tx
+        .select({ status: deliveryOrders.deliveryStatus })
+        .from(deliveryOrders)
+        .where(eq(deliveryOrders.orderId, id));
+
       const [updated] = await tx
         .update(orders)
         .set({ isDeliveryRequest: false, updatedAt: new Date() })
@@ -5575,6 +5692,15 @@ export class DatabaseStorage {
         .set({ deliveryStatus: "accepted", updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(deliveryOrders.orderId, id))
         .returning();
+
+      if (existingDelivery?.status !== "accepted") {
+        await this.recordStatusEvent(
+          tx,
+          id,
+          "delivery:accepted",
+          actor || null,
+        );
+      }
 
       return updated;
     });
@@ -5677,6 +5803,7 @@ export class DatabaseStorage {
   async updateDeliveryStatus(
     orderId: string,
     status: DeliveryStatus,
+    actor?: string,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
     return await db.transaction(async (tx) => {
       if (typeof (tx as any).execute === 'function') {
@@ -5702,6 +5829,15 @@ export class DatabaseStorage {
         .set({ deliveryStatus: status, updatedAt: sql`CURRENT_TIMESTAMP` })
         .where(eq(deliveryOrders.id, existing.delivery.id))
         .returning();
+
+      if (updated && existing.delivery.deliveryStatus !== status) {
+        await this.recordStatusEvent(
+          tx,
+          orderId,
+          `delivery:${status}`,
+          actor || null,
+        );
+      }
 
       return { ...updated, order: existing.order };
     });
