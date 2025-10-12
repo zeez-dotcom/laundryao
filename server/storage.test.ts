@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import bcrypt from 'bcryptjs';
 
 process.env.DATABASE_URL = 'postgres://user:pass@localhost/db';
 
@@ -198,6 +199,118 @@ test('deleteLaundryService returns boolean based on deletion result', async () =
   (db as any).delete = () => ({ where: () => ({ rowCount: 0 }) });
   assert.strictEqual(await storage.deleteLaundryService('1'), false);
   (db as any).delete = originalDelete;
+});
+
+test('MemStorage user CRUD operations mirror constraints', async () => {
+  const storage = new MemStorage();
+  const created = await storage.createUser({
+    username: 'alice',
+    passwordHash: 'password123',
+    role: 'user',
+    email: 'alice@example.com',
+    firstName: 'Alice',
+    lastName: 'Example',
+    isActive: true,
+  } as any);
+
+  assert.strictEqual(created.username, 'alice');
+  assert.ok(await bcrypt.compare('password123', created.passwordHash));
+  assert.strictEqual((await storage.getUserByUsername('alice'))?.id, created.id);
+
+  await assert.rejects(
+    storage.createUser({
+      username: 'alice',
+      passwordHash: 'other',
+      role: 'user',
+    } as any),
+    /username already exists/,
+  );
+
+  const profile = await storage.updateUserProfile(created.id, { firstName: 'Alicia' });
+  assert.strictEqual(profile?.firstName, 'Alicia');
+
+  const updatedPassword = await storage.updateUserPassword(created.id, 'newpass');
+  assert.ok(updatedPassword?.passwordHash);
+  assert.ok(await bcrypt.compare('newpass', updatedPassword!.passwordHash));
+
+  const users = await storage.getUsers();
+  assert.strictEqual(users.length > 0, true);
+});
+
+test('MemStorage category CRUD enforces unique names per user', async () => {
+  const storage = new MemStorage();
+  const user = await storage.createUser({
+    username: 'owner',
+    passwordHash: 'secret',
+    role: 'user',
+  } as any);
+
+  const category = await storage.createCategory({
+    name: 'Dresses',
+    type: 'clothing',
+    isActive: true,
+  }, user.id);
+
+  assert.strictEqual(category.name, 'Dresses');
+  assert.strictEqual((await storage.getCategory(category.id, user.id))?.id, category.id);
+  assert.strictEqual((await storage.getCategories(user.id)).length, 1);
+
+  await assert.rejects(
+    storage.createCategory({
+      name: 'Dresses',
+      type: 'clothing',
+    }, user.id),
+    /category name already exists/,
+  );
+
+  const updated = await storage.updateCategory(category.id, { name: 'Formal Wear' }, user.id);
+  assert.strictEqual(updated?.name, 'Formal Wear');
+
+  const second = await storage.createCategory({ name: 'Casual', type: 'clothing' }, user.id);
+  await assert.rejects(
+    storage.updateCategory(second.id, { name: 'Formal Wear' }, user.id),
+    /category name already exists/,
+  );
+
+  assert.strictEqual(await storage.deleteCategory(second.id, user.id), true);
+  assert.strictEqual(await storage.deleteCategory(second.id, user.id), false);
+});
+
+test('MemStorage branch CRUD enforces unique branch codes', async () => {
+  const storage = new MemStorage();
+  const branch = await storage.createBranch({
+    name: 'Main Branch',
+    code: 'MB',
+  } as any, ['city-1']);
+
+  const fetched = await storage.getBranch(branch.id);
+  assert.strictEqual(fetched?.serviceCityIds?.includes('city-1'), true);
+  assert.strictEqual((await storage.getBranchByCode('MB'))?.id, branch.id);
+
+  await assert.rejects(
+    storage.createBranch({
+      name: 'Duplicate Code',
+      code: 'MB',
+    } as any),
+    /branch code already exists/,
+  );
+
+  const other = await storage.createBranch({ name: 'Secondary', code: 'SC' } as any);
+  await assert.rejects(
+    storage.updateBranch(branch.id, { code: 'SC' }),
+    /branch code already exists/,
+  );
+
+  const updated = await storage.updateBranch(branch.id, { name: 'HQ' }, ['city-2']);
+  assert.strictEqual(updated?.name, 'HQ');
+  assert.deepEqual(updated?.serviceCityIds, ['city-2']);
+
+  await storage.setBranchServiceCities(branch.id, ['city-3']);
+  assert.deepEqual((await storage.getBranch(branch.id))?.serviceCityIds, ['city-3']);
+
+  assert.strictEqual(await storage.deleteBranch(branch.id), true);
+  assert.strictEqual(await storage.getBranch(branch.id), undefined);
+  assert.strictEqual(await storage.deleteBranch(branch.id), false);
 });
 
 test('createClothingItem seeds default prices for existing services', async () => {

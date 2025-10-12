@@ -497,7 +497,9 @@ export class MemStorage {
   private transactions: Map<string, Transaction>;
   private users: Map<string, User>;
   private categories: Map<string, Category>;
-   private branches: Map<string, Branch>;
+  private branches: Map<string, Branch>;
+  private branchServiceCities: Map<string, string[]>;
+  private cities: Map<string, City>;
   private packages: Map<string, Package>;
   private packageItems: Map<string, PackageItem[]>;
   private customerPackages: Map<string, CustomerPackage>;
@@ -524,6 +526,8 @@ export class MemStorage {
     this.users = new Map();
     this.categories = new Map();
     this.branches = new Map();
+    this.branchServiceCities = new Map();
+    this.cities = new Map();
     this.packages = new Map();
     this.packageItems = new Map();
     this.customerPackages = new Map();
@@ -1341,46 +1345,347 @@ export class MemStorage {
     return this.securitySettings;
   }
 
+  private buildUserWithBranch(user: User | undefined): UserWithBranch | undefined {
+    if (!user) return undefined;
+    const branch = user.branchId ? this.branches.get(user.branchId) ?? null : null;
+    return { ...user, branch };
+  }
+
   // User methods (stub for MemStorage - not used in production)
-  async getUser(id: string): Promise<UserWithBranch | undefined> { return undefined; }
-  async getUserByUsername(username: string): Promise<UserWithBranch | undefined> { return undefined; }
-  async createUser(user: InsertUser): Promise<UserWithBranch> { throw new Error("Not implemented in MemStorage"); }
-  async upsertUser(user: UpsertUser): Promise<UserWithBranch> { throw new Error("Not implemented in MemStorage"); }
-  async updateUser(id: string, user: Partial<InsertUser>): Promise<UserWithBranch | undefined> { return undefined; }
-  async updateUserProfile(id: string, user: Partial<Pick<InsertUser, "firstName" | "lastName" | "email">>): Promise<UserWithBranch | undefined> { return undefined; }
-  async updateUserPassword(id: string, password: string): Promise<UserWithBranch | undefined> { return undefined; }
-  async updateUserBranch(id: string, branchId: string | null): Promise<UserWithBranch | undefined> { return undefined; }
-  async getUsers(): Promise<UserWithBranch[]> { return []; }
+  async getUser(id: string): Promise<UserWithBranch | undefined> {
+    return this.buildUserWithBranch(this.users.get(id));
+  }
+
+  async getUserByUsername(username: string): Promise<UserWithBranch | undefined> {
+    const user = Array.from(this.users.values()).find(u => u.username === username);
+    return this.buildUserWithBranch(user);
+  }
+
+  async createUser(user: InsertUser): Promise<UserWithBranch> {
+    const exists = Array.from(this.users.values()).some(u => u.username === user.username);
+    if (exists) {
+      throw new Error("Unique constraint violation: username already exists");
+    }
+    const id = randomUUID();
+    const now = new Date();
+    const passwordHash = await bcrypt.hash(user.passwordHash, 10);
+    const record: User = {
+      publicId: 0 as any,
+      id,
+      username: user.username,
+      email: user.email ?? null,
+      passwordHash,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      branchId: user.branchId ?? null as any,
+      role: user.role ?? "user",
+      isActive: user.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.users.set(id, record);
+    return (await this.getUser(id))!;
+  }
+
+  async upsertUser(user: UpsertUser): Promise<UserWithBranch> {
+    const existing = Array.from(this.users.values()).find(u => u.username === user.username);
+    if (existing) {
+      const updated: User = {
+        ...existing,
+        firstName: user.firstName ?? existing.firstName ?? null,
+        lastName: user.lastName ?? existing.lastName ?? null,
+        email: user.email ?? existing.email ?? null,
+        branchId: user.branchId ?? existing.branchId ?? null,
+        role: user.role ?? existing.role,
+        isActive: user.isActive ?? existing.isActive,
+        updatedAt: new Date(),
+      };
+      if (user.passwordHash !== undefined && user.passwordHash !== existing.passwordHash) {
+        updated.passwordHash = user.passwordHash;
+      }
+      this.users.set(updated.id, updated);
+      return (await this.getUser(updated.id))!;
+    }
+    if (!user.passwordHash) {
+      throw new Error("passwordHash must be provided for new users");
+    }
+    const id = user.id ?? randomUUID();
+    const now = new Date();
+    const record: User = {
+      publicId: 0 as any,
+      id,
+      username: user.username,
+      email: user.email ?? null,
+      passwordHash: user.passwordHash,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      branchId: user.branchId ?? null as any,
+      role: user.role ?? "user",
+      isActive: user.isActive ?? true,
+      createdAt: user.createdAt ?? now,
+      updatedAt: user.updatedAt ?? now,
+    };
+    this.users.set(id, record);
+    return (await this.getUser(id))!;
+  }
+
+  async updateUser(id: string, user: Partial<InsertUser>): Promise<UserWithBranch | undefined> {
+    const existing = this.users.get(id);
+    if (!existing) return undefined;
+    const updated: User = { ...existing };
+    if (user.username && user.username !== existing.username) {
+      const duplicate = Array.from(this.users.values()).some(
+        u => u.username === user.username && u.id !== id,
+      );
+      if (duplicate) {
+        throw new Error("Unique constraint violation: username already exists");
+      }
+      updated.username = user.username;
+    }
+    if (user.passwordHash !== undefined) {
+      if (user.passwordHash) {
+        updated.passwordHash = await bcrypt.hash(user.passwordHash, 10);
+      }
+    }
+    if (user.email !== undefined) updated.email = user.email ?? null;
+    if (user.firstName !== undefined) updated.firstName = user.firstName ?? null;
+    if (user.lastName !== undefined) updated.lastName = user.lastName ?? null;
+    if (user.branchId !== undefined) updated.branchId = user.branchId ?? null as any;
+    if (user.role !== undefined) updated.role = user.role;
+    if (user.isActive !== undefined) updated.isActive = user.isActive;
+    updated.updatedAt = new Date();
+    this.users.set(id, updated);
+    return this.buildUserWithBranch(updated);
+  }
+
+  async updateUserProfile(
+    id: string,
+    user: Partial<Pick<InsertUser, "firstName" | "lastName" | "email">>,
+  ): Promise<UserWithBranch | undefined> {
+    return this.updateUser(id, user as Partial<InsertUser>);
+  }
+
+  async updateUserPassword(id: string, password: string): Promise<UserWithBranch | undefined> {
+    if (!password) return this.getUser(id);
+    return this.updateUser(id, { passwordHash: password });
+  }
+
+  async updateUserBranch(id: string, branchId: string | null): Promise<UserWithBranch | undefined> {
+    return this.updateUser(id, { branchId: branchId ?? null });
+  }
+
+  async getUsers(): Promise<UserWithBranch[]> {
+    return Array.from(this.users.values()).map(user => this.buildUserWithBranch(user)!);
+  }
 
   // Category methods (stub for MemStorage - not used in production)
-  async getCategories(_userId: string): Promise<Category[]> { return []; }
-  async getCategoriesByType(_type: string, _userId: string): Promise<Category[]> { return []; }
-  async getCategory(_id: string, _userId: string): Promise<Category | undefined> { return undefined; }
+  async getCategories(userId: string): Promise<Category[]> {
+    return Array.from(this.categories.values()).filter(c => c.userId === userId);
+  }
+
+  async getCategoriesByType(type: string, userId: string): Promise<Category[]> {
+    return Array.from(this.categories.values()).filter(
+      c => c.userId === userId && c.type === type,
+    );
+  }
+
+  async getCategory(id: string, userId: string): Promise<Category | undefined> {
+    const category = this.categories.get(id);
+    if (!category || category.userId !== userId) return undefined;
+    return category;
+  }
+
   async createCategory(
-    _category: Omit<InsertCategory, "userId">,
-    _userId: string,
+    category: Omit<InsertCategory, "userId">,
+    userId: string,
   ): Promise<Category> {
-    throw new Error("Not implemented in MemStorage");
+    const duplicate = Array.from(this.categories.values()).some(
+      c => c.userId === userId && c.name === category.name,
+    );
+    if (duplicate) {
+      throw new Error("Unique constraint violation: category name already exists for user");
+    }
+    const id = randomUUID();
+    const now = new Date();
+    const user = this.users.get(userId);
+    const record: Category = {
+      publicId: 0 as any,
+      id,
+      name: category.name,
+      nameAr: category.nameAr ?? null,
+      type: category.type,
+      description: category.description ?? null,
+      descriptionAr: ("descriptionAr" in category ? category.descriptionAr ?? null : null),
+      color: category.color ?? null,
+      icon: category.icon ?? null,
+      isActive: category.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+      userId,
+      branchId: user?.branchId ?? null as any,
+    };
+    this.categories.set(id, record);
+    return record;
   }
+
   async updateCategory(
-    _id: string,
-    _category: Partial<Omit<InsertCategory, "userId">>,
-    _userId: string,
+    id: string,
+    category: Partial<Omit<InsertCategory, "userId">>,
+    userId: string,
   ): Promise<Category | undefined> {
-    return undefined;
+    const existing = this.categories.get(id);
+    if (!existing || existing.userId !== userId) return undefined;
+    if (category.name && category.name !== existing.name) {
+      const duplicate = Array.from(this.categories.values()).some(
+        c => c.userId === userId && c.name === category.name && c.id !== id,
+      );
+      if (duplicate) {
+        throw new Error("Unique constraint violation: category name already exists for user");
+      }
+      existing.name = category.name;
+    }
+    if (category.nameAr !== undefined) existing.nameAr = category.nameAr ?? null;
+    if (category.type !== undefined) existing.type = category.type;
+    if (category.description !== undefined) existing.description = category.description ?? null;
+    if ("descriptionAr" in category && category.descriptionAr !== undefined) {
+      existing.descriptionAr = category.descriptionAr ?? null;
+    }
+    if (category.color !== undefined) existing.color = category.color ?? null;
+    if (category.icon !== undefined) existing.icon = category.icon ?? null;
+    if (category.isActive !== undefined) existing.isActive = category.isActive;
+    existing.updatedAt = new Date();
+    this.categories.set(id, existing);
+    return existing;
   }
-  async deleteCategory(_id: string, _userId: string): Promise<boolean> { return false; }
+
+  async deleteCategory(id: string, userId: string): Promise<boolean> {
+    const existing = this.categories.get(id);
+    if (!existing || existing.userId !== userId) return false;
+    return this.categories.delete(id);
+  }
 
   // Branch methods (stub for MemStorage - not used in production)
-  async getBranches(): Promise<(Branch & { serviceCityIds?: string[] })[]> { return []; }
-  async getBranch(id: string): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> { return undefined; }
-  async getBranchByCode(code: string): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> { return undefined; }
-  async createBranch(branch: InsertBranch, _areas?: string[]): Promise<Branch> { throw new Error("Not implemented in MemStorage"); }
-  async updateBranch(id: string, branch: Partial<InsertBranch>, _areas?: string[]): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> { return undefined; }
-  async setBranchServiceCities(_id: string, _cityIds: string[]): Promise<string[]> { return []; }
-  async getCities(): Promise<City[]> { return []; }
-  async replaceCities(_cities: InsertCity[]): Promise<void> { return; }
-  async deleteBranch(id: string): Promise<boolean> { return false; }
+  async getBranches(): Promise<(Branch & { serviceCityIds?: string[] })[]> {
+    return Array.from(this.branches.values()).map(branch => ({
+      ...branch,
+      serviceCityIds: [...(this.branchServiceCities.get(branch.id) ?? [])],
+    }));
+  }
+
+  async getBranch(id: string): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> {
+    const branch = this.branches.get(id);
+    if (!branch) return undefined;
+    return { ...branch, serviceCityIds: [...(this.branchServiceCities.get(id) ?? [])] };
+  }
+
+  async getBranchByCode(code: string): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> {
+    const branch = Array.from(this.branches.values()).find(b => b.code === code);
+    if (!branch) return undefined;
+    return { ...branch, serviceCityIds: [...(this.branchServiceCities.get(branch.id) ?? [])] };
+  }
+
+  async createBranch(branch: InsertBranch, serviceCityIds: string[] = []): Promise<Branch> {
+    const duplicate = Array.from(this.branches.values()).some(b => b.code === branch.code);
+    if (duplicate) {
+      throw new Error("Unique constraint violation: branch code already exists");
+    }
+    const id = randomUUID();
+    const record: Branch = {
+      publicId: 0 as any,
+      id,
+      name: branch.name,
+      nameAr: branch.nameAr ?? null,
+      address: branch.address ?? null,
+      addressAr: branch.addressAr ?? null,
+      phone: branch.phone ?? null,
+      addressInputMode: branch.addressInputMode ?? "mapbox",
+      logoUrl: branch.logoUrl ?? null,
+      whatsappQrUrl: branch.whatsappQrUrl ?? null,
+      tagline: branch.tagline ?? null,
+      taglineAr: branch.taglineAr ?? null,
+      code: branch.code,
+      nextOrderNumber: branch.nextOrderNumber ?? 1,
+      deliveryEnabled: branch.deliveryEnabled ?? true,
+    };
+    this.branches.set(id, record);
+    this.branchServiceCities.set(id, [...serviceCityIds]);
+    return record;
+  }
+
+  async updateBranch(
+    id: string,
+    branch: Partial<InsertBranch>,
+    serviceCityIds?: string[],
+  ): Promise<(Branch & { serviceCityIds?: string[] }) | undefined> {
+    const existing = this.branches.get(id);
+    if (!existing) return undefined;
+    if (branch.code && branch.code !== existing.code) {
+      const duplicate = Array.from(this.branches.values()).some(
+        b => b.code === branch.code && b.id !== id,
+      );
+      if (duplicate) {
+        throw new Error("Unique constraint violation: branch code already exists");
+      }
+      existing.code = branch.code;
+    }
+    if (branch.name !== undefined) existing.name = branch.name;
+    if (branch.nameAr !== undefined) existing.nameAr = branch.nameAr ?? null;
+    if (branch.address !== undefined) existing.address = branch.address ?? null;
+    if (branch.addressAr !== undefined) existing.addressAr = branch.addressAr ?? null;
+    if (branch.phone !== undefined) existing.phone = branch.phone ?? null;
+    if (branch.addressInputMode !== undefined) existing.addressInputMode = branch.addressInputMode;
+    if (branch.logoUrl !== undefined) existing.logoUrl = branch.logoUrl ?? null;
+    if (branch.whatsappQrUrl !== undefined) existing.whatsappQrUrl = branch.whatsappQrUrl ?? null;
+    if (branch.tagline !== undefined) existing.tagline = branch.tagline ?? null;
+    if (branch.taglineAr !== undefined) existing.taglineAr = branch.taglineAr ?? null;
+    if (branch.nextOrderNumber !== undefined) existing.nextOrderNumber = branch.nextOrderNumber;
+    if (branch.deliveryEnabled !== undefined) existing.deliveryEnabled = branch.deliveryEnabled;
+    this.branches.set(id, existing);
+    if (serviceCityIds) {
+      this.branchServiceCities.set(id, [...serviceCityIds]);
+    }
+    return { ...existing, serviceCityIds: [...(this.branchServiceCities.get(id) ?? [])] };
+  }
+
+  async setBranchServiceCities(branchId: string, cityIds: string[]): Promise<string[]> {
+    this.branchServiceCities.set(branchId, [...cityIds]);
+    return [...cityIds];
+  }
+
+  async getCities(): Promise<City[]> {
+    return Array.from(this.cities.values());
+  }
+
+  async replaceCities(cities: InsertCity[]): Promise<void> {
+    this.cities.clear();
+    const now = new Date();
+    for (const city of cities) {
+      const id = (city as any).id ?? randomUUID();
+      const record: City = {
+        id,
+        nameEn: city.nameEn,
+        nameAr: city.nameAr,
+        type: city.type ?? "area",
+        parentId: city.parentId ?? null,
+        isActive: city.isActive ?? true,
+        displayOrder: city.displayOrder ?? 0,
+        updatedAt: now,
+        createdAt: now,
+      };
+      this.cities.set(id, record);
+    }
+  }
+
+  async deleteBranch(id: string): Promise<boolean> {
+    const deleted = this.branches.delete(id);
+    this.branchServiceCities.delete(id);
+    for (const user of this.users.values()) {
+      if (user.branchId === id) {
+        user.branchId = null as any;
+      }
+    }
+    return deleted;
+  }
 }
 
 export class DatabaseStorage {
