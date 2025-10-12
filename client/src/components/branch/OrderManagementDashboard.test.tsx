@@ -71,11 +71,15 @@ const onTimeOrder = {
 } as any;
 
 describe("OrderManagementDashboard lateness indicators", () => {
+  let dateNowSpy: ReturnType<typeof vi.spyOn> | null = null;
+
   beforeEach(() => {
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2024-01-02T12:00:00.000Z").getTime());
     mockUseQuery.mockReturnValue({ data: [overdueOrder, onTimeOrder], isLoading: false });
   });
 
   afterEach(() => {
+    dateNowSpy?.mockRestore();
     vi.clearAllMocks();
     cleanup();
   });

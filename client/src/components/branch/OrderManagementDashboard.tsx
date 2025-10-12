@@ -176,6 +176,7 @@ type OrderWithLateness = OrderWithDelivery & {
 };
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+const TERMINAL_ORDER_STATUSES: OrderStatus[] = ["handed_over", "completed"];
 
 const promisedReadyOffsets: Record<NonNullable<Order["promisedReadyOption"]>, number> = {
   today: 0,
@@ -237,15 +238,18 @@ export function OrderManagementDashboard() {
   const ordersWithDueInfo: OrderWithLateness[] = orders.map((order) => {
     const dueDate = getPromisedReadyDate(order);
     const updatedAtDate = order.updatedAt ? new Date(order.updatedAt) : null;
+    const dueTime = dueDate?.getTime();
+    const isTerminalStatus = TERMINAL_ORDER_STATUSES.includes(order.status);
+    const now = Date.now();
 
     const isOverdue = Boolean(
-      dueDate &&
-      updatedAtDate &&
-      updatedAtDate.getTime() > dueDate.getTime()
+      dueTime &&
+      !isTerminalStatus &&
+      now > dueTime
     );
 
-    const overdueDays = isOverdue && dueDate && updatedAtDate
-      ? Math.max(1, Math.ceil((updatedAtDate.getTime() - dueDate.getTime()) / MILLIS_PER_DAY))
+    const overdueDays = isOverdue && dueTime
+      ? Math.max(1, Math.ceil((now - dueTime) / MILLIS_PER_DAY))
       : 0;
 
     return {
