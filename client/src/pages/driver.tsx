@@ -9,7 +9,7 @@ interface DeliveryOrder {
   id: string;
   orderNumber: string;
   deliveryAddress: string;
-  deliveryStatus: string;
+  status: string | null;
 }
 
 export default function DriverDashboard() {
@@ -88,7 +88,7 @@ export default function DriverDashboard() {
             <TableRow key={o.id}>
               <TableCell>{o.orderNumber}</TableCell>
               <TableCell>{o.deliveryAddress}</TableCell>
-              <TableCell>{o.deliveryStatus}</TableCell>
+              <TableCell>{o.status ?? ""}</TableCell>
             </TableRow>
           ))}
         </TableBody>
