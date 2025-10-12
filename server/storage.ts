@@ -3857,42 +3857,57 @@ export class DatabaseStorage {
     };
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`) : "";
+    const branchFilter = branchId
+      ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`)
+      : "";
     const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT o.id,
+               o.items,
+               o.payment_method,
+               o.created_at,
+               o.is_delivery_request,
+               o.branch_id
+        FROM orders o
+        WHERE o.created_at >= NOW() - INTERVAL '${interval}'
+          AND o.is_delivery_request = false
+          ${branchFilter}
+      ),
+      non_pay_later AS (
+        SELECT
+          jt.service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          jt.service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
       SELECT service,
-             SUM(count) AS count,
-             SUM(revenue) AS revenue
+             SUM(quantity) AS count,
+             SUM(total) AS revenue
       FROM (
-        SELECT
-          jt.service AS service,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          service VARCHAR(255) PATH '$.service',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method <> 'pay_later'
-          AND o.is_delivery_request = false
-
+        SELECT service, quantity, total FROM non_pay_later
         UNION ALL
-
-        SELECT
-          jt.service AS service,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          service VARCHAR(255) PATH '$.service',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method = 'pay_later'
-          AND o.is_delivery_request = false
+        SELECT service, quantity, total FROM pay_later_orders
       ) s
       GROUP BY service
       ORDER BY revenue DESC
@@ -3915,42 +3930,57 @@ export class DatabaseStorage {
     };
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`) : "";
+    const branchFilter = branchId
+      ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`)
+      : "";
     const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT o.id,
+               o.items,
+               o.payment_method,
+               o.created_at,
+               o.is_delivery_request,
+               o.branch_id
+        FROM orders o
+        WHERE o.created_at >= NOW() - INTERVAL '${interval}'
+          AND o.is_delivery_request = false
+          ${branchFilter}
+      ),
+      non_pay_later AS (
+        SELECT
+          jt.clothingItem AS product,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          jt.clothingItem AS product,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
       SELECT product,
-             SUM(count) AS count,
-             SUM(revenue) AS revenue
+             SUM(quantity) AS count,
+             SUM(total) AS revenue
       FROM (
-        SELECT
-          jt.clothingItem AS product,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          clothingItem VARCHAR(255) PATH '$.clothingItem',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method <> 'pay_later'
-          AND o.is_delivery_request = false
-
+        SELECT product, quantity, total FROM non_pay_later
         UNION ALL
-
-        SELECT
-          jt.clothingItem AS product,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          clothingItem VARCHAR(255) PATH '$.clothingItem',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method = 'pay_later'
-          AND o.is_delivery_request = false
+        SELECT product, quantity, total FROM pay_later_orders
       ) s
       GROUP BY product
       ORDER BY count DESC
@@ -4031,44 +4061,59 @@ export class DatabaseStorage {
     };
     const interval = intervalMap[range] ?? "1 DAY";
 
-    const branchFilter = branchId ? `AND o.branch_id = '${branchId}'` : "";
+    const branchFilter = branchId
+      ? (assertUuid(branchId), `AND o.branch_id = '${branchId.replace(/'/g, "''")}'`)
+      : "";
     const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT o.id,
+               o.items,
+               o.payment_method,
+               o.created_at,
+               o.is_delivery_request,
+               o.branch_id
+        FROM orders o
+        WHERE o.created_at >= NOW() - INTERVAL '${interval}'
+          AND o.is_delivery_request = false
+          ${branchFilter}
+      ),
+      non_pay_later AS (
+        SELECT
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
       SELECT item,
-             SUM(count) AS count,
-             SUM(revenue) AS revenue
+             SUM(quantity) AS count,
+             SUM(total) AS revenue
       FROM (
-        SELECT
-          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          clothingItem VARCHAR(255) PATH '$.clothingItem',
-          service VARCHAR(255) PATH '$.service',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method <> 'pay_later'
-          AND o.is_delivery_request = false
-
+        SELECT item, quantity, total FROM non_pay_later
         UNION ALL
-
-        SELECT
-          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
-          jt.quantity AS count,
-          jt.total AS revenue
-        FROM orders o
-        JOIN (${PAY_LATER_AGGREGATE}) p ON p.order_id = o.id
-        JOIN JSON_TABLE(o.items, '$[*]' COLUMNS (
-          clothingItem VARCHAR(255) PATH '$.clothingItem',
-          service VARCHAR(255) PATH '$.service',
-          quantity INT PATH '$.quantity',
-          total DECIMAL(10,2) PATH '$.total'
-        )) AS jt
-        WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
-          AND o.payment_method = 'pay_later'
-          AND o.is_delivery_request = false
+        SELECT item, quantity, total FROM pay_later_orders
       ) s
       GROUP BY item
       ORDER BY revenue DESC
