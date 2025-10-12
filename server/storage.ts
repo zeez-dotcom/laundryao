@@ -140,6 +140,44 @@ export interface ParsedRow {
   imageUrl?: string;
 }
 
+export interface CustomerInsightBreakdown {
+  month: string;
+  total: number;
+  orderCount: number;
+}
+
+export interface CustomerInsightServiceBreakdown {
+  service: string;
+  quantity: number;
+  revenue: number;
+}
+
+export interface CustomerInsightClothingBreakdown {
+  item: string;
+  quantity: number;
+  revenue: number;
+}
+
+export interface CustomerInsight {
+  customerId: string;
+  name: string;
+  phoneNumber: string;
+  loyaltyPoints: number;
+  balanceDue: number;
+  totalSpend: number;
+  lastOrderDate: string | null;
+  orderCount: number;
+  averageOrderValue: number;
+  monthlySpend: CustomerInsightBreakdown[];
+  topServices: CustomerInsightServiceBreakdown[];
+  topClothing: CustomerInsightClothingBreakdown[];
+}
+
+export interface CustomerInsightOptions {
+  branchId?: string;
+  limit?: number;
+}
+
 export interface IStorage {
   // User operations
   getUser(id: string): Promise<UserWithBranch | undefined>;
@@ -334,6 +372,7 @@ export interface IStorage {
 
   // Customer addresses
   getCustomerAddresses(customerId: string): Promise<CustomerAddress[]>;
+  getCustomerInsights(options?: CustomerInsightOptions): Promise<CustomerInsight[]>;
   createCustomerAddress(address: InsertCustomerAddress): Promise<CustomerAddress>;
   updateCustomerAddress(
     id: string,
@@ -1604,9 +1643,9 @@ export class MemStorage {
       tagline: branch.tagline ?? null,
       taglineAr: branch.taglineAr ?? null,
       code: branch.code,
-      nextOrderNumber: branch.nextOrderNumber ?? 1,
       deliveryEnabled: branch.deliveryEnabled ?? true,
-    };
+    } as Branch;
+    (record as any).nextOrderNumber = (branch as any).nextOrderNumber ?? 1;
     this.branches.set(id, record);
     this.branchServiceCities.set(id, [...serviceCityIds]);
     return record;
@@ -1638,7 +1677,8 @@ export class MemStorage {
     if (branch.whatsappQrUrl !== undefined) existing.whatsappQrUrl = branch.whatsappQrUrl ?? null;
     if (branch.tagline !== undefined) existing.tagline = branch.tagline ?? null;
     if (branch.taglineAr !== undefined) existing.taglineAr = branch.taglineAr ?? null;
-    if (branch.nextOrderNumber !== undefined) existing.nextOrderNumber = branch.nextOrderNumber;
+    const nextOrderNumber = (branch as any).nextOrderNumber;
+    if (nextOrderNumber !== undefined) (existing as any).nextOrderNumber = nextOrderNumber;
     if (branch.deliveryEnabled !== undefined) existing.deliveryEnabled = branch.deliveryEnabled;
     this.branches.set(id, existing);
     if (serviceCityIds) {
@@ -3794,6 +3834,294 @@ export class DatabaseStorage {
   }
 
   // Report methods
+  async getCustomerInsights({ branchId, limit }: CustomerInsightOptions = {}): Promise<CustomerInsight[]> {
+    const sanitizedBranchId = branchId ? (assertUuid(branchId), branchId.replace(/'/g, "''")) : undefined;
+    const whereConditions = ["c.is_active = true"];
+    const orderBranchFilter = sanitizedBranchId ? `AND o.branch_id = '${sanitizedBranchId}'` : "";
+    const paymentBranchFilter = sanitizedBranchId ? `AND p.branch_id = '${sanitizedBranchId}'` : "";
+    if (sanitizedBranchId) {
+      whereConditions.push(`c.branch_id = '${sanitizedBranchId}'`);
+    }
+    const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(" AND ")}` : "";
+    const limitValue = typeof limit === "number" && Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.trunc(limit))) : undefined;
+    const limitClause = limitValue ? `LIMIT ${limitValue}` : "";
+
+    const { rows: baseRows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      order_financials AS (
+        SELECT
+          o.customer_id,
+          o.created_at,
+          o.total::numeric AS total_value
+        FROM orders o
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          AND o.payment_method <> 'pay_later'
+          ${orderBranchFilter}
+        UNION ALL
+        SELECT
+          o.customer_id,
+          o.created_at,
+          pl.amount::numeric AS total_value
+        FROM orders o
+        JOIN pay_later pl ON pl.order_id = o.id
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          AND o.payment_method = 'pay_later'
+          ${orderBranchFilter}
+      ),
+      package_payments AS (
+        SELECT customer_id, SUM(amount::numeric) AS total_amount
+        FROM payments p
+        WHERE p.customer_id IS NOT NULL
+          AND p.order_id IS NULL
+          ${paymentBranchFilter}
+        GROUP BY customer_id
+      )
+      SELECT
+        c.id AS customer_id,
+        c.name,
+        c.phone_number,
+        c.loyalty_points,
+        c.balance_due,
+        COALESCE(SUM(of.total_value), 0) + COALESCE(pp.total_amount, 0) AS total_spend,
+        MAX(of.created_at) AS last_order_date,
+        COUNT(of.total_value) AS order_count
+      FROM customers c
+      LEFT JOIN order_financials of ON of.customer_id = c.id
+      LEFT JOIN package_payments pp ON pp.customer_id = c.id
+      ${whereClause}
+      GROUP BY c.id, c.name, c.phone_number, c.loyalty_points, c.balance_due, pp.total_amount
+      ORDER BY total_spend DESC
+      ${limitClause};
+    `));
+
+    const insightsMap = new Map<string, CustomerInsight>();
+
+    for (const row of baseRows) {
+      const totalSpend = Number(row.total_spend ?? 0);
+      const orderCount = Number(row.order_count ?? 0);
+      const averageOrderValue = orderCount > 0 ? totalSpend / orderCount : 0;
+      const lastOrderDate = row.last_order_date ? new Date(row.last_order_date).toISOString() : null;
+      const insight: CustomerInsight = {
+        customerId: row.customer_id,
+        name: row.name,
+        phoneNumber: row.phone_number,
+        loyaltyPoints: Number(row.loyalty_points ?? 0),
+        balanceDue: Number(row.balance_due ?? 0),
+        totalSpend: Math.round(totalSpend * 100) / 100,
+        lastOrderDate,
+        orderCount,
+        averageOrderValue: orderCount > 0 ? Math.round(averageOrderValue * 100) / 100 : 0,
+        monthlySpend: [],
+        topServices: [],
+        topClothing: [],
+      };
+      insightsMap.set(insight.customerId, insight);
+    }
+
+    if (!insightsMap.size) {
+      return [];
+    }
+
+    const customerIds = Array.from(insightsMap.keys());
+    const idList = customerIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+    const customerOrderFilter = `AND o.customer_id IN (${idList})`;
+    const monthlyCustomerFilter = `WHERE of.customer_id IN (${idList})`;
+
+    const { rows: monthlyRows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      order_financials AS (
+        SELECT
+          o.customer_id,
+          o.created_at,
+          o.total::numeric AS total_value
+        FROM orders o
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          AND o.payment_method <> 'pay_later'
+          ${orderBranchFilter}
+        UNION ALL
+        SELECT
+          o.customer_id,
+          o.created_at,
+          pl.amount::numeric AS total_value
+        FROM orders o
+        JOIN pay_later pl ON pl.order_id = o.id
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          AND o.payment_method = 'pay_later'
+          ${orderBranchFilter}
+      )
+      SELECT
+        of.customer_id,
+        TO_CHAR(date_trunc('month', of.created_at), 'YYYY-MM') AS month,
+        SUM(of.total_value) AS total,
+        COUNT(*) AS order_count
+      FROM order_financials of
+      ${monthlyCustomerFilter}
+      GROUP BY of.customer_id, month;
+    `));
+
+    for (const row of monthlyRows) {
+      const insight = insightsMap.get(row.customer_id);
+      if (!insight) continue;
+      insight.monthlySpend.push({
+        month: row.month,
+        total: Number(row.total ?? 0),
+        orderCount: Number(row.order_count ?? 0),
+      });
+    }
+
+    const { rows: serviceRows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT
+          o.id,
+          o.customer_id,
+          o.items,
+          o.payment_method,
+          o.is_delivery_request,
+          o.branch_id
+        FROM orders o
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          ${orderBranchFilter}
+          ${customerOrderFilter}
+      ),
+      non_pay_later AS (
+        SELECT
+          o.customer_id,
+          jt.service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          o.customer_id,
+          jt.service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
+      SELECT
+        customer_id,
+        COALESCE(service, 'Unknown Service') AS service,
+        SUM(quantity) AS quantity,
+        SUM(total) AS revenue
+      FROM (
+        SELECT customer_id, service, quantity, total FROM non_pay_later
+        UNION ALL
+        SELECT customer_id, service, quantity, total FROM pay_later_orders
+      ) s
+      GROUP BY customer_id, service;
+    `));
+
+    for (const row of serviceRows) {
+      const insight = insightsMap.get(row.customer_id);
+      if (!insight) continue;
+      insight.topServices.push({
+        service: row.service,
+        quantity: Number(row.quantity ?? 0),
+        revenue: Number(row.revenue ?? 0),
+      });
+    }
+
+    const { rows: clothingRows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT
+          o.id,
+          o.customer_id,
+          o.items,
+          o.payment_method,
+          o.is_delivery_request,
+          o.branch_id
+        FROM orders o
+        WHERE o.customer_id IS NOT NULL
+          AND o.is_delivery_request = false
+          ${orderBranchFilter}
+          ${customerOrderFilter}
+      ),
+      non_pay_later AS (
+        SELECT
+          o.customer_id,
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          o.customer_id,
+          CONCAT_WS(' - ', jt.clothingItem, jt.service) AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
+      SELECT
+        customer_id,
+        COALESCE(item, 'Unknown Item') AS item,
+        SUM(quantity) AS quantity,
+        SUM(total) AS revenue
+      FROM (
+        SELECT customer_id, item, quantity, total FROM non_pay_later
+        UNION ALL
+        SELECT customer_id, item, quantity, total FROM pay_later_orders
+      ) s
+      GROUP BY customer_id, item;
+    `));
+
+    for (const row of clothingRows) {
+      const insight = insightsMap.get(row.customer_id);
+      if (!insight) continue;
+      insight.topClothing.push({
+        item: row.item,
+        quantity: Number(row.quantity ?? 0),
+        revenue: Number(row.revenue ?? 0),
+      });
+    }
+
+    for (const insight of insightsMap.values()) {
+      insight.monthlySpend.sort((a, b) => a.month.localeCompare(b.month));
+      insight.topServices.sort((a, b) => b.revenue - a.revenue);
+      insight.topClothing.sort((a, b) => b.revenue - a.revenue);
+      insight.topServices = insight.topServices.slice(0, 5);
+      insight.topClothing = insight.topClothing.slice(0, 5);
+    }
+
+    return Array.from(insightsMap.values());
+  }
+
   async getOrderStats(range: string, branchId?: string): Promise<{ period: string; count: number; revenue: number }[]> {
     const formatMap: Record<string, string> = {
       daily: "%Y-%m-%d",

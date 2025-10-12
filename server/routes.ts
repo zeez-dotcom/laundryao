@@ -3992,6 +3992,23 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/reports/customer-insights", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { branchId: queryBranchId, limit } = req.query as Record<string, string>;
+      const isSuperAdmin = user.role === "super_admin";
+      const effectiveBranchId = isSuperAdmin ? queryBranchId || undefined : user.branchId || undefined;
+      const parsedLimit = limit ? Math.max(1, Math.min(500, Number.parseInt(limit, 10) || 0)) : undefined;
+      const insights = await storage.getCustomerInsights({
+        branchId: effectiveBranchId,
+        limit: parsedLimit,
+      });
+      res.json({ items: insights, total: insights.length });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch customer insights" });
+    }
+  });
+
   // Expenses management (Admin/Super Admin)
   app.get("/api/expenses", requireAdminOrSuperAdmin, async (req, res) => {
     try {
