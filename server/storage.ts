@@ -141,6 +141,27 @@ export const DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS = 24;
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 
+export type ReportDateRangeFilter = {
+  branchId?: string;
+  start?: Date;
+  end?: Date;
+};
+
+function buildOrderDateFilter(alias: string, filter: ReportDateRangeFilter): string {
+  const clauses = [`${alias}.is_delivery_request = false`];
+  if (filter.branchId) {
+    assertUuid(filter.branchId);
+    clauses.push(`${alias}.branch_id = '${filter.branchId.replace(/'/g, "''")}'`);
+  }
+  if (filter.start) {
+    clauses.push(`${alias}.created_at >= '${filter.start.toISOString()}'`);
+  }
+  if (filter.end) {
+    clauses.push(`${alias}.created_at <= '${filter.end.toISOString()}'`);
+  }
+  return `WHERE ${clauses.join(" AND ")}`;
+}
+
 const DRIVER_LOCATION_RETENTION_MINUTES = 60 * 24; // keep one day of history
 const AVERAGE_DRIVER_SPEED_KMH = 35;
 
@@ -609,6 +630,15 @@ export interface IStorage {
   getTopServices(range: string, branchId?: string): Promise<{ service: string; count: number; revenue: number }[]>;
   getTopProducts(range: string, branchId?: string): Promise<{ product: string; count: number; revenue: number }[]>;
   getTopPackages(range: string, branchId?: string): Promise<{ pkg: string; count: number; revenue: number }[]>;
+  getServiceBreakdown(filter: ReportDateRangeFilter): Promise<{ service: string; count: number; revenue: number }[]>;
+  getClothingBreakdown(filter: ReportDateRangeFilter): Promise<{ item: string; count: number; revenue: number }[]>;
+  getPaymentMethodBreakdown(filter: ReportDateRangeFilter): Promise<{ method: string; count: number; revenue: number }[]>;
+  getRevenueSummaryByDateRange(filter: ReportDateRangeFilter): Promise<{
+    totalOrders: number;
+    totalRevenue: number;
+    averageOrderValue: number;
+    daily: { date: string; orders: number; revenue: number }[];
+  }>;
   getClothingItemStats(
     range: string,
     branchId?: string,
@@ -4538,6 +4568,231 @@ export class DatabaseStorage {
     return Array.from(insightsMap.values());
   }
 
+  async getRevenueSummaryByDateRange(filter: ReportDateRangeFilter = {}): Promise<{
+    totalOrders: number;
+    totalRevenue: number;
+    averageOrderValue: number;
+    daily: { date: string; orders: number; revenue: number }[];
+  }> {
+    const whereClause = buildOrderDateFilter("o", filter);
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT
+          o.id,
+          o.created_at::date AS order_date,
+          o.created_at,
+          o.payment_method,
+          o.total::numeric AS order_total
+        FROM orders o
+        ${whereClause}
+      ),
+      resolved AS (
+        SELECT
+          o.id,
+          o.order_date,
+          CASE
+            WHEN o.payment_method = 'pay_later' THEN COALESCE(p.amount, 0)::numeric
+            ELSE o.order_total
+          END AS revenue
+        FROM base_orders o
+        LEFT JOIN pay_later p ON p.order_id = o.id
+      )
+      SELECT
+        order_date,
+        COUNT(*) AS orders,
+        SUM(revenue) AS revenue
+      FROM resolved
+      GROUP BY order_date
+      ORDER BY order_date;
+    `));
+
+    const daily = rows.map((row: any) => ({
+      date: row.order_date instanceof Date ? row.order_date.toISOString().split("T")[0] : row.order_date,
+      orders: Number(row.orders ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    }));
+
+    const totalOrders = daily.reduce((acc, row) => acc + row.orders, 0);
+    const totalRevenue = daily.reduce((acc, row) => acc + row.revenue, 0);
+    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+    return { totalOrders, totalRevenue, averageOrderValue, daily };
+  }
+
+  async getPaymentMethodBreakdown(filter: ReportDateRangeFilter = {}): Promise<{
+    method: string;
+    count: number;
+    revenue: number;
+  }[]> {
+    const whereClause = buildOrderDateFilter("o", filter);
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT
+          o.id,
+          o.payment_method,
+          o.total::numeric AS order_total
+        FROM orders o
+        ${whereClause}
+      ),
+      resolved AS (
+        SELECT
+          COALESCE(o.payment_method, 'unknown') AS payment_method,
+          CASE
+            WHEN o.payment_method = 'pay_later' THEN COALESCE(p.amount, 0)::numeric
+            ELSE o.order_total
+          END AS revenue
+        FROM base_orders o
+        LEFT JOIN pay_later p ON p.order_id = o.id
+      )
+      SELECT
+        payment_method AS method,
+        COUNT(*) AS count,
+        SUM(revenue) AS revenue
+      FROM resolved
+      GROUP BY payment_method
+      ORDER BY revenue DESC;
+    `));
+
+    return rows.map((row: any) => ({
+      method: row.method,
+      count: Number(row.count ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    }));
+  }
+
+  async getServiceBreakdown(filter: ReportDateRangeFilter = {}): Promise<{
+    service: string;
+    count: number;
+    revenue: number;
+  }[]> {
+    const whereClause = buildOrderDateFilter("o", filter);
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT o.id,
+               o.items,
+               o.payment_method,
+               o.created_at,
+               o.branch_id
+        FROM orders o
+        ${whereClause}
+      ),
+      non_pay_later AS (
+        SELECT
+          COALESCE(jt.service, 'Unknown Service') AS service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          COALESCE(jt.service, 'Unknown Service') AS service,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+      )
+      SELECT
+        service,
+        SUM(quantity) AS count,
+        SUM(total) AS revenue
+      FROM (
+        SELECT service, quantity, total FROM non_pay_later
+        UNION ALL
+        SELECT service, quantity, total FROM pay_later_orders
+      ) s
+      GROUP BY service
+      ORDER BY revenue DESC;
+    `));
+
+    return rows.map((row: any) => ({
+      service: row.service,
+      count: Number(row.count ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    }));
+  }
+
+  async getClothingBreakdown(filter: ReportDateRangeFilter = {}): Promise<{
+    item: string;
+    count: number;
+    revenue: number;
+  }[]> {
+    const whereClause = buildOrderDateFilter("o", filter);
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT o.id,
+               o.items,
+               o.payment_method,
+               o.created_at,
+               o.branch_id
+        FROM orders o
+        ${whereClause}
+      ),
+      non_pay_later AS (
+        SELECT
+          COALESCE(CONCAT_WS(' - ', jt.clothingItem, jt.service), 'Unknown Item') AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method <> 'pay_later'
+      ),
+      pay_later_orders AS (
+        SELECT
+          COALESCE(CONCAT_WS(' - ', jt.clothingItem, jt.service), 'Unknown Item') AS item,
+          jt.quantity,
+          jt.total
+        FROM base_orders o
+        JOIN pay_later p ON p.order_id = o.id
+        JOIN LATERAL jsonb_to_recordset(o.items::jsonb) AS jt(
+          clothingItem text,
+          service text,
+          quantity int,
+          total numeric
+        ) ON TRUE
+        WHERE o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
+      )
+      SELECT
+        item,
+        SUM(quantity) AS count,
+        SUM(total) AS revenue
+      FROM (
+        SELECT item, quantity, total FROM non_pay_later
+        UNION ALL
+        SELECT item, quantity, total FROM pay_later_orders
+      ) s
+      GROUP BY item
+      ORDER BY revenue DESC;
+    `));
+
+    return rows.map((row: any) => ({
+      item: row.item,
+      count: Number(row.count ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    }));
+  }
+
   async getOrderStats(range: string, branchId?: string): Promise<{ period: string; count: number; revenue: number }[]> {
     const formatMap: Record<string, string> = {
       daily: "%Y-%m-%d",
@@ -4644,6 +4899,7 @@ export class DatabaseStorage {
           total numeric
         ) ON TRUE
         WHERE o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       )
       SELECT service,
              SUM(quantity) AS count,
@@ -4717,6 +4973,7 @@ export class DatabaseStorage {
           total numeric
         ) ON TRUE
         WHERE o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       )
       SELECT product,
              SUM(quantity) AS count,
@@ -4850,6 +5107,7 @@ export class DatabaseStorage {
           total numeric
         ) ON TRUE
         WHERE o.payment_method = 'pay_later'
+          AND o.is_delivery_request = false
       )
       SELECT item,
              SUM(quantity) AS count,

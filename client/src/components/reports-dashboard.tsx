@@ -12,153 +12,245 @@ import type { DateRange } from "react-day-picker";
 import { OrderLogsTable } from "./order-logs-table";
 import { useCurrency } from "@/lib/currency";
 
+type RevenueSummary = {
+  totalOrders: number;
+  totalRevenue: number;
+  averageOrderValue: number;
+  daily: { date: string; orders: number; revenue: number }[];
+};
+
+type ServiceAggregate = {
+  service: string;
+  count: number;
+  revenue: number;
+};
+
+type ClothingAggregate = {
+  item: string;
+  count: number;
+  revenue: number;
+};
+
+type PaymentAggregate = {
+  method: string;
+  count: number;
+  revenue: number;
+};
+
+const EMPTY_SUMMARY: RevenueSummary = {
+  totalOrders: 0,
+  totalRevenue: 0,
+  averageOrderValue: 0,
+  daily: [],
+};
+
 export function ReportsDashboard() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
-    to: new Date()
+    to: new Date(),
   });
-  const [serviceFilter, setServiceFilter] = useState("all");
   const { formatCurrency } = useCurrency();
 
   const [range, setRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
 
+  const startIso = dateRange?.from ? startOfDay(dateRange.from).toISOString() : undefined;
+  const endIso = dateRange?.to ? endOfDay(dateRange.to).toISOString() : undefined;
+
+  const buildRangeParams = () => {
+    const params = new URLSearchParams();
+    if (startIso) params.set("start", startIso);
+    if (endIso) params.set("end", endIso);
+    return params;
+  };
+
+  const { data: summaryData } = useQuery<RevenueSummary>({
+    queryKey: ["/api/reports/summary", startIso, endIso],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const query = params.toString();
+      const url = query ? `/api/reports/summary?${query}` : `/api/reports/summary`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        return EMPTY_SUMMARY;
+      }
+      const json = await res.json();
+      return {
+        totalOrders: Number(json.totalOrders ?? 0),
+        totalRevenue: Number(json.totalRevenue ?? 0),
+        averageOrderValue: Number(json.averageOrderValue ?? 0),
+        daily: Array.isArray(json.daily)
+          ? json.daily.map((row: any) => ({
+              date: String(row.date ?? ''),
+              orders: Number(row.orders ?? 0),
+              revenue: Number(row.revenue ?? 0),
+            }))
+          : [],
+      } satisfies RevenueSummary;
+    },
+    keepPreviousData: true,
+  });
+
+  const summary = summaryData ?? EMPTY_SUMMARY;
+
+  const { data: serviceResponse } = useQuery<{ services: ServiceAggregate[] }>({
+    queryKey: ["/api/reports/service-breakdown", startIso, endIso],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const query = params.toString();
+      const url = query ? `/api/reports/service-breakdown?${query}` : `/api/reports/service-breakdown`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        return { services: [] };
+      }
+      const json = await res.json();
+      const services = Array.isArray(json.services)
+        ? json.services.map((item: any) => ({
+            service: String(item.service ?? 'Unknown Service'),
+            count: Number(item.count ?? 0),
+            revenue: Number(item.revenue ?? 0),
+          }))
+        : [];
+      return { services };
+    },
+    keepPreviousData: true,
+  });
+
+  const { data: clothingResponse } = useQuery<{ items: ClothingAggregate[] }>({
+    queryKey: ["/api/reports/clothing-breakdown", startIso, endIso],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const query = params.toString();
+      const url = query ? `/api/reports/clothing-breakdown?${query}` : `/api/reports/clothing-breakdown`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        return { items: [] };
+      }
+      const json = await res.json();
+      const items = Array.isArray(json.items)
+        ? json.items.map((item: any) => ({
+            item: String(item.item ?? 'Unknown Item'),
+            count: Number(item.count ?? 0),
+            revenue: Number(item.revenue ?? 0),
+          }))
+        : [];
+      return { items };
+    },
+    keepPreviousData: true,
+  });
+
+  const { data: paymentResponse } = useQuery<{ methods: PaymentAggregate[] }>({
+    queryKey: ["/api/reports/payment-methods", startIso, endIso],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const query = params.toString();
+      const url = query ? `/api/reports/payment-methods?${query}` : `/api/reports/payment-methods`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        return { methods: [] };
+      }
+      const json = await res.json();
+      const methods = Array.isArray(json.methods)
+        ? json.methods.map((item: any) => ({
+            method: String(item.method ?? 'unknown'),
+            count: Number(item.count ?? 0),
+            revenue: Number(item.revenue ?? 0),
+          }))
+        : [];
+      return { methods };
+    },
+    keepPreviousData: true,
+  });
+
   const { data: topPackages = [] } = useQuery<{ pkg: string; count: number; revenue: number }[]>({
     queryKey: ["/api/reports/top-packages", range],
     queryFn: async () => {
-      const res = await fetch(`/api/reports/top-packages?range=${range}`, { credentials: 'include' });
+      const res = await fetch(`/api/reports/top-packages?range=${range}`, { credentials: "include" });
       if (!res.ok) return [];
       const json = await res.json();
       return json.packages || [];
     },
   });
 
-  // Fetch transactions with pagination based on date range
-  const { data: transactions = [] } = useQuery({
-    queryKey: [
-      "/api/transactions",
-      dateRange?.from?.toISOString(),
-      dateRange?.to?.toISOString(),
-    ],
+  const { data: recentTransactions = [] } = useQuery<Transaction[]>({
+    queryKey: ["/api/transactions", "recent", startIso, endIso],
     queryFn: async () => {
+      const params = buildRangeParams();
+      params.set("limit", "50");
+      const query = params.toString();
+      const url = `/api/transactions?${query}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        return [];
+      }
+      return res.json();
+    },
+    keepPreviousData: true,
+  });
+
+  const services = serviceResponse?.services ?? [];
+  const clothing = clothingResponse?.items ?? [];
+  const paymentMethods = paymentResponse?.methods ?? [];
+  const totalRevenue = summary.totalRevenue;
+  const totalOrders = summary.totalOrders;
+  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+  const dailyRows = [...summary.daily].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  ).slice(0, 10);
+  const recentTransactionsToShow = recentTransactions.slice(0, 20);
+
+  const exportReport = async () => {
+    try {
       const limit = 100;
-      const params = new URLSearchParams();
-      if (dateRange?.from)
-        params.set("start", startOfDay(dateRange.from).toISOString());
-      if (dateRange?.to)
-        params.set("end", endOfDay(dateRange.to).toISOString());
-      let all: Transaction[] = [];
       let offset = 0;
+      const all: Transaction[] = [];
+
       while (true) {
-        const search = new URLSearchParams(params);
-        search.set("limit", String(limit));
-        search.set("offset", String(offset));
-        const response = await fetch(`/api/transactions?${search.toString()}`);
-        const batch: Transaction[] = await response.json();
-        all = all.concat(batch);
+        const params = buildRangeParams();
+        params.set("limit", String(limit));
+        params.set("offset", String(offset));
+        const res = await fetch(`/api/transactions?${params.toString()}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          throw new Error("Failed to export transactions");
+        }
+        const batch: Transaction[] = await res.json();
+        all.push(...batch);
         if (batch.length < limit) break;
         offset += limit;
       }
-      return all;
-    },
-  }) as { data: Transaction[] };
 
-  // Filter transactions by date range
-  const filteredTransactions = transactions.filter(transaction => {
-    if (!dateRange?.from || !dateRange?.to) return true;
-    const transactionDate = new Date(transaction.createdAt);
-    return transactionDate >= startOfDay(dateRange.from) &&
-           transactionDate <= endOfDay(dateRange.to);
-  });
+      const rows = [
+        ["Date", "Order ID", "Items", "Subtotal", "Tax", "Total", "Payment Method"],
+        ...all.map((t) => [
+          format(new Date(t.createdAt), 'yyyy-MM-dd HH:mm'),
+          t.id.slice(-6),
+          JSON.stringify(t.items),
+          t.subtotal,
+          t.tax,
+          t.total,
+          t.paymentMethod,
+        ]),
+        [],
+        ["Item", "Quantity", "Revenue"],
+        ...clothing.map((item) => [
+          item.item,
+          String(item.count),
+          item.revenue.toFixed(2),
+        ]),
+      ];
 
-  // Calculate metrics
-  const totalRevenue = filteredTransactions.reduce((sum, t) => sum + parseFloat(t.total), 0);
-  const totalOrders = filteredTransactions.length;
-  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-
-  // Service breakdown
-  const serviceBreakdown = filteredTransactions.reduce((acc, transaction) => {
-    const items = transaction.items as any[];
-    items.forEach(item => {
-      const serviceName =
-        typeof item.service === "string"
-          ? item.service
-          : item.service?.name || "Unknown Service";
-      if (!acc[serviceName]) {
-        acc[serviceName] = { count: 0, revenue: 0 };
-      }
-      acc[serviceName].count += item.quantity || 1;
-      acc[serviceName].revenue += item.total || 0;
-    });
-    return acc;
-  }, {} as Record<string, { count: number; revenue: number }>);
-
-  // Clothing item breakdown
-  const clothingBreakdown = filteredTransactions.reduce((acc, transaction) => {
-    const items = transaction.items as any[];
-    items.forEach(item => {
-      const clothingName =
-        typeof item.clothingItem === "string"
-          ? item.clothingItem
-          : item.clothingItem?.name || "Unknown Item";
-      if (!acc[clothingName]) {
-        acc[clothingName] = { count: 0, revenue: 0 };
-      }
-      acc[clothingName].count += item.quantity || 1;
-      acc[clothingName].revenue += item.total || 0;
-    });
-    return acc;
-  }, {} as Record<string, { count: number; revenue: number }>);
-
-  // Daily revenue data
-  const dailyRevenue = filteredTransactions.reduce((acc, transaction) => {
-    const date = format(new Date(transaction.createdAt), 'yyyy-MM-dd');
-    if (!acc[date]) {
-      acc[date] = 0;
+      const csvContent = rows.map((row) => row.join(",")).join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `laundry-report-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export report", error);
     }
-    acc[date] += parseFloat(transaction.total);
-    return acc;
-  }, {} as Record<string, number>);
-
-  // Payment method breakdown
-  const paymentMethods = filteredTransactions.reduce((acc, transaction) => {
-    const method = transaction.paymentMethod;
-    if (!acc[method]) {
-      acc[method] = { count: 0, amount: 0 };
-    }
-    acc[method].count += 1;
-    acc[method].amount += parseFloat(transaction.total);
-    return acc;
-  }, {} as Record<string, { count: number; amount: number }>);
-
-  const exportReport = () => {
-    const rows = [
-      ["Date", "Order ID", "Items", "Subtotal", "Tax", "Total", "Payment Method"],
-      ...filteredTransactions.map(t => [
-        format(new Date(t.createdAt), 'yyyy-MM-dd HH:mm'),
-        t.id.slice(-6),
-        JSON.stringify(t.items),
-        t.subtotal,
-        t.tax,
-        t.total,
-        t.paymentMethod
-      ]),
-      [],
-      ["Item", "Quantity", "Revenue"],
-      ...Object.entries(clothingBreakdown).map(([item, data]) => [
-        item,
-        String(data.count),
-        data.revenue.toFixed(2)
-      ])
-    ];
-
-    const csvContent = rows.map(row => row.join(",")).join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `laundry-report-${format(new Date(), 'yyyy-MM-dd')}.csv`;
-    a.click();
   };
 
   return (
@@ -169,13 +261,13 @@ export function ReportsDashboard() {
             <BarChart3 className="h-8 w-8 text-pos-primary" />
             <h1 className="text-3xl font-bold text-gray-900">Reports & Analytics</h1>
           </div>
-          
+
           <div className="flex items-center space-x-4">
             <DatePickerWithRange
               date={dateRange}
               onDateChange={setDateRange}
             />
-            <Button onClick={exportReport} variant="outline">
+            <Button onClick={() => { void exportReport(); }} variant="outline">
               <Download className="h-4 w-4 mr-2" />
               Export CSV
             </Button>
@@ -196,7 +288,7 @@ export function ReportsDashboard() {
               </p>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Total Orders</CardTitle>
@@ -209,7 +301,7 @@ export function ReportsDashboard() {
               </p>
             </CardContent>
           </Card>
-          
+
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Avg. Order Value</CardTitle>
@@ -225,36 +317,36 @@ export function ReportsDashboard() {
         </div>
 
         <Tabs defaultValue="services" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1">
-          <TabsTrigger value="services" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Services</span>
-            <span className="sm:hidden">Svc</span>
-          </TabsTrigger>
-          <TabsTrigger value="items" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Clothing Items</span>
-            <span className="sm:hidden">Items</span>
-          </TabsTrigger>
-          <TabsTrigger value="daily" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Daily Revenue</span>
-            <span className="sm:hidden">Daily</span>
-          </TabsTrigger>
-          <TabsTrigger value="packages" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Packages</span>
-            <span className="sm:hidden">Pkgs</span>
-          </TabsTrigger>
-          <TabsTrigger value="payments" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Payment Methods</span>
-            <span className="sm:hidden">Pay</span>
-          </TabsTrigger>
-          <TabsTrigger value="transactions" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Recent Orders</span>
-            <span className="sm:hidden">Orders</span>
-          </TabsTrigger>
-          <TabsTrigger value="orderLogs" className="text-xs sm:text-sm">
-            <span className="hidden sm:inline">Order Logs</span>
-            <span className="sm:hidden">Logs</span>
-          </TabsTrigger>
-        </TabsList>
+          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1">
+            <TabsTrigger value="services" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Services</span>
+              <span className="sm:hidden">Svc</span>
+            </TabsTrigger>
+            <TabsTrigger value="items" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Clothing Items</span>
+              <span className="sm:hidden">Items</span>
+            </TabsTrigger>
+            <TabsTrigger value="daily" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Daily Revenue</span>
+              <span className="sm:hidden">Daily</span>
+            </TabsTrigger>
+            <TabsTrigger value="packages" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Packages</span>
+              <span className="sm:hidden">Pkgs</span>
+            </TabsTrigger>
+            <TabsTrigger value="payments" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Payment Methods</span>
+              <span className="sm:hidden">Pay</span>
+            </TabsTrigger>
+            <TabsTrigger value="transactions" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Recent Orders</span>
+              <span className="sm:hidden">Orders</span>
+            </TabsTrigger>
+            <TabsTrigger value="orderLogs" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Order Logs</span>
+              <span className="sm:hidden">Logs</span>
+            </TabsTrigger>
+          </TabsList>
 
           <TabsContent value="services" className="space-y-4">
             <Card>
@@ -262,24 +354,26 @@ export function ReportsDashboard() {
                 <CardTitle>Service Performance</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {Object.entries(serviceBreakdown)
-                    .sort(([,a], [,b]) => b.revenue - a.revenue)
-                    .map(([service, data]) => (
-                    <div key={service} className="flex items-center justify-between p-4 border rounded-lg">
-                      <div>
-                        <h3 className="font-medium">{service}</h3>
-                        <p className="text-sm text-gray-600">{data.count} items processed</p>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-lg">{formatCurrency(data.revenue)}</div>
-                        <div className="text-sm text-gray-600">
-                          {formatCurrency(data.revenue / data.count)} avg
+                {services.length === 0 ? (
+                  <div className="text-sm text-gray-500">No service data found for the selected period.</div>
+                ) : (
+                  <div className="space-y-4">
+                    {services.map((service) => (
+                      <div key={service.service} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <h3 className="font-medium">{service.service}</h3>
+                          <p className="text-sm text-gray-600">{service.count} items processed</p>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-lg">{formatCurrency(service.revenue)}</div>
+                          <div className="text-sm text-gray-600">
+                            {formatCurrency(service.count ? service.revenue / service.count : 0)} avg
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -329,21 +423,23 @@ export function ReportsDashboard() {
                 <CardTitle>Clothing Item Performance</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {Object.entries(clothingBreakdown)
-                    .sort(([,a], [,b]) => b.revenue - a.revenue)
-                    .map(([item, data]) => (
-                      <div key={item} className="flex items-center justify-between p-4 border rounded-lg">
+                {clothing.length === 0 ? (
+                  <div className="text-sm text-gray-500">No clothing item data found for the selected period.</div>
+                ) : (
+                  <div className="space-y-4">
+                    {clothing.map((item) => (
+                      <div key={item.item} className="flex items-center justify-between p-4 border rounded-lg">
                         <div>
-                          <h3 className="font-medium">{item}</h3>
-                          <p className="text-sm text-gray-600">{data.count} items processed</p>
+                          <h3 className="font-medium">{item.item}</h3>
+                          <p className="text-sm text-gray-600">{item.count} items processed</p>
                         </div>
                         <div className="text-right">
-                          <div className="font-bold text-lg">{formatCurrency(data.revenue)}</div>
+                          <div className="font-bold text-lg">{formatCurrency(item.revenue)}</div>
                         </div>
                       </div>
                     ))}
-                </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -354,19 +450,20 @@ export function ReportsDashboard() {
                 <CardTitle>Daily Revenue Breakdown</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {Object.entries(dailyRevenue)
-                    .sort(([a], [b]) => b.localeCompare(a))
-                    .slice(0, 10)
-                    .map(([date, revenue]) => (
-                    <div key={date} className="flex items-center justify-between p-3 border rounded">
-                      <span className="font-medium">
-                        {format(new Date(date), 'MMM dd, yyyy')}
-                      </span>
-                      <span className="font-bold">{formatCurrency(revenue)}</span>
-                    </div>
-                  ))}
-                </div>
+                {dailyRows.length === 0 ? (
+                  <div className="text-sm text-gray-500">No revenue recorded for the selected period.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {dailyRows.map((row) => (
+                      <div key={row.date} className="flex items-center justify-between p-3 border rounded">
+                        <span className="font-medium">
+                          {format(new Date(row.date), 'MMM dd, yyyy')}
+                        </span>
+                        <span className="font-bold">{formatCurrency(row.revenue)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -377,27 +474,31 @@ export function ReportsDashboard() {
                 <CardTitle>Payment Method Analytics</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(paymentMethods).map(([method, data]) => (
-                    <div key={method} className="p-4 border rounded-lg">
-                      <h3 className="font-medium capitalize mb-2">{method} Payments</h3>
-                      <div className="space-y-2">
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Orders:</span>
-                          <span className="font-medium">{data.count}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Total:</span>
-                          <span className="font-bold">{formatCurrency(data.amount)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Average:</span>
-                          <span className="font-medium">{formatCurrency(data.amount / data.count)}</span>
+                {paymentMethods.length === 0 ? (
+                  <div className="text-sm text-gray-500">No payments recorded for the selected period.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {paymentMethods.map((method) => (
+                      <div key={method.method} className="p-4 border rounded-lg">
+                        <h3 className="font-medium capitalize mb-2">{method.method} Payments</h3>
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-600">Orders:</span>
+                            <span className="font-medium">{method.count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-600">Total:</span>
+                            <span className="font-bold">{formatCurrency(method.revenue)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-sm text-gray-600">Average:</span>
+                            <span className="font-medium">{formatCurrency(method.count ? method.revenue / method.count : 0)}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -408,27 +509,31 @@ export function ReportsDashboard() {
                 <CardTitle>Recent Transactions</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {filteredTransactions.slice(0, 20).map((transaction) => (
-                    <div key={transaction.id} className="flex items-center justify-between p-4 border rounded-lg">
-                      <div>
-                        <div className="font-medium">Order #{transaction.id.slice(-6)}</div>
-                        <div className="text-sm text-gray-600">
-                          {format(new Date(transaction.createdAt), 'MMM dd, yyyy HH:mm')}
+                {recentTransactionsToShow.length === 0 ? (
+                  <div className="text-sm text-gray-500">No transactions found for the selected period.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {recentTransactionsToShow.map((transaction) => (
+                      <div key={transaction.id} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <div className="font-medium">Order #{transaction.id.slice(-6)}</div>
+                          <div className="text-sm text-gray-600">
+                            {format(new Date(transaction.createdAt), 'MMM dd, yyyy HH:mm')}
+                          </div>
+                          <div className="text-sm text-gray-600 capitalize">
+                            {transaction.paymentMethod} • {transaction.sellerName}
+                          </div>
                         </div>
-                        <div className="text-sm text-gray-600 capitalize">
-                          {transaction.paymentMethod} • {transaction.sellerName}
+                        <div className="text-right">
+                          <div className="font-bold text-lg">{formatCurrency(transaction.total)}</div>
+                          <div className="text-sm text-gray-600">
+                            {((transaction.items as any[]) || []).length} items
+                          </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-bold text-lg">{formatCurrency(transaction.total)}</div>
-                        <div className="text-sm text-gray-600">
-                          {((transaction.items as any[]) || []).length} items
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

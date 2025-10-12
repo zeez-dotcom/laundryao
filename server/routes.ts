@@ -1,8 +1,9 @@
-import type { Express, RequestHandler } from "express";
+import type { Express, RequestHandler, Request } from "express";
 import { createServer, type Server } from "http";
 import {
   storage,
   type ParsedRow,
+  type ReportDateRangeFilter,
   generateCustomerPasswordOtp,
   verifyCustomerPasswordOtp,
   DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS,
@@ -121,6 +122,8 @@ interface RateLimitRecord {
 
 const authAttempts = new Map<string, RateLimitRecord>();
 let lastCityFetch = 0;
+
+const UUID_REGEX = /^[0-9a-fA-F-]{36}$/;
 
 // Security constants for rate limiting
 const RATE_LIMIT_CONFIG = {
@@ -244,6 +247,47 @@ function applyPackageUsageModification(packages: any[], packageUsages: any[]) {
       };
     })
     .filter(Boolean);
+}
+
+function parseReportFilters(req: Request, user: UserWithBranch): {
+  filter: ReportDateRangeFilter;
+  error?: string;
+} {
+  const { start, end, branchId: queryBranchId } = req.query as Record<string, string | undefined>;
+  const filter: ReportDateRangeFilter = {};
+
+  if (start) {
+    const startDate = new Date(start);
+    if (Number.isNaN(startDate.getTime())) {
+      return { filter, error: "Invalid start date" };
+    }
+    filter.start = startDate;
+  }
+
+  if (end) {
+    const endDate = new Date(end);
+    if (Number.isNaN(endDate.getTime())) {
+      return { filter, error: "Invalid end date" };
+    }
+    filter.end = endDate;
+  }
+
+  if (filter.start && filter.end && filter.start > filter.end) {
+    return { filter, error: "Start date must be before end date" };
+  }
+
+  const branchScope = user.role === "super_admin"
+    ? queryBranchId || undefined
+    : user.branchId || undefined;
+
+  if (branchScope) {
+    if (!UUID_REGEX.test(branchScope)) {
+      return { filter, error: "Invalid branch" };
+    }
+    filter.branchId = branchScope;
+  }
+
+  return { filter };
 }
 
 /**
@@ -4012,6 +4056,70 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error sending receipt email:", error as any);
       res.status(500).json({ message: "Failed to send receipt email" });
+    }
+  });
+
+  app.get("/api/reports/summary", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const summary = await storage.getRevenueSummaryByDateRange(filter);
+      res.json(summary);
+    } catch (err) {
+      logger.error({ err }, "Failed to fetch revenue summary");
+      res.status(500).json({ message: "Failed to fetch revenue summary" });
+    }
+  });
+
+  app.get("/api/reports/service-breakdown", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const services = await storage.getServiceBreakdown(filter);
+      res.json({ services });
+    } catch (err) {
+      logger.error({ err }, "Failed to fetch service breakdown");
+      res.status(500).json({ message: "Failed to fetch service breakdown" });
+    }
+  });
+
+  app.get("/api/reports/clothing-breakdown", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const items = await storage.getClothingBreakdown(filter);
+      res.json({ items });
+    } catch (err) {
+      logger.error({ err }, "Failed to fetch clothing breakdown");
+      res.status(500).json({ message: "Failed to fetch clothing breakdown" });
+    }
+  });
+
+  app.get("/api/reports/payment-methods", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const methods = await storage.getPaymentMethodBreakdown(filter);
+      res.json({ methods });
+    } catch (err) {
+      logger.error({ err }, "Failed to fetch payment methods");
+      res.status(500).json({ message: "Failed to fetch payment methods" });
     }
   });
 
