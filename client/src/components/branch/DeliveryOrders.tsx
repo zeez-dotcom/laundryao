@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,23 @@ import { apiRequest } from "@/lib/queryClient";
 import { useCurrency } from "@/lib/currency";
 import { ReceiptModal } from "@/components/receipt-modal";
 import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
+import {
+  deliveryStatusEnum,
+  type DeliveryStatus,
+} from "@shared/schema";
+import type { LucideIcon } from "lucide-react";
+import {
+  Car,
+  CheckCircle,
+  Clock,
+  Package,
+  PackageCheck,
+  RefreshCw,
+  Truck,
+  UserCheck,
+  XCircle,
+} from "lucide-react";
 
 interface Driver {
   id: string;
@@ -22,16 +39,25 @@ interface DeliveryOrder {
   customerPhone?: string;
   deliveryAddress: string;
   total: number;
-  status: string;
+  status: DeliveryStatus | string;
   driverId?: string;
   driverName?: string;
 }
 
-const nextStatus: Record<string, string | null> = {
-  pending_pickup: "out_for_delivery",
-  out_for_delivery: "delivered",
-  delivered: null,
+const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
+  pending: ["accepted", "cancelled"],
+  accepted: ["driver_enroute", "cancelled"],
+  driver_enroute: ["picked_up", "cancelled"],
+  picked_up: ["processing_started", "cancelled"],
+  processing_started: ["ready", "cancelled"],
+  ready: ["out_for_delivery", "cancelled"],
+  out_for_delivery: ["completed", "cancelled"],
+  completed: [],
+  cancelled: [],
 };
+
+const isDeliveryStatus = (value: string): value is DeliveryStatus =>
+  (deliveryStatusEnum as readonly DeliveryStatus[]).includes(value as DeliveryStatus);
 
 export function DeliveryOrders() {
   const { t } = useTranslation();
@@ -39,7 +65,7 @@ export function DeliveryOrders() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<DeliveryStatus | "all">("all");
   const [driverFilter, setDriverFilter] = useState("all");
   const [selectedOrder, setSelectedOrder] = useState<DeliveryOrder | null>(null);
   const [assignOrder, setAssignOrder] = useState<DeliveryOrder | null>(null);
@@ -144,7 +170,7 @@ export function DeliveryOrders() {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: async ({ orderId, status }: { orderId: string; status: string }) => {
+    mutationFn: async ({ orderId, status }: { orderId: string; status: DeliveryStatus }) => {
       const res = await apiRequest("PATCH", `/api/delivery-orders/${orderId}/status`, {
         status,
       });
@@ -159,14 +185,72 @@ export function DeliveryOrders() {
     },
   });
 
-  const statusOptions = [
-    { value: "pending_pickup", label: t.pendingPickup },
-    { value: "out_for_delivery", label: t.outForDelivery },
-    { value: "delivered", label: t.delivered },
-  ];
+  const deliveryStatusMeta: Record<DeliveryStatus, { label: string; icon: LucideIcon; badgeClass: string }> = useMemo(
+    () => ({
+      pending: {
+        label: t.deliveryStatusPending,
+        icon: Clock,
+        badgeClass: "bg-yellow-100 text-yellow-800",
+      },
+      accepted: {
+        label: t.deliveryStatusAccepted,
+        icon: UserCheck,
+        badgeClass: "bg-blue-100 text-blue-800",
+      },
+      driver_enroute: {
+        label: t.deliveryStatusDriverEnroute,
+        icon: Car,
+        badgeClass: "bg-indigo-100 text-indigo-800",
+      },
+      picked_up: {
+        label: t.deliveryStatusPickedUp,
+        icon: Package,
+        badgeClass: "bg-purple-100 text-purple-800",
+      },
+      processing_started: {
+        label: t.deliveryStatusProcessingStarted,
+        icon: RefreshCw,
+        badgeClass: "bg-orange-100 text-orange-800",
+      },
+      ready: {
+        label: t.deliveryStatusReady,
+        icon: PackageCheck,
+        badgeClass: "bg-teal-100 text-teal-800",
+      },
+      out_for_delivery: {
+        label: t.deliveryStatusOutForDelivery,
+        icon: Truck,
+        badgeClass: "bg-blue-100 text-blue-800",
+      },
+      completed: {
+        label: t.deliveryStatusCompleted,
+        icon: CheckCircle,
+        badgeClass: "bg-green-100 text-green-800",
+      },
+      cancelled: {
+        label: t.deliveryStatusCancelled,
+        icon: XCircle,
+        badgeClass: "bg-red-100 text-red-800",
+      },
+    }),
+    [t],
+  );
+
+  const statusOptions = deliveryStatusEnum.map((status) => ({
+    value: status,
+    label: deliveryStatusMeta[status].label,
+  }));
 
   const safeDrivers: Driver[] = Array.isArray(drivers) ? drivers : [];
   const safeOrders: DeliveryOrder[] = Array.isArray(orders) ? orders : [];
+
+  const getPrimaryTransition = (status: DeliveryStatus): DeliveryStatus | null => {
+    const allowed = DELIVERY_STATUS_TRANSITIONS[status] ?? [];
+    return allowed.find((s) => s !== "cancelled") ?? null;
+  };
+
+  const canCancelStatus = (status: DeliveryStatus): boolean =>
+    (DELIVERY_STATUS_TRANSITIONS[status] ?? []).includes("cancelled");
 
   const extractErrorMessage = (err: unknown): string => {
     const raw = (err as any)?.message || "Failed to load";
@@ -189,7 +273,10 @@ export function DeliveryOrders() {
   return (
     <div className="p-4 space-y-4 overflow-auto">
       <div className="flex gap-4">
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => setStatusFilter(value as DeliveryStatus | "all")}
+        >
           <SelectTrigger className="w-[180px]">
             <SelectValue placeholder={t.filterByStatus} />
           </SelectTrigger>
@@ -257,12 +344,27 @@ export function DeliveryOrders() {
                 <TableCell>{order.deliveryAddress}</TableCell>
                 <TableCell>{formatCurrency(order.total)}</TableCell>
                 <TableCell>
-                  {statusOptions.find((s) => s.value === order.status)?.label || order.status}
+                  {isDeliveryStatus(order.status) ? (
+                    (() => {
+                      const meta = deliveryStatusMeta[order.status];
+                      const Icon = meta.icon;
+                      return (
+                        <Badge variant="outline" className={`${meta.badgeClass} flex items-center gap-1`}>
+                          <Icon className="h-3 w-3" />
+                          {meta.label}
+                        </Badge>
+                      );
+                    })()
+                  ) : (
+                    order.status
+                  )}
                 </TableCell>
                 <TableCell>{order.driverName || "-"}</TableCell>
                 <TableCell>
-                  {order.driverId && driverLocations[order.driverId] &&
-                  order.status !== "delivered"
+                  {order.driverId &&
+                  driverLocations[order.driverId] &&
+                  isDeliveryStatus(order.status) &&
+                  !["completed", "cancelled"].includes(order.status)
                     ? `${driverLocations[order.driverId].lat.toFixed(5)}, ${driverLocations[order.driverId].lng.toFixed(5)}`
                     : "-"}
                 </TableCell>
@@ -276,19 +378,51 @@ export function DeliveryOrders() {
                   >
                     {t.assignDriver}
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const next = nextStatus[order.status];
-                      if (next) {
-                        updateStatusMutation.mutate({ orderId: order.id, status: next });
-                      }
-                    }}
-                    disabled={!nextStatus[order.status]}
-                  >
-                    {t.updateStatus}
-                  </Button>
+                  {isDeliveryStatus(order.status) && (
+                    <>
+                      {(() => {
+                        const primaryTransition = getPrimaryTransition(order.status);
+                        if (!primaryTransition) {
+                          return null;
+                        }
+                        const nextMeta = deliveryStatusMeta[primaryTransition];
+                        return (
+                          <Button
+                            key={`${order.id}-advance`}
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              updateStatusMutation.mutate({
+                                orderId: order.id,
+                                status: primaryTransition,
+                              })
+                            }
+                            disabled={updateStatusMutation.isPending}
+                            title={t.advanceDeliveryStatus}
+                            aria-label={`${t.advanceDeliveryStatus}: ${nextMeta.label}`}
+                          >
+                            {nextMeta.label}
+                          </Button>
+                        );
+                      })()}
+                      {canCancelStatus(order.status) && !["cancelled", "completed"].includes(order.status) && (
+                        <Button
+                          key={`${order.id}-cancel`}
+                          size="sm"
+                          variant="destructive"
+                          onClick={() =>
+                            updateStatusMutation.mutate({
+                              orderId: order.id,
+                              status: "cancelled",
+                            })
+                          }
+                          disabled={updateStatusMutation.isPending}
+                        >
+                          {t.cancelDelivery}
+                        </Button>
+                      )}
+                    </>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
