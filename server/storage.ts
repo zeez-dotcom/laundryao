@@ -85,6 +85,8 @@ import {
   type DeliveryOrder, type InsertDeliveryOrder, type DeliveryStatus,
   type CityType, type DeliveryMode, type PaymentMethodType,
   customerSessions, branchDeliverySettings, branchDeliveryItems, branchDeliveryPackages, branchPaymentMethods, branchQRCodes, deliveryOrders,
+  driverLocations,
+  type DriverLocation,
   expenses, type Expense, type InsertExpense,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -102,6 +104,7 @@ import {
   gt,
   gte,
   lte,
+  lt,
   isNull,
 } from "drizzle-orm";
 import bcrypt from "bcryptjs";
@@ -137,6 +140,23 @@ const PAY_LATER_AGGREGATE = `
 export const DEFAULT_CUSTOMER_OUTREACH_RATE_LIMIT_HOURS = 24;
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
+
+const DRIVER_LOCATION_RETENTION_MINUTES = 60 * 24; // keep one day of history
+const AVERAGE_DRIVER_SPEED_KMH = 35;
+
+type DriverLocationSnapshot = {
+  driverId: string;
+  lat: number;
+  lng: number;
+  timestamp: Date;
+};
+
+type DeliveryTrackingSnapshot = {
+  distanceKm: number | null;
+  etaMinutes: number | null;
+  driverLocation: DriverLocationSnapshot | null;
+  deliveryLocation: { lat: number; lng: number } | null;
+};
 
 const CHURN_RECOMMENDATIONS: Record<
   CustomerChurnTier,
@@ -551,8 +571,14 @@ export interface IStorage {
   getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
   updateDeliveryStatus(orderId: string, status: DeliveryStatus): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
-  updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void>;
-  getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]>;
+  updateDriverLocation(driverId: string, lat: number, lng: number): Promise<DriverLocationSnapshot>;
+  getLatestDriverLocations(driverIds?: string[]): Promise<DriverLocationSnapshot[]>;
+  getLatestDriverLocation(driverId: string): Promise<DriverLocationSnapshot | undefined>;
+  getDriverLocationHistory(
+    driverId: string,
+    options?: { limit?: number; sinceMinutes?: number },
+  ): Promise<DriverLocationSnapshot[]>;
+  getDeliveryTrackingSnapshot(orderId: string): Promise<DeliveryTrackingSnapshot | null>;
 
     // Order print history
     recordOrderPrint(orderId: string, printedBy: string): Promise<OrderPrint>;
@@ -1879,7 +1905,6 @@ export class DatabaseStorage {
       return await fn(tx);
     });
   }
-  private driverLocations = new Map<string, { lat: number; lng: number; timestamp: Date }>();
   // User methods
   async getUser(id: string): Promise<UserWithBranch | undefined> {
     const [result] = await db
@@ -5424,15 +5449,173 @@ export class DatabaseStorage {
     });
   }
 
-  async updateDriverLocation(driverId: string, lat: number, lng: number): Promise<void> {
-    this.driverLocations.set(driverId, { lat, lng, timestamp: new Date() });
+  async updateDriverLocation(driverId: string, lat: number, lng: number): Promise<DriverLocationSnapshot> {
+    const recordedAt = new Date();
+    const [row] = await db
+      .insert(driverLocations)
+      .values({
+        driverId,
+        lat: lat.toString(),
+        lng: lng.toString(),
+        recordedAt,
+      })
+      .onConflictDoUpdate({
+        target: [driverLocations.driverId, driverLocations.recordedAt],
+        set: {
+          lat: lat.toString(),
+          lng: lng.toString(),
+        },
+      })
+      .returning({
+        driverId: driverLocations.driverId,
+        lat: driverLocations.lat,
+        lng: driverLocations.lng,
+        recordedAt: driverLocations.recordedAt,
+      });
+
+    const inserted =
+      row ?? ({ driverId, lat: lat.toString(), lng: lng.toString(), recordedAt } as DriverLocation);
+
+    const cutoff = new Date(Date.now() - DRIVER_LOCATION_RETENTION_MINUTES * 60 * 1000);
+    await db.delete(driverLocations).where(lt(driverLocations.recordedAt, cutoff));
+
+    return {
+      driverId: inserted.driverId,
+      lat: Number(inserted.lat),
+      lng: Number(inserted.lng),
+      timestamp: inserted.recordedAt,
+    };
   }
 
-  async getLatestDriverLocations(): Promise<{ driverId: string; lat: number; lng: number; timestamp: Date }[]> {
-    return Array.from(this.driverLocations.entries()).map(([driverId, loc]) => ({
-      driverId,
-      ...loc,
+  async getLatestDriverLocations(driverIds?: string[]): Promise<DriverLocationSnapshot[]> {
+    if (driverIds && driverIds.length === 0) {
+      return [];
+    }
+
+    const filter = driverIds?.length
+      ? sql`WHERE driver_id IN (${sql.join(driverIds.map((id) => sql`${id}`), sql`, `)})`
+      : sql``;
+
+    const result = await db.execute(
+      sql`SELECT DISTINCT ON (driver_id)
+        driver_id,
+        lat,
+        lng,
+        recorded_at
+      FROM driver_locations
+      ${filter}
+      ORDER BY driver_id, recorded_at DESC`,
+    );
+
+    return (result.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>).map(
+      (row) => ({
+        driverId: row.driver_id,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+        timestamp: row.recorded_at,
+      }),
+    );
+  }
+
+  async getLatestDriverLocation(driverId: string): Promise<DriverLocationSnapshot | undefined> {
+    const result = await db.execute(
+      sql`SELECT driver_id, lat, lng, recorded_at
+      FROM driver_locations
+      WHERE driver_id = ${driverId}
+      ORDER BY recorded_at DESC
+      LIMIT 1`,
+    );
+
+    const row = (result.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>)[0];
+    if (!row) return undefined;
+    return {
+      driverId: row.driver_id,
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      timestamp: row.recorded_at,
+    };
+  }
+
+  async getDriverLocationHistory(
+    driverId: string,
+    options: { limit?: number; sinceMinutes?: number } = {},
+  ): Promise<DriverLocationSnapshot[]> {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
+    const conditions: any[] = [eq(driverLocations.driverId, driverId)];
+    if (options.sinceMinutes && options.sinceMinutes > 0) {
+      const since = new Date(Date.now() - options.sinceMinutes * 60 * 1000);
+      conditions.push(gte(driverLocations.recordedAt, since));
+    }
+
+    const rows = await db
+      .select({
+        driverId: driverLocations.driverId,
+        lat: driverLocations.lat,
+        lng: driverLocations.lng,
+        recordedAt: driverLocations.recordedAt,
+      })
+      .from(driverLocations)
+      .where(and(...conditions))
+      .orderBy(desc(driverLocations.recordedAt))
+      .limit(limit);
+
+    return rows.map((row) => ({
+      driverId: row.driverId,
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      timestamp: row.recordedAt,
     }));
+  }
+
+  async getDeliveryTrackingSnapshot(orderId: string): Promise<DeliveryTrackingSnapshot | null> {
+    const [row] = await db
+      .select({
+        delivery: deliveryOrders,
+        deliveryAddress: customerAddresses,
+      })
+      .from(deliveryOrders)
+      .leftJoin(customerAddresses, eq(deliveryOrders.deliveryAddressId, customerAddresses.id))
+      .where(eq(deliveryOrders.orderId, orderId))
+      .limit(1);
+
+    if (!row) {
+      return null;
+    }
+
+    const delivery = row.delivery;
+    const address = row.deliveryAddress;
+    const deliveryLocation =
+      address?.lat != null && address?.lng != null
+        ? {
+            lat: Number(address.lat),
+            lng: Number(address.lng),
+          }
+        : null;
+
+    let driverLocation: DriverLocationSnapshot | null = null;
+    if (delivery.driverId) {
+      driverLocation = (await this.getLatestDriverLocation(delivery.driverId)) ?? null;
+    }
+
+    let distanceKm: number | null = null;
+    let etaMinutes: number | null = null;
+    if (driverLocation && deliveryLocation) {
+      distanceKm = haversineDistance(
+        driverLocation.lat,
+        driverLocation.lng,
+        deliveryLocation.lat,
+        deliveryLocation.lng,
+      );
+      distanceKm = Math.round(distanceKm * 100) / 100;
+      etaMinutes = distanceKm > 0 ? Math.round(((distanceKm / AVERAGE_DRIVER_SPEED_KMH) * 60 + Number.EPSILON) * 10) / 10 : 0;
+    }
+
+    return {
+      distanceKm,
+      etaMinutes,
+      driverLocation,
+      deliveryLocation,
+    };
   }
 
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {

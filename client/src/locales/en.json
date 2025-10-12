@@ -45,6 +45,7 @@
     "status": "Status",
     "driver": "Driver",
     "filterByDriver": "Filter by driver",
+    "awaitingTelemetry": "Awaiting location data",
     "viewDetails": "View Details",
     "actions": "Actions",
     "laundryServices": "Laundry Services",

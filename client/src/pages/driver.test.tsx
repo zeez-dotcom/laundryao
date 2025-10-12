@@ -32,8 +32,9 @@ vi.mock("@/lib/queryClient", () => ({
 
 describe("DriverDashboard WebSocket scheme", () => {
   const originalGeolocation = navigator.geolocation;
+  const originalLocation = globalThis.location;
   let WebSocketMock: ReturnType<typeof vi.fn>;
-  let locationSpy: ReturnType<typeof vi.spyOn>;
+  let secureLocation: Location;
 
   beforeEach(() => {
     WebSocketMock = vi.fn(() => ({
@@ -42,12 +43,12 @@ describe("DriverDashboard WebSocket scheme", () => {
       onmessage: null,
     }));
     vi.stubGlobal("WebSocket", WebSocketMock);
-    locationSpy = vi
-      .spyOn(window, "location", "get")
-      .mockReturnValue({
-        protocol: "https:",
-        host: "secure.example.com",
-      } as Location);
+    secureLocation = {
+      ...originalLocation,
+      protocol: "https:",
+      host: "secure.example.com",
+    } as Location;
+    vi.stubGlobal("__TEST_LOCATION__", secureLocation);
     Object.defineProperty(navigator, "geolocation", {
       value: {
         watchPosition: vi.fn(),
@@ -59,7 +60,6 @@ describe("DriverDashboard WebSocket scheme", () => {
   });
 
   afterEach(() => {
-    locationSpy.mockRestore();
     Object.defineProperty(navigator, "geolocation", {
       value: originalGeolocation,
       configurable: true,

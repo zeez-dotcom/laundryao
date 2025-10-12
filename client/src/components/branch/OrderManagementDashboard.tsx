@@ -309,7 +309,7 @@ export function OrderManagementDashboard() {
     return a.isOverdue ? -1 : 1;
   });
 
-  const handleStatusUpdate = (order: OrderWithDelivery) => {
+  const handleStatusUpdate = (order: OrderWithLateness) => {
     const nextStatus = nextStatusMap[order.status];
     if (!nextStatus) {
       toast({

@@ -664,6 +664,25 @@ export const deliveryOrders = pgTable("delivery_orders", {
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const driverLocations = pgTable(
+  "driver_locations",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    driverId: uuid("driver_id").references(() => users.id).notNull(),
+    lat: numeric("lat", { precision: 9, scale: 6 }).notNull(),
+    lng: numeric("lng", { precision: 9, scale: 6 }).notNull(),
+    recordedAt: timestamptz("recorded_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    driverIdx: index("driver_locations_driver_id_idx").on(table.driverId),
+    recordedAtIdx: index("driver_locations_recorded_at_idx").on(table.recordedAt),
+    driverRecordedUnique: uniqueIndex("driver_locations_driver_recorded_unique").on(
+      table.driverId,
+      table.recordedAt,
+    ),
+  }),
+);
+
 export const insertClothingItemSchema = createInsertSchema(clothingItems)
   .omit({
     id: true,
@@ -1170,6 +1189,8 @@ export type InsertBranchQRCode = z.infer<typeof insertBranchQRCodeSchema>;
 
 export type DeliveryOrder = typeof deliveryOrders.$inferSelect;
 export type InsertDeliveryOrder = z.infer<typeof insertDeliveryOrderSchema>;
+export type DriverLocation = typeof driverLocations.$inferSelect;
+export type InsertDriverLocation = typeof driverLocations.$inferInsert;
 
 // Enhanced types for existing tables with new enums
 export type OrderStatus = typeof orderStatusEnum[number];
