@@ -22,3 +22,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS customer_engagement_plans_customer_unique
 
 CREATE INDEX IF NOT EXISTS customer_engagement_plans_branch_next_contact_idx
   ON customer_engagement_plans(branch_id, next_contact_at);
+
+-- Prepare row-level security (RLS) policies matching other branch-owned tables.
+CREATE POLICY IF NOT EXISTS tenant_customer_engagement_plans_select ON public.customer_engagement_plans
+  FOR SELECT USING (branch_id = (current_setting('app.branch_id', true))::uuid);
+CREATE POLICY IF NOT EXISTS tenant_customer_engagement_plans_insert ON public.customer_engagement_plans
+  FOR INSERT WITH CHECK (branch_id = (current_setting('app.branch_id', true))::uuid);
+CREATE POLICY IF NOT EXISTS tenant_customer_engagement_plans_update ON public.customer_engagement_plans
+  FOR UPDATE USING (branch_id = (current_setting('app.branch_id', true))::uuid)
+  WITH CHECK (branch_id = (current_setting('app.branch_id', true))::uuid);
+CREATE POLICY IF NOT EXISTS tenant_customer_engagement_plans_delete ON public.customer_engagement_plans
+  FOR DELETE USING (branch_id = (current_setting('app.branch_id', true))::uuid);
