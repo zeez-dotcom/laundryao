@@ -86,9 +86,16 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 
 ### 3.7 Notifications
 - Email via SMTP (Nodemailer) with `SMTP_*` env; SMS via Twilio when enabled and configured with `SMS_PROVIDER=twilio`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER`.
+- Customer insights provide templated outreach; admins can queue bulk SMS/email actions through `/api/customer-insights/*` routes with per-customer cooldowns and audit logging.
 
 ### 3.8 Branch Customization and Ads
 - Branch-specific customer dashboard settings and ad management with impressions/clicks.
+
+### 3.9 Engagement Automation
+- `/api/reports/customer-insights` exposes churn tiers, preferred services, and recommended outreach actions.
+- `GET/PUT /api/customer-insights/:id/actions` returns or overrides the stored action plan (next contact, channel, notes).
+- `POST /api/customer-insights/actions/bulk-send` queues SMS/email notifications, enforces rate limits (default 24h), and records outcomes for each customer.
+- Admin UI supports filtering insights by churn tier, reviewing suggested actions, and confirming bulk outreach with template placeholders (e.g., `{name}`).
 
 ## 4. Functional Requirements
 
@@ -116,6 +123,7 @@ Delivery
 
 Reporting
 - FR-601: Provide aggregate reports and downloadable exports for expenses and sales metrics.
+- FR-602: Customer insights must display churn tiers and suggested outreach while allowing admins to queue rate-limited bulk SMS/email actions with audit trails.
 
 Customization and Ads
 - FR-701: Branch-specific UI copy and feature flags for the customer dashboard.
