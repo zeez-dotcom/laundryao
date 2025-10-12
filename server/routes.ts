@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { Express, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import {
@@ -40,9 +39,7 @@ import {
   type ItemType,
   type ClothingItem,
   orders,
-  deliveryOrders,
   branchAds,
-  type DeliveryStatus,
 } from "@shared/schema";
 import { loginSchema } from "@shared/schemas";
 import {
@@ -65,21 +62,13 @@ import multer from "multer";
 import ExcelJS from "exceljs";
 import { z, ZodError } from "zod";
 import { eq, sql, and, inArray, like, or, ilike, gt } from "drizzle-orm";
-import {
-  generateCatalogTemplate,
-  parsePrice,
-  SERVICE_HEADERS,
-  parseWorksheetData,
-  parseProductRow,
-  extractStringValue,
-  parsePricingMatrixWorksheet,
-} from "./utils/excel";
 import logger from "./logger";
 import { NotificationService } from "./services/notification";
 import { registerHealthRoutes } from "./routes/health";
+import { registerCatalogRoutes } from "./routes/catalog";
+import { registerDeliveryRoutes } from "./routes/delivery";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
-import ExcelJS from "exceljs";
 import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
@@ -100,6 +89,9 @@ async function resolveUuidByPublicId(table: any, idParam: string) {
   }
   return idParam;
 }
+
+const parseAmount = (value: string | number | null | undefined) =>
+  Number.parseFloat(typeof value === "string" ? value : value != null ? String(value) : "0");
 import { WebSocketServer } from "ws";
 
 const upload = multer();
@@ -116,18 +108,6 @@ const uploadLogo = multer({
 });
 
 const passwordResetTokens = new Map<string, { userId: string; expires: Date }>();
-
-const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
-  pending: ["accepted", "cancelled"],
-  accepted: ["driver_enroute", "cancelled"],
-  driver_enroute: ["picked_up", "cancelled"],
-  picked_up: ["processing_started", "cancelled"],
-  processing_started: ["ready", "cancelled"],
-  ready: ["out_for_delivery", "cancelled"],
-  out_for_delivery: ["completed", "cancelled"],
-  completed: [],
-  cancelled: [],
-};
 
 // Enhanced security: Comprehensive rate limiting for all auth endpoints
 interface RateLimitRecord {
@@ -550,7 +530,7 @@ export async function registerRoutes(
         }
         
         // Set session data manually and save
-        (req.session as any).passport = { user: user.id };
+        req.session.passport = { user: user.id };
         req.session.save((saveErr) => {
           if (saveErr) {
             console.error("Session save error:", saveErr);
@@ -712,7 +692,7 @@ export async function registerRoutes(
       clearRateLimit(`reg_ip:${ip}`);
       clearRateLimit(`reg_phone:${data.phoneNumber}`);
       
-      (req.session as any).customerId = customer.id;
+      req.session.customerId = customer.id;
       const { passwordHash: _pw, ...safe } = customer;
       res.status(201).json(safe);
     } catch (err) {
@@ -747,7 +727,7 @@ export async function registerRoutes(
       clearRateLimit(`login_ip:${ip}`);
       clearRateLimit(`login_phone:${phoneNumber}`);
       
-      (req.session as any).customerId = customer.id;
+      req.session.customerId = customer.id;
       const { passwordHash, ...safe } = customer;
       logger.info({ customerId: customer.id, ip }, 'Successful customer login');
       res.json(safe);
@@ -757,7 +737,7 @@ export async function registerRoutes(
   });
 
   app.post("/customer/logout", (req, res) => {
-    const customerId = (req.session as any).customerId;
+    const customerId = req.session.customerId;
     
     // Properly destroy the session for security
     req.session.destroy((err) => {
@@ -780,7 +760,7 @@ export async function registerRoutes(
   });
 
   app.get("/customer/me", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -850,7 +830,7 @@ export async function registerRoutes(
   });
 
   app.get("/customer/addresses", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const addresses = await storage.getCustomerAddresses(customerId);
@@ -861,7 +841,7 @@ export async function registerRoutes(
   });
 
   app.post("/customer/addresses", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const data = insertCustomerAddressSchema
@@ -875,7 +855,7 @@ export async function registerRoutes(
   });
 
   app.put("/customer/addresses/:id", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const data = insertCustomerAddressSchema
@@ -891,7 +871,7 @@ export async function registerRoutes(
   });
 
   app.delete("/customer/addresses/:id", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const success = await storage.deleteCustomerAddress(req.params.id, customerId);
@@ -903,7 +883,7 @@ export async function registerRoutes(
   });
 
   app.get("/customer/packages", requireCustomerOrAdmin, async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const packages = await storage.getCustomerPackagesWithUsage(customerId);
@@ -914,7 +894,7 @@ export async function registerRoutes(
   });
 
   app.get("/customer/orders", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       let orders = await storage.getOrdersByCustomer(customerId);
@@ -939,7 +919,7 @@ export async function registerRoutes(
   });
 
   app.get("/customer/orders/:id/receipt", async (req, res) => {
-    const customerId = (req.session as any).customerId as string | undefined;
+    const customerId = req.session.customerId;
     if (!customerId) return res.status(401).json({ message: "Login required" });
     try {
       const order = await storage.getOrder(req.params.id);
@@ -1008,7 +988,7 @@ export async function registerRoutes(
 
   // Customer addresses for ordering interface
   app.get("/api/customers/:customerId/addresses", async (req, res) => {
-    const sessionCustomerId = (req.session as any).customerId as string | undefined;
+    const sessionCustomerId = req.session.customerId;
     const { customerId } = req.params;
     
     // Ensure the requesting customer can only access their own addresses
@@ -1027,7 +1007,7 @@ export async function registerRoutes(
 
   // Create customer address for ordering interface
   app.post("/api/customers/:customerId/addresses", async (req, res) => {
-    const sessionCustomerId = (req.session as any).customerId as string | undefined;
+    const sessionCustomerId = req.session.customerId;
     const { customerId } = req.params;
     
     // Ensure the requesting customer can only create addresses for themselves
@@ -1047,232 +1027,13 @@ export async function registerRoutes(
     }
   });
 
-  // Customer delivery order creation
-  app.post("/api/delivery-orders", async (req, res) => {
-    const sessionCustomerId = (req.session as any).customerId as string | undefined;
-    
-    if (!sessionCustomerId) {
-      return res.status(401).json({ message: "Login required" });
-    }
-    
-    try {
-      const orderData = req.body;
-      
-      // Validate required fields for customer orders
-      if (!orderData.branchCode || !orderData.items || !Array.isArray(orderData.items) || orderData.items.length === 0) {
-        return res.status(400).json({ message: "Missing required fields: branchCode and items" });
-      }
-      
-      // Ensure the order is created by the authenticated customer
-      if (orderData.customerId !== sessionCustomerId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      // Get branch by code
-      const branch = await storage.getBranchByCode(orderData.branchCode);
-      if (!branch) {
-        return res.status(404).json({ message: "Branch not found" });
-      }
-      
-      // Create the main order first
-      const orderItems = orderData.items.map((item: any) => ({
-        clothingItemId: item.clothingItemId,
-        serviceId: item.serviceId,
-        quantity: item.quantity
-      }));
-      
-      // Calculate total from items
-      let subtotal = 0;
-      for (const item of orderData.items) {
-        const price = await storage.getItemServicePrice(
-          item.clothingItemId,
-          item.serviceId,
-          "", // No user for customer orders
-          branch.id
-        );
-        subtotal += (price || 0) * item.quantity;
-      }
-      
-      const deliveryFee = orderData.deliveryFee || 0;
-      const total = subtotal + deliveryFee;
-      
-      // Create order data
-      const newOrderData = {
-        customerId: sessionCustomerId,
-        branchId: branch.id,
-        customerName: orderData.customerName || "Customer",
-        customerPhone: orderData.customerPhone || "",
-        items: orderItems,
-        subtotal: subtotal.toString(),
-        tax: "0",
-        total: total.toString(),
-        paymentMethod: orderData.paymentMethod || "cash",
-        status: "received" as const,
-        sellerName: "Online Order",
-        promisedReadyDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0], // Tomorrow
-        promisedReadyOption: "tomorrow" as const,
-        isDeliveryRequest: true
-      };
-      
-      // Create the order
-      const order = await storage.createOrder(newOrderData);
-      
-      // Create delivery order if address is provided
-      if (orderData.deliveryAddressId) {
-        const deliveryOrderData = {
-          orderId: order.id,
-          deliveryMode: "driver_pickup" as const,
-          deliveryAddressId: orderData.deliveryAddressId,
-          deliveryInstructions: orderData.deliveryInstructions || "",
-          deliveryStatus: "pending" as const,
-          deliveryFee: deliveryFee.toString()
-        };
-        
-        await storage.createDeliveryOrder(deliveryOrderData);
-      }
-      
-      res.status(201).json({
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        total: order.total
-      });
-      
-    } catch (error) {
-      logger.error("Error creating delivery order:", error as any);
-      res.status(500).json({ message: "Failed to create order" });
-    }
-  });
-
-  app.get("/api/delivery-order-requests", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      const { branchId } = req.query as Record<string, string>;
-      const targetBranchId =
-        branchId && user.role === "super_admin" ? branchId : user.branchId || undefined;
-      const orders = await storage.getDeliveryOrderRequests(targetBranchId);
-      res.json(orders);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch delivery order requests" });
-    }
-  });
-
-  app.patch("/api/delivery-order-requests/:id/accept", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      const order = await storage.getOrder(req.params.id);
-      if (!order) {
-        return res.status(404).json({ message: "Order not found" });
-      }
-      if (user.role !== "super_admin" && user.branchId !== order.branchId) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-      const updated = await storage.acceptDeliveryOrderRequest(req.params.id);
-      res.json(updated);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to accept delivery order request" });
-    }
-  });
-
-  app.get("/api/delivery-orders", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      if (!["admin", "super_admin", "driver"].includes(user.role)) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const { status, branchId, driverId } = req.query as Record<string, string>;
-      let targetBranchId: string | undefined = branchId;
-      if (user.role !== "super_admin") {
-        if (branchId && branchId !== user.branchId) {
-          return res.status(403).json({ message: "Cannot access other branch delivery orders" });
-        }
-        targetBranchId = user.branchId || undefined;
-      }
-
-      // If a driverId is provided, filter by driver
-      let orders;
-      if (driverId) {
-        orders = await storage.getDeliveryOrdersByDriver(driverId, targetBranchId);
-      } else {
-        orders = await storage.getDeliveryOrders(targetBranchId, status as DeliveryStatus | undefined);
-      }
-      res.json(orders);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch delivery orders" });
-    }
-  });
-
-  // List drivers for the current branch (or all for super admins)
-  app.get("/api/drivers", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-      if (!["admin", "super_admin"].includes(user.role)) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const where = user.role === "super_admin"
-        ? and(eq(users.role, "driver"))
-        : and(eq(users.role, "driver"), eq(users.branchId, user.branchId as any));
-
-      const rows = await db
-        .select({ id: users.id, firstName: users.firstName, lastName: users.lastName, username: users.username })
-        .from(users)
-        .where(where);
-
-      const drivers = rows.map((u) => ({
-        id: u.id,
-        name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username,
-      }));
-
-      res.json(drivers);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch drivers" });
-    }
-  });
-
-  app.patch("/api/delivery-orders/:id/status", requireAuth, async (req, res) => {
-    try {
-      const user = req.user as UserWithBranch;
-
-      const { status } = req.body as { status?: DeliveryStatus };
-      if (!status) {
-        return res.status(400).json({ message: "Status required" });
-      }
-
-      const [current] = await db
-        .select({ order: orders, delivery: deliveryOrders })
-        .from(deliveryOrders)
-        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
-        .where(and(eq(deliveryOrders.orderId, req.params.id), eq(orders.isDeliveryRequest, false)));
-
-      if (!current) {
-        return res.status(404).json({ message: "Delivery order not found" });
-      }
-
-      if (user.role !== "super_admin" && current.order.branchId !== user.branchId) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
-      const currentStatus = current.delivery.deliveryStatus as DeliveryStatus;
-      const allowed = DELIVERY_STATUS_TRANSITIONS[currentStatus] || [];
-      if (!allowed.includes(status)) {
-        return res.status(400).json({ message: "Invalid status transition" });
-      }
-
-      const updated = await storage.updateDeliveryStatus(req.params.id, status);
-      if (!updated) {
-        return res.status(404).json({ message: "Delivery order not found" });
-      }
-
-      res.json(updated);
-      broadcastDeliveryUpdate({
-        orderId: updated.orderId,
-        deliveryStatus: updated.deliveryStatus,
-        driverId: updated.driverId || null,
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Failed to update delivery status" });
-    }
+  registerDeliveryRoutes({
+    app,
+    storage,
+    logger,
+    requireAuth,
+    requireAdminOrSuperAdmin,
+    broadcastDeliveryUpdate,
   });
 
   app.put("/api/users/:id", requireAuth, async (req, res, next) => {
@@ -1323,7 +1084,7 @@ export async function registerRoutes(
     try {
       const users = await storage.getUsers();
       // Don't send password hashes
-      const safeUsers = users.map(({ passwordHash, ...user }) => user);
+      const safeUsers = users.map(({ passwordHash: _passwordHash, ...user }: UserWithBranch) => user);
       res.json(safeUsers);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch users" });
@@ -1450,367 +1211,14 @@ export async function registerRoutes(
     }
   });
 
-  // Backfill to split "English//Arabic" names into bilingual columns
-  // Allow admins and super admins to run this maintenance task
-  app.post("/api/admin/backfill-bilingual", requireAdminOrSuperAdmin, async (_req, res) => {
-    try {
-      // Reuse robust bilingual parser to handle whitespace consistently
-      const { parseInlineBilingual } = await import("./utils/excel");
-
-      // Clothing Items
-      const clothingRows = await db
-        .select()
-        .from(clothingItems)
-        .where(
-          or(
-            like(clothingItems.name, "%//%"),
-            like(clothingItems.description, "%//%")
-          )
-        );
-      let clothingUpdated = 0;
-      for (const row of clothingRows as any[]) {
-        const needsName = (!row.nameAr || row.nameAr === null || row.nameAr === "") && typeof row.name === "string" && row.name.includes("//");
-        const needsDesc = (!row.descriptionAr || row.descriptionAr === null || row.descriptionAr === "") && typeof row.description === "string" && row.description.includes("//");
-        if (!needsName && !needsDesc) continue;
-        const patch: any = {};
-        if (needsName) {
-          const parts = parseInlineBilingual(String(row.name));
-          patch.name = parts.en || row.name;
-          if (parts.ar) patch.nameAr = parts.ar;
-        }
-        if (needsDesc) {
-          const parts = parseInlineBilingual(String(row.description || ""));
-          if (parts.en) patch.description = parts.en;
-          if (parts.ar) patch.descriptionAr = parts.ar;
-        }
-        if (Object.keys(patch).length) {
-          await db.update(clothingItems).set(patch).where(eq(clothingItems.id, row.id));
-          clothingUpdated++;
-        }
-      }
-
-      // Laundry Services
-      const serviceRows = await db
-        .select()
-        .from(laundryServices)
-        .where(
-          or(
-            like(laundryServices.name, "%//%"),
-            like(laundryServices.description, "%//%")
-          )
-        );
-      let servicesUpdated = 0;
-      for (const row of serviceRows as any[]) {
-        const needsName = (!row.nameAr || row.nameAr === null || row.nameAr === "") && typeof row.name === "string" && row.name.includes("//");
-        const needsDesc = (!row.descriptionAr || row.descriptionAr === null || row.descriptionAr === "") && typeof row.description === "string" && row.description.includes("//");
-        if (!needsName && !needsDesc) continue;
-        const patch: any = {};
-        if (needsName) {
-          const parts = parseInlineBilingual(String(row.name));
-          patch.name = parts.en || row.name;
-          if (parts.ar) patch.nameAr = parts.ar;
-        }
-        if (needsDesc) {
-          const parts = parseInlineBilingual(String(row.description || ""));
-          if (parts.en) patch.description = parts.en;
-          if (parts.ar) patch.descriptionAr = parts.ar;
-        }
-        if (Object.keys(patch).length) {
-          await db.update(laundryServices).set(patch).where(eq(laundryServices.id, row.id));
-          servicesUpdated++;
-        }
-      }
-
-      // Categories
-      const categoryRows = await db
-        .select()
-        .from(categories)
-        .where(
-          or(
-            like(categories.name, "%//%"),
-            like(categories.description, "%//%")
-          )
-        );
-      let categoriesUpdated = 0;
-      for (const row of categoryRows as any[]) {
-        const needsName = (!row.nameAr || row.nameAr === null || row.nameAr === "") && typeof row.name === "string" && row.name.includes("//");
-        const needsDesc = (!row.descriptionAr || row.descriptionAr === null || row.descriptionAr === "") && typeof row.description === "string" && row.description.includes("//");
-        if (!needsName && !needsDesc) continue;
-        const patch: any = {};
-        if (needsName) {
-          const parts = parseInlineBilingual(String(row.name));
-          patch.name = parts.en || row.name;
-          if (parts.ar) patch.nameAr = parts.ar;
-        }
-        if (needsDesc) {
-          const parts = parseInlineBilingual(String(row.description || ""));
-          if (parts.en) patch.description = parts.en;
-          if (parts.ar) patch.descriptionAr = parts.ar;
-        }
-        if (Object.keys(patch).length) {
-          await db.update(categories).set(patch).where(eq(categories.id, row.id));
-          categoriesUpdated++;
-        }
-      }
-
-      res.json({ clothingItemsUpdated: clothingUpdated, servicesUpdated, categoriesUpdated });
-    } catch (error) {
-      logger.error("Backfill bilingual failed:", error as any);
-      res.status(500).json({ message: "Backfill failed" });
-    }
-  });
-
-  app.get("/api/catalog/export", requireAuth, async (req, res) => {
-    try {
-      const currentUser = req.user as UserWithBranch;
-      const rows = await storage.getCatalogForExport(currentUser.id);
-      const headers = [
-        "Item (English)",
-        "Item (Arabic)",
-        SERVICE_HEADERS.normalIron[0],
-        SERVICE_HEADERS.normalWash[0],
-        SERVICE_HEADERS.normalWashIron[0],
-        SERVICE_HEADERS.urgentIron[0],
-        SERVICE_HEADERS.urgentWash[0],
-        SERVICE_HEADERS.urgentWashIron[0],
-        "Picture Link",
-      ];
-      const data = rows.map((r) => [
-        r.itemEn,
-        r.itemAr ?? "",
-        r.normalIron ?? "",
-        r.normalWash ?? "",
-        r.normalWashIron ?? "",
-        r.urgentIron ?? "",
-        r.urgentWash ?? "",
-        r.urgentWashIron ?? "",
-        r.imageUrl ?? "",
-      ]);
-      const workbook = new ExcelJS.Workbook();
-      const worksheet = workbook.addWorksheet("Catalog");
-      worksheet.addRow(headers);
-      data.forEach((row) => worksheet.addRow(row));
-      const buf = (await workbook.xlsx.writeBuffer()) as Buffer;
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=catalog.xlsx",
-      );
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      );
-      res.send(Buffer.from(buf));
-      } catch (err) {
-        logger.error("Catalog export failed", err as any);
-        res.status(500).json({ message: "Failed to export catalog" });
-      }
-    });
-
-  app.get("/api/catalog/bulk-template", requireAuth, async (_req, res) => {
-    const buf = await generateCatalogTemplate();
-    res.setHeader(
-      "Content-Disposition",
-      "attachment; filename=catalog_template.xlsx",
-    );
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
-    res.send(Buffer.from(buf));
-  });
-
-  app.post(
-    "/api/catalog/bulk-upload",
+  registerCatalogRoutes({
+    app,
+    storage,
+    logger,
     requireAuth,
-    upload.single("file"),
-    async (req, res) => {
-      try {
-        const currentUser = req.user as UserWithBranch;
-        const branchId = req.body.branchId as string | undefined;
-        if (!req.file) {
-          return res.status(400).json({ message: "file is required" });
-        }
-        if (branchId && currentUser.role !== "super_admin") {
-          return res
-            .status(403)
-            .json({ message: "Only super admin can specify branchId" });
-        }
-
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.load(req.file.buffer);
-        
-        const errors: string[] = [];
-        let servicesResult: any = null;
-        let productsResult: { created: number; updated: number; errors: string[] } | null = null;
-        let newClothingItemIds: string[] = [];
-        let newServiceIds: string[] = [];
-        
-        const targetBranchId = branchId && currentUser.role === "super_admin" ? branchId : currentUser.branchId;
-        if (!targetBranchId) {
-          return res.status(400).json({ message: "Branch ID is required" });
-        }
-
-        // Check if this is a bilingual pricing matrix format (single sheet with //bilingual data)
-        const mainSheet = workbook.worksheets[0];
-        if (mainSheet) {
-          // Try parsing as pricing matrix first
-          const matrixResult = parsePricingMatrixWorksheet(mainSheet);
-          
-          if (matrixResult.clothingItems.length > 0 && matrixResult.services.length > 0) {
-            // This appears to be a bilingual pricing matrix format
-            console.log('Processing bilingual pricing matrix format:', {
-              items: matrixResult.clothingItems.length,
-              services: matrixResult.services.length,
-              prices: matrixResult.prices.length
-            });
-            
-            errors.push(...matrixResult.errors);
-            
-            if (matrixResult.errors.length === 0) {
-              // Convert to the format expected by bulkUpsertBranchCatalog
-              const rows: ParsedRow[] = [];
-              
-              // Create a map of service names to their prices for each item
-              const servicePriceMap = new Map<string, Map<string, number>>();
-              matrixResult.prices.forEach(({ itemName, serviceName, price }) => {
-                if (!servicePriceMap.has(itemName)) {
-                  servicePriceMap.set(itemName, new Map());
-                }
-                servicePriceMap.get(itemName)!.set(serviceName, price);
-              });
-              
-              // Process each clothing item
-              matrixResult.clothingItems.forEach(item => {
-                const itemPrices = servicePriceMap.get(item.nameEn) || new Map();
-                
-                // Map services to expected names (handle variations)
-                const normalIron = itemPrices.get("Normal Iron") || itemPrices.get("كي عادي");
-                const normalWash = itemPrices.get("Normal Wash") || itemPrices.get("غسيل عادي");
-                const normalWashIron = itemPrices.get("Normal Wash & Iron") || itemPrices.get("Normal Wash and Iron") || itemPrices.get("Normal Wash&Iron") || itemPrices.get("غسيل وكي عادي");
-                const urgentIron = itemPrices.get("Urgent Iron") || itemPrices.get("كي مستعجل");
-                const urgentWash = itemPrices.get("Urgent Wash") || itemPrices.get("غسيل مستعجل");
-                const urgentWashIron = itemPrices.get("Urgent Wash & Iron") || itemPrices.get("Urgent Wash and Iron") || itemPrices.get("Urgent Wash&Iron") || itemPrices.get("غسيل وكي مستعجل");
-                
-                const row: ParsedRow = {
-                  itemEn: item.nameEn,
-                  itemAr: item.nameAr || undefined,
-                  normalIron,
-                  normalWash,
-                  normalWashIron,
-                  urgentIron,
-                  urgentWash,
-                  urgentWashIron,
-                  imageUrl: item.imageUrl,
-                };
-                
-                rows.push(row);
-              });
-              
-              if (rows.length > 0) {
-                servicesResult = await storage.bulkUpsertBranchCatalog(targetBranchId, rows);
-                newClothingItemIds = servicesResult.newClothingItemIds || [];
-                newServiceIds = servicesResult.newServiceIds || [];
-              }
-            }
-          } else {
-            // Fall back to legacy format parsing
-            console.log('Falling back to legacy format parsing');
-            const laundryData = parseWorksheetData(mainSheet);
-            const rows: ParsedRow[] = laundryData
-              .map((r: any, index: number) => {
-                const getFieldValue = (fields: readonly string[]) => {
-                  for (const f of fields) {
-                    if (r[f] !== undefined) return r[f];
-                  }
-                  return undefined;
-                };
-
-                const parseField = (fields: readonly string[]) => {
-                  const raw = getFieldValue(fields);
-                  const parsed = parsePrice(raw);
-                  if (
-                    raw !== undefined &&
-                    raw !== null &&
-                    raw !== "" &&
-                    parsed === undefined
-                  ) {
-                    errors.push(`Row ${index + 2}: Invalid ${fields[0]}`);
-                  }
-                  return parsed;
-                };
-
-                return {
-                  itemEn: String(r["Item (English)"] ?? "").trim(),
-                  itemAr: r["Item (Arabic)"]
-                    ? String(r["Item (Arabic)"]).trim()
-                    : undefined,
-                  normalIron: parseField(SERVICE_HEADERS.normalIron),
-                  normalWash: parseField(SERVICE_HEADERS.normalWash),
-                  normalWashIron: parseField(SERVICE_HEADERS.normalWashIron),
-                  urgentIron: parseField(SERVICE_HEADERS.urgentIron),
-                  urgentWash: parseField(SERVICE_HEADERS.urgentWash),
-                  urgentWashIron: parseField(SERVICE_HEADERS.urgentWashIron),
-                  imageUrl: r["Picture Link"]
-                    ? extractStringValue(r["Picture Link"]).trim()
-                    : undefined,
-                };
-              })
-              .filter((r) => r.itemEn);
-
-            if (rows.length > 0) {
-              servicesResult = await storage.bulkUpsertBranchCatalog(targetBranchId, rows);
-              newClothingItemIds = servicesResult.newClothingItemIds || [];
-              newServiceIds = servicesResult.newServiceIds || [];
-            }
-          }
-        }
-
-        // Process Retail Products Sheet
-        const productsSheet = workbook.worksheets.find(ws => ws.name === "Retail Products");
-        if (productsSheet) {
-          const productData = parseWorksheetData(productsSheet);
-          const productRows = productData
-            .map((row: any, index: number) => parseProductRow(row, index, errors))
-            .filter((row) => row !== null);
-
-          if (productRows.length > 0) {
-            productsResult = await storage.bulkUpsertProducts(targetBranchId, productRows);
-            errors.push(...productsResult.errors);
-          }
-        }
-
-        if (errors.length > 0) {
-          return res.status(400).json({ errors });
-        }
-
-        // Sync packages with new items
-        if ((newClothingItemIds.length > 0 || newServiceIds.length > 0)) {
-          try {
-            await storage.syncPackagesWithNewItems(targetBranchId, newClothingItemIds, newServiceIds);
-          } catch (syncError: any) {
-            console.warn("Package sync warning:", syncError.message);
-          }
-        }
-
-        // Return backward-compatible response
-        const result = servicesResult || { processed: 0, created: 0, updated: 0 };
-        res.json({
-          processed: result.processed || 0,
-          created: result.created || 0,
-          updated: result.updated || 0,
-          clothingItemsCreated: result.clothingItemsCreated || 0,
-          clothingItemsUpdated: result.clothingItemsUpdated || 0,
-          branchId: targetBranchId,
-          userResults: result.userResults || [],
-          packagesSync: (newClothingItemIds.length > 0 || newServiceIds.length > 0) ? "completed" : "not_needed",
-          products: productsResult,
-        });
-      } catch (error) {
-        logger.error("Bulk upload failed:", error as any);
-        res.status(500).json({ message: "Bulk upload failed" });
-      }
-    },
-  );
+    requireAdminOrSuperAdmin,
+    upload,
+  });
 
   // Public branch info
   app.get("/api/branches/:code", async (req, res) => {
@@ -1967,11 +1375,17 @@ export async function registerRoutes(
 
       // Use only payments table to avoid double counting cash orders
       // Cash orders appear in both transactions and payments tables
-      const totalRevenue = allPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+      const totalRevenue = allPayments.reduce<number>((sum, payment) => sum + parseAmount(payment.amount), 0);
 
-      const currentRevenue = currentMonthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+      const currentRevenue = currentMonthPayments.reduce<number>(
+        (sum, payment) => sum + parseAmount(payment.amount),
+        0,
+      );
 
-      const previousRevenue = previousMonthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+      const previousRevenue = previousMonthPayments.reduce<number>(
+        (sum, payment) => sum + parseAmount(payment.amount),
+        0,
+      );
       
       const revenueGrowth = previousRevenue > 0 ? ((currentRevenue - previousRevenue) / previousRevenue * 100) : 0;
 
@@ -2017,8 +1431,14 @@ export async function registerRoutes(
         const branchCustomerIds = new Set(branchOrders.map(o => o.customerId).filter(Boolean));
         const branchPayments = allPayments.filter(p => branchCustomerIds.has(p.customerId));
         
-        const transactionRevenue = branchTransactions.reduce((sum, t) => sum + parseFloat(t.total), 0);
-        const packageRevenue = branchPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const transactionRevenue = branchTransactions.reduce<number>(
+          (sum, transaction) => sum + parseAmount(transaction.total),
+          0,
+        );
+        const packageRevenue = branchPayments.reduce<number>(
+          (sum, payment) => sum + parseAmount(payment.amount),
+          0,
+        );
         const totalRevenue = transactionRevenue + packageRevenue;
         
         const orderCount = branchOrders.length;
@@ -2067,8 +1487,14 @@ export async function registerRoutes(
           return date >= month && date < nextMonth;
         });
         
-        const transactionRevenue = monthTransactions.reduce((sum, t) => sum + parseFloat(t.total), 0);
-        const packageRevenue = monthPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+        const transactionRevenue = monthTransactions.reduce<number>(
+          (sum, transaction) => sum + parseAmount(transaction.total),
+          0,
+        );
+        const packageRevenue = monthPayments.reduce<number>(
+          (sum, payment) => sum + parseAmount(payment.amount),
+          0,
+        );
         const totalRevenue = transactionRevenue + packageRevenue;
         
         const orderCount = monthTransactions.length;
@@ -4156,7 +3582,7 @@ export async function registerRoutes(
 
       if (order.customerId) {
         try {
-          const customer = await storage.getCustomer(order.customerId, user.branchId);
+          const customer = await storage.getCustomer(order.customerId, user.branchId ?? undefined);
           if (customer) {
             const newPoints = customer.loyaltyPoints + (loyaltyPointsEarned - loyaltyPointsRedeemed);
             await storage.updateCustomer(order.customerId, { loyaltyPoints: newPoints });
@@ -4764,42 +4190,6 @@ export async function registerRoutes(
   // Delivery Management API Routes
 
   // Branch Delivery Settings Routes
-  app.get("/api/branches/:id/delivery-settings", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const user = req.user as User;
-      
-      // Authorization check - users can only access their own branch settings unless super admin
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot access other branch settings" });
-      }
-      
-      const settings = await storage.getBranchDeliverySettings(id);
-      res.json(settings);
-    } catch (error) {
-      logger.error("Error fetching delivery settings:", error as any);
-      res.status(500).json({ message: "Failed to fetch delivery settings" });
-    }
-  });
-
-  app.put("/api/branches/:id/delivery-settings", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const user = req.user as User;
-      
-      // Authorization check
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot modify other branch settings" });
-      }
-      
-      const settings = await storage.updateBranchDeliverySettings(id, req.body);
-      res.json(settings);
-    } catch (error) {
-      logger.error("Error updating delivery settings:", error as any);
-      res.status(500).json({ message: "Failed to update delivery settings" });
-    }
-  });
-
   // Customer Dashboard Settings routes
   app.get("/api/branches/:id/customer-dashboard-settings", requireAdminOrSuperAdmin, async (req, res) => {
     try {
@@ -4834,7 +4224,7 @@ export async function registerRoutes(
   // Customer endpoints for dashboard settings and customization
   app.get("/customer/dashboard-settings", async (req, res) => {
     try {
-      const customerId = (req.session as any).customerId as string | undefined;
+      const customerId = req.session.customerId;
       if (!customerId) return res.status(401).json({ message: "Not authenticated" });
       const customer = await storage.getCustomer(customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -4847,7 +4237,7 @@ export async function registerRoutes(
 
   app.get("/customer/customization", async (req, res) => {
     try {
-      const customerId = (req.session as any).customerId as string | undefined;
+      const customerId = req.session.customerId;
       if (!customerId) return res.status(401).json({ message: "Not authenticated" });
       const customer = await storage.getCustomer(customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -4935,7 +4325,7 @@ export async function registerRoutes(
   // Customer: fetch active ads for their branch
   app.get("/customer/ads", async (req, res) => {
     try {
-      const customerId = (req.session as any).customerId as string | undefined;
+      const customerId = req.session.customerId;
       if (!customerId) return res.status(401).json({ message: "Not authenticated" });
       const customer = await storage.getCustomer(customerId);
       if (!customer) return res.status(404).json({ message: "Customer not found" });
@@ -4949,7 +4339,7 @@ export async function registerRoutes(
   // Customer: ad analytics endpoints
   app.post("/customer/ads/:id/impression", async (req, res) => {
     try {
-      const customerId = (req.session as any).customerId as string | undefined;
+      const customerId = req.session.customerId;
       const adId = req.params.id;
       const ad = await db.select().from(branchAds).where(eq(branchAds.id, adId)).then(r => r[0]);
       if (!ad) return res.status(404).json({ message: "Ad not found" });
@@ -4973,7 +4363,7 @@ export async function registerRoutes(
 
   app.post("/customer/ads/:id/click", async (req, res) => {
     try {
-      const customerId = (req.session as any).customerId as string | undefined;
+      const customerId = req.session.customerId;
       const adId = req.params.id;
       const ad = await db.select().from(branchAds).where(eq(branchAds.id, adId)).then(r => r[0]);
       if (!ad) return res.status(404).json({ message: "Ad not found" });
@@ -5015,84 +4405,7 @@ export async function registerRoutes(
   });
 
   // Delivery Items Routes
-  app.get("/api/branches/:id/delivery-items", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const user = req.user as User;
-      
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot access other branch delivery items" });
-      }
-      
-      const items = await storage.getBranchDeliveryItems(id);
-      res.json(items);
-    } catch (error) {
-      logger.error("Error fetching delivery items:", error as any);
-      res.status(500).json({ message: "Failed to fetch delivery items" });
-    }
-  });
-
-  app.put("/api/branches/:id/delivery-items/:clothingItemId/:serviceId", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id, clothingItemId, serviceId } = req.params;
-      const { isAvailable, deliveryPrice, estimatedProcessingTime } = req.body;
-      const user = req.user as User;
-      
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot modify other branch delivery items" });
-      }
-      
-      const item = await storage.updateBranchDeliveryItem(id, clothingItemId, serviceId, {
-        isAvailable,
-        deliveryPrice,
-        estimatedProcessingTime,
-      });
-      res.json(item);
-    } catch (error) {
-      logger.error("Error updating delivery item:", error as any);
-      res.status(500).json({ message: "Failed to update delivery item" });
-    }
-  });
-
   // Delivery Packages Routes
-  app.get("/api/branches/:id/delivery-packages", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const user = req.user as User;
-      
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot access other branch delivery packages" });
-      }
-      
-      const packages = await storage.getBranchDeliveryPackages(id);
-      res.json(packages);
-    } catch (error) {
-      logger.error("Error fetching delivery packages:", error as any);
-      res.status(500).json({ message: "Failed to fetch delivery packages" });
-    }
-  });
-
-  app.put("/api/branches/:id/delivery-packages/:packageId", requireAdminOrSuperAdmin, async (req, res) => {
-    try {
-      const { id, packageId } = req.params;
-      const { isAvailable, deliveryDiscount } = req.body;
-      const user = req.user as User;
-      
-      if (user.role !== "super_admin" && user.branchId !== id) {
-        return res.status(403).json({ message: "Cannot modify other branch delivery packages" });
-      }
-      
-      const pkg = await storage.updateBranchDeliveryPackage(id, packageId, {
-        isAvailable,
-        deliveryDiscount,
-      });
-      res.json(pkg);
-    } catch (error) {
-      logger.error("Error updating delivery package:", error as any);
-      res.status(500).json({ message: "Failed to update delivery package" });
-    }
-  });
-
   // Payment Methods Routes
   app.get("/api/branches/:id/payment-methods", requireAdminOrSuperAdmin, async (req, res) => {
     try {
