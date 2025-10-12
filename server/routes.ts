@@ -407,12 +407,25 @@ export async function registerRoutes(
       });
     });
 
-  const broadcastDeliveryUpdate = (data: {
+  const broadcastDeliveryUpdate = async (data: {
     orderId: string;
     deliveryStatus: string | null;
     driverId: string | null;
   }) => {
-    const msg = JSON.stringify(data);
+    const tracking = await storage.getDeliveryTrackingSnapshot(data.orderId);
+    const msg = JSON.stringify({
+      ...data,
+      etaMinutes: tracking?.etaMinutes ?? null,
+      distanceKm: tracking?.distanceKm ?? null,
+      driverLocation: tracking?.driverLocation
+        ? {
+            lat: tracking.driverLocation.lat,
+            lng: tracking.driverLocation.lng,
+            timestamp: tracking.driverLocation.timestamp.toISOString(),
+          }
+        : null,
+      deliveryLocation: tracking?.deliveryLocation ?? null,
+    });
     for (const client of deliveryOrderWss.clients) {
       if (client.readyState === client.OPEN) {
         client.send(msg);
@@ -433,6 +446,7 @@ export async function registerRoutes(
           driverId: loc.driverId,
           lat: loc.lat,
           lng: loc.lng,
+          timestamp: loc.timestamp.toISOString(),
         }));
       }
     });
@@ -448,8 +462,13 @@ export async function registerRoutes(
           return;
         }
 
-        await storage.updateDriverLocation(user.id, lat, lng);
-        const payload = JSON.stringify({ driverId: user.id, lat, lng });
+        const snapshot = await storage.updateDriverLocation(user.id, lat, lng);
+        const payload = JSON.stringify({
+          driverId: snapshot.driverId,
+          lat: snapshot.lat,
+          lng: snapshot.lng,
+          timestamp: snapshot.timestamp.toISOString(),
+        });
         for (const client of driverLocationWss.clients) {
           if (client.readyState === client.OPEN) {
             client.send(payload);
@@ -494,6 +513,120 @@ export async function registerRoutes(
       });
     } else {
       socket.destroy();
+    }
+  });
+
+  app.get("/api/driver-locations", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!["driver", "admin", "super_admin"].includes(user.role)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { driverId, branchId } = req.query as { driverId?: string; branchId?: string };
+      const conditions = [eq(users.role, "driver")] as any[];
+
+      if (user.role === "driver") {
+        if (driverId && driverId !== user.id) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        conditions.push(eq(users.id, user.id));
+      } else {
+        if (driverId) {
+          conditions.push(eq(users.id, driverId));
+        }
+        if (user.role !== "super_admin" && user.branchId) {
+          conditions.push(eq(users.branchId, user.branchId));
+        } else if (user.role === "super_admin" && branchId) {
+          conditions.push(eq(users.branchId, branchId));
+        }
+      }
+
+      const whereClause = conditions.length === 1 ? conditions[0] : and(...conditions);
+      const driverRows = await db
+        .select({
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          username: users.username,
+          branchId: users.branchId,
+        })
+        .from(users)
+        .where(whereClause);
+
+      if (driverRows.length === 0) {
+        return res.json([]);
+      }
+
+      const driverMap = new Map(
+        driverRows.map((row) => [row.id, { ...row, name: [row.firstName, row.lastName].filter(Boolean).join(" ") || row.username }]),
+      );
+      const locations = await storage.getLatestDriverLocations(driverRows.map((row) => row.id));
+
+      res.json(
+        locations.map((loc) => {
+          const info = driverMap.get(loc.driverId);
+          return {
+            driverId: loc.driverId,
+            lat: loc.lat,
+            lng: loc.lng,
+            timestamp: loc.timestamp.toISOString(),
+            driverName: info?.name ?? null,
+            branchId: info?.branchId ?? null,
+          };
+        }),
+      );
+    } catch (error) {
+      logger.error({ err: error }, "Failed to fetch driver locations");
+      res.status(500).json({ message: "Failed to fetch driver locations" });
+    }
+  });
+
+  app.get("/api/driver-locations/:driverId/history", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!["driver", "admin", "super_admin"].includes(user.role)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { driverId } = req.params;
+      if (user.role === "driver" && driverId !== user.id) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const [driver] = await db
+        .select({ id: users.id, branchId: users.branchId })
+        .from(users)
+        .where(and(eq(users.id, driverId), eq(users.role, "driver")))
+        .limit(1);
+
+      if (!driver) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+
+      if (user.role === "admin" && user.branchId && driver.branchId !== user.branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const { limit, sinceMinutes } = req.query as { limit?: string; sinceMinutes?: string };
+      const parsedLimit = limit ? Number.parseInt(limit, 10) : undefined;
+      const parsedSince = sinceMinutes ? Number.parseInt(sinceMinutes, 10) : undefined;
+      const history = await storage.getDriverLocationHistory(driverId, {
+        limit: parsedLimit != null && !Number.isNaN(parsedLimit) ? parsedLimit : undefined,
+        sinceMinutes: parsedSince != null && !Number.isNaN(parsedSince) ? parsedSince : undefined,
+      });
+
+      res.json(
+        history.map((entry) => ({
+          driverId: entry.driverId,
+          lat: entry.lat,
+          lng: entry.lng,
+          timestamp: entry.timestamp.toISOString(),
+        })),
+      );
+    } catch (error) {
+      logger.error({ err: error }, "Failed to fetch driver location history");
+      res.status(500).json({ message: "Failed to fetch driver location history" });
     }
   });
 

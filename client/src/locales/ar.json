@@ -45,6 +45,7 @@
     "status": "الحالة",
     "driver": "السائق",
     "filterByDriver": "تصفية حسب السائق",
+    "awaitingTelemetry": "في انتظار بيانات الموقع",
     "viewDetails": "عرض التفاصيل",
     "actions": "إجراءات",
     "laundryServices": "خدمات الغسيل",

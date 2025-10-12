@@ -53,8 +53,10 @@ test('authenticated driver updates broadcast using session user id', async () =>
     username === driverUser.username ? driverUser : undefined;
   storage.getUser = async (id: string) => (id === driverUser.id ? driverUser : undefined);
   const updateCalls: Array<[string, number, number]> = [];
+  const stubTimestamp = new Date("2024-01-01T00:00:00.000Z");
   storage.updateDriverLocation = async (driverId: string, lat: number, lng: number) => {
     updateCalls.push([driverId, lat, lng]);
+    return { driverId, lat, lng, timestamp: stubTimestamp };
   };
   storage.getLatestDriverLocations = async () => [];
 
@@ -91,7 +93,12 @@ test('authenticated driver updates broadcast using session user id', async () =>
       });
     });
 
-    assert.deepEqual(message, { driverId: driverUser.id, lat, lng });
+    assert.deepEqual(message, {
+      driverId: driverUser.id,
+      lat,
+      lng,
+      timestamp: stubTimestamp.toISOString(),
+    });
     assert.deepEqual(updateCalls, [[driverUser.id, lat, lng]]);
   } finally {
     storage.getUserByUsername = originalGetUserByUsername;

@@ -1,11 +1,12 @@
 import type { Express, RequestHandler } from "express";
 import type { Logger } from "pino";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   deliveryOrders,
   orders,
   users,
+  customerAddresses,
   deliveryStatusEnum,
   type DeliveryStatus,
   type User,
@@ -14,6 +15,7 @@ import {
 
 import type { IStorage } from "../storage";
 import { db } from "../db";
+import { haversineDistance } from "../utils/geolocation";
 
 type DeliveryBroadcastPayload = {
   orderId: string;
@@ -67,13 +69,15 @@ const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   cancelled: [],
 };
 
+const DEFAULT_DRIVER_SPEED_KMH = 35;
+
 interface DeliveryRoutesDeps {
   app: Express;
   storage: IStorage;
   logger: Logger;
   requireAuth: RequestHandler;
   requireAdminOrSuperAdmin: RequestHandler;
-  broadcastDeliveryUpdate: (payload: DeliveryBroadcastPayload) => void;
+  broadcastDeliveryUpdate: (payload: DeliveryBroadcastPayload) => Promise<void>;
 }
 
 function isValidStatus(value: string): value is DeliveryStatus {
@@ -224,7 +228,90 @@ export function registerDeliveryRoutes({
         ? await storage.getDeliveryOrdersByDriver(query.driverId, targetBranchId)
         : await storage.getDeliveryOrders(targetBranchId, statusFilter);
 
-      res.json(ordersList);
+      const deliveryAddressIds = Array.from(
+        new Set(
+          ordersList
+            .map((order) => (order as any).deliveryAddressId as string | null | undefined)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      );
+
+      const addressRows = deliveryAddressIds.length
+        ? await db
+            .select({
+              id: customerAddresses.id,
+              label: customerAddresses.label,
+              address: customerAddresses.address,
+              lat: customerAddresses.lat,
+              lng: customerAddresses.lng,
+            })
+            .from(customerAddresses)
+            .where(inArray(customerAddresses.id, deliveryAddressIds))
+        : [];
+      const addressMap = new Map(addressRows.map((addr) => [addr.id, addr]));
+
+      const driverIds = Array.from(
+        new Set(ordersList.map((o) => o.driverId).filter((id): id is string => Boolean(id))),
+      );
+
+      const driverRows = driverIds.length
+        ? await db
+            .select({
+              id: users.id,
+              firstName: users.firstName,
+              lastName: users.lastName,
+              username: users.username,
+            })
+            .from(users)
+            .where(inArray(users.id, driverIds))
+        : [];
+      const driverNameMap = new Map(
+        driverRows.map((row) => [row.id, [row.firstName, row.lastName].filter(Boolean).join(" ") || row.username]),
+      );
+
+      const driverLocationMap = new Map(
+        (driverIds.length ? await storage.getLatestDriverLocations(driverIds) : []).map((loc) => [loc.driverId, loc]),
+      );
+
+      const response = ordersList.map((entry) => {
+        const delivery = entry as typeof entry & { deliveryAddressId?: string | null };
+        const order = entry.order;
+        const address = delivery.deliveryAddressId ? addressMap.get(delivery.deliveryAddressId) : undefined;
+        const driverLocation = delivery.driverId ? driverLocationMap.get(delivery.driverId) : undefined;
+        const deliveryLat = address?.lat != null ? Number(address.lat) : null;
+        const deliveryLng = address?.lng != null ? Number(address.lng) : null;
+
+        let distanceKm: number | null = null;
+        let etaMinutes: number | null = null;
+        if (driverLocation && deliveryLat != null && deliveryLng != null) {
+          distanceKm = Math.round(haversineDistance(driverLocation.lat, driverLocation.lng, deliveryLat, deliveryLng) * 100) / 100;
+          etaMinutes = distanceKm > 0 ? Math.round(((distanceKm / DEFAULT_DRIVER_SPEED_KMH) * 60 + Number.EPSILON) * 10) / 10 : 0;
+        }
+
+        return {
+          id: order.id,
+          deliveryId: delivery.id,
+          orderId: delivery.orderId,
+          orderNumber: order.orderNumber,
+          customerName: order.customerName,
+          customerPhone: order.customerPhone,
+          deliveryAddress: address?.address ?? "",
+          deliveryAddressLabel: address?.label ?? null,
+          deliveryLat,
+          deliveryLng,
+          total: Number(order.total),
+          status: delivery.deliveryStatus,
+          driverId: delivery.driverId ?? null,
+          driverName: delivery.driverId ? driverNameMap.get(delivery.driverId) ?? null : null,
+          etaMinutes,
+          distanceKm,
+          driverLat: driverLocation?.lat ?? null,
+          driverLng: driverLocation?.lng ?? null,
+          driverLocationTimestamp: driverLocation?.timestamp.toISOString() ?? null,
+        };
+      });
+
+      res.json(response);
     } catch (error) {
       logger.error({ err: error }, "Failed to fetch delivery orders");
       res.status(500).json({ message: "Failed to fetch delivery orders" });
@@ -291,7 +378,7 @@ export function registerDeliveryRoutes({
       }
 
       res.json(updated);
-      broadcastDeliveryUpdate({
+      await broadcastDeliveryUpdate({
         orderId: updated.orderId,
         deliveryStatus: updated.deliveryStatus,
         driverId: updated.driverId || null,
