@@ -12,8 +12,24 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Customer, InsertCustomer, Payment, InsertPayment, LoyaltyHistory, insertCustomerSchema } from "@shared/schema";
 import { CitySelect } from "@/components/city-select";
-import { Search, Plus, Phone, DollarSign, CreditCard, User, Calendar, UserX, Truck } from "lucide-react";
-import { format } from "date-fns";
+import {
+  Search,
+  Plus,
+  Phone,
+  DollarSign,
+  CreditCard,
+  User,
+  Calendar,
+  UserX,
+  Truck,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Download,
+  BarChart3,
+  AlertTriangle,
+} from "lucide-react";
+import { format, differenceInDays } from "date-fns";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslation } from "@/lib/i18n";
@@ -196,15 +212,53 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
     remaining: string;
   }
 
-  interface CustomerPackage {
-    id: string;
-    nameEn: string;
-    nameAr: string | null;
-    balance: number;
-    totalCredits: number;
-    startsAt: string;
-    expiresAt: string | null;
-  }
+interface CustomerPackage {
+  id: string;
+  nameEn: string;
+  nameAr: string | null;
+  balance: number;
+  totalCredits: number;
+  startsAt: string;
+  expiresAt: string | null;
+}
+
+interface CustomerInsightMonthly {
+  month: string;
+  total: number;
+  orderCount: number;
+}
+
+interface CustomerInsightService {
+  service: string;
+  quantity: number;
+  revenue: number;
+}
+
+interface CustomerInsightClothing {
+  item: string;
+  quantity: number;
+  revenue: number;
+}
+
+interface CustomerInsightRecord {
+  customerId: string;
+  name: string;
+  phoneNumber: string;
+  loyaltyPoints: number;
+  balanceDue: number;
+  totalSpend: number;
+  lastOrderDate: string | null;
+  orderCount: number;
+  averageOrderValue: number;
+  monthlySpend: CustomerInsightMonthly[];
+  topServices: CustomerInsightService[];
+  topClothing: CustomerInsightClothing[];
+}
+
+interface CustomerInsightResponse {
+  items: CustomerInsightRecord[];
+  total: number;
+}
 
   const { data: customerOrders = [] } = useQuery<CustomerOrder[]>({
     queryKey: ["/api/customers", reportCustomer?.id, "orders"],
@@ -266,6 +320,27 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
       return res.json();
     },
   });
+
+  const {
+    data: insightsData,
+    isFetching: insightsLoading,
+  } = useQuery<CustomerInsightResponse>({
+    queryKey: ["/api/reports/customer-insights", branch?.id],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("limit", "25");
+      if (branch?.id) {
+        params.set("branchId", branch.id);
+      }
+      const response = await fetch(`/api/reports/customer-insights?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch customer insights");
+      return response.json();
+    },
+  });
+
+  const insights = insightsData?.items ?? [];
 
   const addCustomerMutation = useMutation({
     mutationFn: async (customer: CustomerWithCity) => {
@@ -518,6 +593,82 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const formatMonthLabel = (month: string) => {
+    try {
+      const [year, mon] = month.split("-");
+      if (!year || !mon) return month;
+      const date = new Date(Number(year), Number(mon) - 1, 1);
+      return format(date, "MMM yy");
+    } catch (error) {
+      return month;
+    }
+  };
+
+  const getChurnRisk = (lastOrderDate: string | null) => {
+    if (!lastOrderDate) {
+      return {
+        label: "No orders yet",
+        className: "border-slate-200 bg-slate-100 text-slate-700",
+        icon: <Minus className="h-3 w-3" />,
+      };
+    }
+    const days = differenceInDays(new Date(), new Date(lastOrderDate));
+    if (!Number.isFinite(days)) {
+      return {
+        label: "Unknown",
+        className: "border-slate-200 bg-slate-100 text-slate-700",
+        icon: <AlertTriangle className="h-3 w-3" />,
+      };
+    }
+    if (days <= 30) {
+      return {
+        label: "Low risk",
+        className: "border-emerald-200 bg-emerald-100 text-emerald-700",
+        icon: <TrendingUp className="h-3 w-3" />,
+      };
+    }
+    if (days <= 60) {
+      return {
+        label: "Moderate risk",
+        className: "border-amber-200 bg-amber-100 text-amber-700",
+        icon: <AlertTriangle className="h-3 w-3" />,
+      };
+    }
+    return {
+      label: "High risk",
+      className: "border-red-200 bg-red-100 text-red-700",
+      icon: <TrendingDown className="h-3 w-3" />,
+    };
+  };
+
+  const handleInsightsExportCSV = () => {
+    if (!insights.length) return;
+    const rows = insights.map((insight) => {
+      const churn = getChurnRisk(insight.lastOrderDate);
+      const topServices = insight.topServices
+        .slice(0, 3)
+        .map((svc) => `${svc.service} (${svc.quantity})`)
+        .join("; ");
+      const topClothing = insight.topClothing
+        .slice(0, 3)
+        .map((item) => `${item.item} (${item.quantity})`)
+        .join("; ");
+      return {
+        customer: insight.name,
+        phone: insight.phoneNumber,
+        totalSpend: insight.totalSpend.toFixed(2),
+        lastOrder: insight.lastOrderDate ? format(new Date(insight.lastOrderDate), "yyyy-MM-dd") : "",
+        loyaltyPoints: insight.loyaltyPoints,
+        churnRisk: churn.label,
+        orderCount: insight.orderCount,
+        averageOrderValue: insight.averageOrderValue.toFixed(2),
+        topServices,
+        topClothing,
+      };
+    });
+    downloadCSV(rows, "customer_insights.csv");
   };
 
   const handlePaymentsExportPDF = async () => {
@@ -797,6 +948,175 @@ export function CustomerManagement({ onCustomerSelect }: CustomerManagementProps
           </DialogContent>
         </Dialog>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <BarChart3 className="h-5 w-5 text-primary" />
+              Customer Insights
+            </CardTitle>
+            <CardDescription>
+              Understand loyalty momentum and service preferences at a glance.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleInsightsExportCSV}
+              disabled={insightsLoading || insights.length === 0}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {t.exportCSV}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {insightsLoading ? (
+            <p className="text-sm text-muted-foreground">{t.loading}</p>
+          ) : insights.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No insight data available yet.</p>
+          ) : (
+            <div className="space-y-4">
+              {insights.map((insight) => {
+                const monthlySorted = [...insight.monthlySpend].sort((a, b) =>
+                  a.month.localeCompare(b.month),
+                );
+                const lastThree = monthlySorted.slice(-3);
+                const last = lastThree[lastThree.length - 1];
+                const previous = lastThree[lastThree.length - 2];
+                const trendValue = last && previous ? last.total - previous.total : 0;
+                const trendIcon = trendValue > 0 ? (
+                  <TrendingUp className="h-4 w-4" />
+                ) : trendValue < 0 ? (
+                  <TrendingDown className="h-4 w-4" />
+                ) : (
+                  <Minus className="h-4 w-4" />
+                );
+                const trendText =
+                  trendValue > 0
+                    ? `+${formatCurrency(trendValue)} vs last month`
+                    : trendValue < 0
+                    ? `-${formatCurrency(Math.abs(trendValue))} vs last month`
+                    : "Steady vs last month";
+                const trendClass =
+                  trendValue > 0
+                    ? "text-emerald-600"
+                    : trendValue < 0
+                    ? "text-amber-600"
+                    : "text-slate-600";
+                const churn = getChurnRisk(insight.lastOrderDate);
+                const lastOrderLabel = insight.lastOrderDate
+                  ? format(new Date(insight.lastOrderDate), "MMM dd, yyyy")
+                  : "No orders yet";
+
+                return (
+                  <div
+                    key={insight.customerId}
+                    className="rounded-lg border bg-card p-4 shadow-sm"
+                  >
+                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold">{insight.name}</h3>
+                          <Badge variant="outline" className={`flex items-center gap-1 ${churn.className}`}>
+                            {churn.icon}
+                            {churn.label}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{insight.phoneNumber}</p>
+                        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+                          <span>
+                            {t.totalSpent}: <strong>{formatCurrency(insight.totalSpend)}</strong>
+                          </span>
+                          <span>
+                            {t.orders}: <strong>{insight.orderCount}</strong>
+                          </span>
+                          <span>
+                            {t.loyaltyPoints}: <strong>{insight.loyaltyPoints}</strong>
+                          </span>
+                          <span>
+                            Avg. order: <strong>{formatCurrency(insight.averageOrderValue)}</strong>
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-2 text-sm">
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Last order</div>
+                          <div className="font-medium">{lastOrderLabel}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase text-muted-foreground">Loyalty trend</div>
+                          <div className={`flex items-center gap-2 font-medium ${trendClass}`}>
+                            {trendIcon}
+                            <span>{trendText}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="text-xs uppercase text-muted-foreground mb-2">Top services</div>
+                        {insight.topServices.length ? (
+                          <div className="flex flex-wrap gap-2">
+                            {insight.topServices.slice(0, 4).map((svc) => (
+                              <Badge
+                                key={`${insight.customerId}-${svc.service}`}
+                                variant="outline"
+                                className="border-blue-200 bg-blue-50 text-blue-700"
+                              >
+                                {svc.service} • {svc.quantity}x
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">No service data</p>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-xs uppercase text-muted-foreground mb-2">Top clothing</div>
+                        {insight.topClothing.length ? (
+                          <div className="flex flex-wrap gap-2">
+                            {insight.topClothing.slice(0, 4).map((item) => (
+                              <Badge
+                                key={`${insight.customerId}-${item.item}`}
+                                variant="outline"
+                                className="border-violet-200 bg-violet-50 text-violet-700"
+                              >
+                                {item.item} • {item.quantity}x
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">No clothing data</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <div className="text-xs uppercase text-muted-foreground mb-2">Recent months</div>
+                      {lastThree.length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {lastThree.map((entry) => (
+                            <span
+                              key={`${insight.customerId}-${entry.month}`}
+                              className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
+                            >
+                              {formatMonthLabel(entry.month)} • {formatCurrency(entry.total)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Not enough data yet.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="relative">
         <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
