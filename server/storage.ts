@@ -4571,7 +4571,9 @@ export class DatabaseStorage {
         : [];
       const preferredChanged = !arraysEqual(planPreferred, insight.preferredServices);
       const normalizedChannel =
-        existingPlan.recommendedChannel === "sms" || existingPlan.recommendedChannel === "email"
+        existingPlan.recommendedChannel === "sms" ||
+        existingPlan.recommendedChannel === "email" ||
+        existingPlan.recommendedChannel === "chat"
           ? existingPlan.recommendedChannel
           : null;
       const planNextContact = existingPlan.nextContactAt ? new Date(existingPlan.nextContactAt) : null;
@@ -4623,7 +4625,9 @@ export class DatabaseStorage {
         : null;
       insight.lastActionAt = existingPlan.lastActionAt ? new Date(existingPlan.lastActionAt).toISOString() : null;
       insight.lastActionChannel =
-        existingPlan.lastActionChannel === "sms" || existingPlan.lastActionChannel === "email"
+        existingPlan.lastActionChannel === "sms" ||
+        existingPlan.lastActionChannel === "email" ||
+        existingPlan.lastActionChannel === "chat"
           ? existingPlan.lastActionChannel
           : null;
       insight.lastOutcome = existingPlan.lastOutcome ?? null;
