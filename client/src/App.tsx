@@ -21,6 +21,9 @@ import DriverDashboard from "@/pages/driver";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { ThemeProvider } from "@/theme";
 import CommandCenterPage from "@/pages/customers/CommandCenter";
+import { CommandPaletteProvider } from "@/hooks/useCommandPalette";
+import CommandPalette from "@/components/navigation/CommandPalette";
+import { TourProvider } from "@/components/onboarding/TourProvider";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuthContext();
@@ -58,10 +61,15 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ThemeProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Router />
-          </TooltipProvider>
+          <CommandPaletteProvider>
+            <TourProvider>
+              <TooltipProvider>
+                <Toaster />
+                <CommandPalette />
+                <Router />
+              </TooltipProvider>
+            </TourProvider>
+          </CommandPaletteProvider>
         </ThemeProvider>
       </AuthProvider>
     </QueryClientProvider>
