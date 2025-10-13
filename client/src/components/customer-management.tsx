@@ -256,7 +256,7 @@ interface CustomerInsightClothing {
   revenue: number;
 }
 
-type EngagementChannel = "sms" | "email";
+type EngagementChannel = "sms" | "email" | "chat";
 type CustomerChurnTier = "no_orders" | "new" | "steady" | "loyal" | "at_risk" | "dormant";
 
 interface CustomerInsightRecord {
