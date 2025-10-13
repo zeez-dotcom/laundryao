@@ -1,4 +1,4 @@
-import React, { useState, Suspense } from "react";
+import React, { useEffect, useMemo, useState, Suspense } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { POSHeader } from "@/components/pos-header";
 import { POSSidebar } from "@/components/pos-sidebar";
@@ -8,7 +8,6 @@ import { ServiceSelectionModal } from "@/components/service-selection-modal";
 import { ReceiptModal } from "@/components/receipt-modal";
 import { InventoryManagement } from "@/components/inventory/InventoryManagement";
 import { ReportsDashboard } from "@/components/reports-dashboard";
-import { SettingsPanel } from "@/components/settings-panel";
 import { CustomerManagement } from "@/components/customer-management";
 import { OrderTracking } from "@/components/order-tracking";
 import { DeliveryOrderRequests } from "@/components/branch/DeliveryOrderRequests";
@@ -30,6 +29,8 @@ import { Button } from "@/components/ui/button";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslationContext } from "@/context/TranslationContext";
 import { buildReceiptData } from "@/lib/receipt";
+import CardGrid, { type CardGridCard } from "@/components/layout/CardGrid";
+import { GlossaryTooltip, useTour } from "@/components/onboarding/TourProvider";
 
 const OrderManagementDashboard = React.lazy(() =>
   import(/* webpackPrefetch: true */ "@/components/branch/OrderManagementDashboard").then(
@@ -77,6 +78,46 @@ export default function POS() {
   } = useLaundryCart();
 
   const cartSummary = getCartSummary();
+  const { registerTour, startTour, isTourDismissed, registerGlossaryEntries } = useTour();
+
+  useEffect(() => {
+    registerGlossaryEntries([
+      {
+        term: "Progressive disclosure",
+        description: "Operators expand accordions to reveal advanced POS tools only when they need them.",
+      },
+      {
+        term: "Session checklist",
+        description: "Persistent reminders that ensure every order is complete before handoff.",
+      },
+    ]);
+    const cleanup = registerTour({
+      id: "pos-sales",
+      title: "POS workspace tour",
+      description: "Learn how the new card layout guides selling workflows.",
+      steps: [
+        {
+          id: "pos-card-grid",
+          title: "Card-based layout",
+          description: "Each card holds a major task. Expand sections to reveal catalog tools and cart management.",
+        },
+        {
+          id: "pos-accordion",
+          title: "Catalog to checkout",
+          description: "Use the catalog accordion to add items, then jump to the checkout accordion without leaving the page.",
+        },
+        {
+          id: "pos-checklist",
+          title: "Session checklist",
+          description: "Track payment, coupons, and receipts so no detail is missed.",
+        },
+      ],
+    });
+    if (!isTourDismissed("pos-sales")) {
+      startTour("pos-sales");
+    }
+    return () => cleanup();
+  }, [isTourDismissed, registerGlossaryEntries, registerTour, startTour]);
 
   const checkoutMutation = useMutation({
     mutationFn: async ({ order, transaction }: { order: any; transaction?: any }) => {
@@ -306,106 +347,509 @@ export default function POS() {
     );
   };
 
-  // Non-sales views placeholder
-  const renderActiveView = () => {
+  const paymentSummary = useMemo(() => {
+    switch (paymentMethod) {
+      case "cash":
+        return "Cash";
+      case "card":
+        return "Card";
+      case "pay_later":
+      default:
+        return "Pay later";
+    }
+  }, [paymentMethod]);
+
+  const salesCards = useMemo<CardGridCard[]>(() => {
+    return [
+      {
+        id: "sales-workspace",
+        title: "Sales workspace",
+        description: "Guide every order from catalog selection to checkout without leaving the page.",
+        icon: <ShoppingCart className="size-5" aria-hidden="true" />,
+        accent: "primary",
+        accordionSections: [
+          {
+            id: "sales-catalog",
+            title: "Catalog & services",
+            summary: `Items in cart: ${cartSummary.itemCount}`,
+            defaultOpen: true,
+            content: (
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+                <div className="flex-1">
+                  <ProductGrid
+                    onAddToCart={handleSelectClothingItem}
+                    cartItemCount={cartSummary.itemCount}
+                    onToggleCart={toggleCart}
+                    branchCode={branch?.code}
+                  />
+                </div>
+                <div className="lg:w-[26rem]">
+                  <LaundryCartSidebar
+                    cartSummary={cartSummary}
+                    getCartSummary={getCartSummary}
+                    paymentMethod={paymentMethod}
+                    selectedCustomer={selectedCustomer}
+                    onUpdateQuantity={updateQuantity}
+                    onRemoveItem={removeFromCart}
+                    onClearCart={clearCart}
+                    onSelectPayment={setPaymentMethod}
+                    onSelectCustomer={setSelectedCustomer}
+                    onCheckout={handleCheckout}
+                    isVisible={isCartVisible}
+                    onClose={() => setIsCartVisible(false)}
+                    appliedCoupon={appliedCoupon}
+                    couponCode={couponCode}
+                    isCouponLoading={isCouponLoading}
+                    couponError={couponError}
+                    onApplyCoupon={applyCoupon}
+                    onRemoveCoupon={removeCoupon}
+                    setCouponCode={setCouponCode}
+                  />
+                </div>
+              </div>
+            ),
+          },
+          {
+            id: "sales-summary",
+            title: "Session summary",
+            summary: `Current total: ${formatCurrency(cartSummary.total)}`,
+            content: (
+              <div className="space-y-3 text-[var(--text-sm)] text-muted-foreground">
+                <div>
+                  <span className="font-medium text-foreground">Payment method:</span> {paymentSummary}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Customer:</span> {selectedCustomer?.name ?? "Walk-in"}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Coupon:</span> {appliedCoupon?.code ?? "None"}
+                  {couponError ? <span className="ml-2 text-destructive">{couponError}</span> : null}
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Cart items:</span> {cartSummary.items.length}
+                </div>
+              </div>
+            ),
+          },
+        ],
+        checklist: [
+          {
+            id: "select-customer",
+            label: "Confirm customer profile",
+            description: "Select or create the customer before adding loyalty rewards.",
+          },
+          {
+            id: "apply-coupon",
+            label: "Check for active coupons",
+            description: "Search for campaign codes before finishing payment.",
+          },
+          {
+            id: "send-receipt",
+            label: "Send a digital receipt",
+            description: "Email or SMS the receipt immediately after payment posts.",
+          },
+        ],
+        persistChecklistKey: "pos-sales",
+      },
+    ];
+  }, [
+    appliedCoupon?.code,
+    applyCoupon,
+    branch?.code,
+    cartSummary.itemCount,
+    cartSummary.items.length,
+    cartSummary.total,
+    clearCart,
+    couponCode,
+    couponError,
+    formatCurrency,
+    getCartSummary,
+    handleCheckout,
+    handleSelectClothingItem,
+    isCartVisible,
+    isCouponLoading,
+    paymentMethod,
+    paymentSummary,
+    removeCoupon,
+    removeFromCart,
+    selectedCustomer,
+    setPaymentMethod,
+    setSelectedCustomer,
+    setCouponCode,
+    toggleCart,
+    updateQuantity,
+  ]);
+
+  const viewCards = useMemo<CardGridCard[]>(() => {
     switch (activeView) {
       case "sales":
-        return (
-          <>
-            <ProductGrid
-              onAddToCart={handleSelectClothingItem}
-              cartItemCount={cartSummary.itemCount}
-              onToggleCart={toggleCart}
-              branchCode={branch?.code}
-            />
-            
-            <LaundryCartSidebar
-              cartSummary={cartSummary}
-              getCartSummary={getCartSummary}
-              paymentMethod={paymentMethod}
-              selectedCustomer={selectedCustomer}
-              onUpdateQuantity={updateQuantity}
-              onRemoveItem={removeFromCart}
-              onClearCart={clearCart}
-              onSelectPayment={setPaymentMethod}
-              onSelectCustomer={setSelectedCustomer}
-              onCheckout={handleCheckout}
-              isVisible={isCartVisible}
-              onClose={() => setIsCartVisible(false)}
-              // Coupon functionality
-              appliedCoupon={appliedCoupon}
-              couponCode={couponCode}
-              isCouponLoading={isCouponLoading}
-              couponError={couponError}
-              onApplyCoupon={applyCoupon}
-              onRemoveCoupon={removeCoupon}
-              setCouponCode={setCouponCode}
-            />
-          </>
-        );
+        return salesCards;
       case "customers":
-        return (
-          <CustomerManagement 
-            onCustomerSelect={(customer) => {
-              setSelectedCustomer(customer);
-              setActiveView("sales");
-            }}
-          />
-        );
+        return [
+          {
+            id: "customers",
+            title: "Customer management",
+            description: "Search, edit, and assign customers during checkout.",
+            icon: <Users className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "customers-workspace",
+                title: "Customer workspace",
+                summary: "Locate customers, update records, and attach to the active sale.",
+                defaultOpen: true,
+                content: (
+                  <CustomerManagement
+                    onCustomerSelect={(customer) => {
+                      setSelectedCustomer(customer);
+                      setActiveView("sales");
+                    }}
+                  />
+                ),
+              },
+            ],
+            checklist: [
+              {
+                id: "verify-contact",
+                label: "Verify contact details",
+                description: "Confirm phone and address before scheduling delivery.",
+              },
+              {
+                id: "check-loyalty",
+                label: "Review loyalty status",
+                description: "Mention available rewards to boost retention.",
+              },
+              {
+                id: "note-preferences",
+                label: "Capture customer preferences",
+                description: "Record fabric care notes or delivery instructions.",
+              },
+            ],
+            persistChecklistKey: "pos-customers",
+          },
+        ];
       case "orders":
-        return <OrderTracking />;
+        return [
+          {
+            id: "orders",
+            title: "Order tracking",
+            description: "Monitor live order status without leaving the POS.",
+            icon: <Truck className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "orders-feed",
+                title: "Active orders",
+                summary: "See real-time updates for in-store and delivery orders.",
+                defaultOpen: true,
+                content: <OrderTracking />,
+              },
+            ],
+            checklist: [
+              {
+                id: "update-status",
+                label: "Update delayed orders",
+                description: "Notify customers proactively when pickups slip.",
+              },
+              {
+                id: "confirm-delivery",
+                label: "Confirm delivery windows",
+                description: "Double-check driver assignments for rush orders.",
+              },
+            ],
+            persistChecklistKey: "pos-orders",
+          },
+        ];
       case "order-management":
-        return (
-          <Suspense fallback={<LoadingScreen message="Loading order management..." />}>
-            <OrderManagementDashboard />
-          </Suspense>
-        );
+        return [
+          {
+            id: "order-management",
+            title: "Operations dashboard",
+            description: "Batch manage tickets, SLAs, and escalations.",
+            icon: <TrendingUp className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "order-management-workspace",
+                title: "Management workspace",
+                summary: "Bulk actions and escalations for complex orders.",
+                defaultOpen: true,
+                content: (
+                  <Suspense fallback={<LoadingScreen message="Loading order management..." />}>
+                    <OrderManagementDashboard />
+                  </Suspense>
+                ),
+              },
+            ],
+            checklist: [
+              {
+                id: "audit-sla",
+                label: "Audit SLA breaches",
+                description: "Resolve escalations before close of business.",
+              },
+              {
+                id: "assign-followup",
+                label: "Assign follow-up",
+                description: "Route complex issues to the right owner.",
+              },
+            ],
+            persistChecklistKey: "pos-order-management",
+          },
+        ];
       case "packages":
-        return (
-          <div className="flex-1 flex flex-col p-4">
-            <div className="flex justify-end mb-4">
-              <Button onClick={() => setShowChatbot((prev) => !prev)}>
-                Package Assistant
-              </Button>
-            </div>
-            <PackageList />
-            <PackageChatbot open={showChatbot} onClose={() => setShowChatbot(false)} />
-          </div>
-        );
+        return [
+          {
+            id: "packages",
+            title: "Package center",
+            description: "Manage bundles and let the assistant answer questions.",
+            icon: <Package className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "packages-workspace",
+                title: "Package catalog",
+                summary: "Create, edit, and review package usage.",
+                defaultOpen: true,
+                content: (
+                  <div className="space-y-4">
+                    <div className="flex justify-end">
+                      <Button onClick={() => setShowChatbot((prev) => !prev)} variant="outline" size="sm">
+                        {showChatbot ? "Hide assistant" : "Open package assistant"}
+                      </Button>
+                    </div>
+                    <PackageList />
+                    <PackageChatbot open={showChatbot} onClose={() => setShowChatbot(false)} />
+                  </div>
+                ),
+              },
+            ],
+            checklist: [
+              {
+                id: "package-refresh",
+                label: "Refresh bundle pricing",
+                description: "Ensure discounts match current promotions.",
+              },
+              {
+                id: "assistant-demo",
+                label: "Demo assistant",
+                description: "Walk teammates through the chatbot recommendations.",
+              },
+            ],
+            persistChecklistKey: "pos-packages",
+          },
+        ];
       case "reports":
-        return <ReportsDashboard />;
+        return [
+          {
+            id: "reports",
+            title: "Performance reports",
+            description: "Monitor sales velocity and staff productivity.",
+            icon: <BarChart3 className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "reports-dashboard",
+                title: "Analytics dashboard",
+                summary: "Track KPIs in real time.",
+                defaultOpen: true,
+                content: <ReportsDashboard />,
+              },
+            ],
+            checklist: [
+              {
+                id: "share-daily",
+                label: "Share daily snapshot",
+                description: "Post key KPIs to the operations channel at close.",
+              },
+              {
+                id: "watch-trends",
+                label: "Watch order trends",
+                description: "Compare today against last week to adjust staffing.",
+              },
+            ],
+            persistChecklistKey: "pos-reports",
+          },
+        ];
       case "delivery-order-requests":
-        return <DeliveryOrderRequests />;
+        return [
+          {
+            id: "delivery-requests",
+            title: "Delivery requests",
+            description: "Approve or reject new delivery pickups.",
+            icon: <Truck className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "delivery-requests-workspace",
+                title: "Requests queue",
+                summary: "Process new pickup and drop-off requests.",
+                defaultOpen: true,
+                content: <DeliveryOrderRequests />,
+              },
+            ],
+            checklist: [
+              {
+                id: "route-balance",
+                label: "Balance driver routes",
+                description: "Distribute pickups evenly across available drivers.",
+              },
+              {
+                id: "confirm-window",
+                label: "Confirm service window",
+                description: "Verify requested times align with branch capacity.",
+              },
+            ],
+            persistChecklistKey: "pos-delivery-requests",
+          },
+        ];
       case "delivery-orders":
-        return <DeliveryOrders />;
+        return [
+          {
+            id: "delivery-orders",
+            title: "Delivery monitoring",
+            description: "Track active delivery jobs and completion status.",
+            icon: <Truck className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "delivery-orders-workspace",
+                title: "Active deliveries",
+                summary: "See driver progress and mark deliveries complete.",
+                defaultOpen: true,
+                content: <DeliveryOrders />,
+              },
+            ],
+            checklist: [
+              {
+                id: "notify-customer",
+                label: "Notify customer on completion",
+                description: "Send confirmation as soon as the driver marks delivery done.",
+              },
+              {
+                id: "flag-issues",
+                label: "Flag delivery issues",
+                description: "Escalate late or failed deliveries immediately.",
+              },
+            ],
+            persistChecklistKey: "pos-delivery-orders",
+          },
+        ];
       case "inventory":
-        return <InventoryManagement />;
+        return [
+          {
+            id: "inventory",
+            title: "Inventory management",
+            description: "Track stock levels and adjust availability.",
+            icon: <Settings className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "inventory-workspace",
+                title: "Inventory workspace",
+                summary: "Adjust stock and sync with suppliers.",
+                defaultOpen: true,
+                content: <InventoryManagement />,
+              },
+            ],
+            checklist: [
+              {
+                id: "reorder-points",
+                label: "Review reorder points",
+                description: "Update thresholds after major promotions.",
+              },
+              {
+                id: "sync-suppliers",
+                label: "Sync with suppliers",
+                description: "Send purchase orders for low-stock categories.",
+              },
+            ],
+            persistChecklistKey: "pos-inventory",
+          },
+        ];
       case "settings":
-        return <SystemSettings />;
+        return [
+          {
+            id: "settings",
+            title: "System settings",
+            description: "Configure receipt printing, taxes, and integrations.",
+            icon: <Settings className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "settings-panel",
+                title: "Settings workspace",
+                summary: "Adjust POS defaults and integrations.",
+                defaultOpen: true,
+                content: <SystemSettings />,
+              },
+            ],
+            checklist: [
+              {
+                id: "backup-config",
+                label: "Backup configuration",
+                description: "Export settings after making critical changes.",
+              },
+              {
+                id: "announce-change",
+                label: "Announce changes",
+                description: "Notify staff about new hardware or policy updates.",
+              },
+            ],
+            persistChecklistKey: "pos-settings",
+          },
+        ];
       default:
-        return (
-          <div className="flex-1 flex items-center justify-center bg-pos-background">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2 capitalize">{activeView}</h2>
-              <p className="text-gray-600">This section is under development</p>
-            </div>
-          </div>
-        );
+        return [];
     }
-  };
+  }, [
+    activeView,
+    salesCards,
+    setSelectedCustomer,
+    showChatbot,
+    setShowChatbot,
+    setActiveView,
+  ]);
+
+  const currentCards = viewCards.length ? viewCards : [
+    {
+      id: "upcoming",
+      title: "Coming soon",
+      description: "This module is under development.",
+      icon: <Settings className="size-5" aria-hidden="true" />,
+      accordionSections: [
+        {
+          id: "upcoming-overview",
+          title: "Preview",
+          summary: "Stay tuned for updates.",
+          defaultOpen: true,
+          content: (
+            <p className="text-[var(--text-sm)] text-muted-foreground">
+              We&apos;re actively building this workspace. Use the command palette (⌘K / Ctrl+K) to submit feedback.
+            </p>
+          ),
+        },
+      ],
+      checklist: [
+        {
+          id: "share-feedback",
+          label: "Share feedback",
+          description: "Open the command palette and log your feature request.",
+        },
+      ],
+      persistChecklistKey: "pos-upcoming",
+    },
+  ];
 
   return (
-    <div className="flex flex-col h-screen bg-pos-background">
-      <POSHeader
-        cartItemCount={cartSummary.itemCount}
-        onToggleCart={toggleCart}
-      />
+    <div className="flex h-screen flex-col bg-[var(--pos-background)]">
+      <POSHeader cartItemCount={cartSummary.itemCount} onToggleCart={toggleCart} />
+
+      <div className="hidden border-b bg-[var(--surface-elevated)] px-6 py-3 text-[var(--text-sm)] text-muted-foreground lg:flex lg:items-center lg:justify-between">
+        <span>
+          Work the shift with <GlossaryTooltip term="Progressive disclosure" className="ml-1" /> and a persistent
+          <GlossaryTooltip term="Session checklist" className="ml-1" />.
+        </span>
+        <LanguageSelector />
+      </div>
 
       <div className="flex flex-1 overflow-hidden">
         <POSSidebar activeView={activeView} onViewChange={setActiveView} />
 
-        <main className={`flex-1 ${activeView === "sales" ? "flex flex-col lg:flex-row" : "flex"} overflow-hidden`}>
-          {renderActiveView()}
+        <main className="flex-1 overflow-y-auto bg-[var(--surface-muted)]">
+          <div className="px-4 py-6 lg:px-8">
+            <CardGrid cards={currentCards} columns={{ base: 1 }} className="pb-24" />
+          </div>
         </main>
       </div>
 
