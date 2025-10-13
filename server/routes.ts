@@ -70,11 +70,13 @@ import { NotificationService } from "./services/notification";
 import { registerHealthRoutes } from "./routes/health";
 import { registerCatalogRoutes } from "./routes/catalog";
 import { registerDeliveryRoutes } from "./routes/delivery";
+import { registerCustomerCommandCenterRoutes } from "./routes/customers/command-center";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
+import { CustomerInsightsService } from "./services/customer-insights";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
 async function resolveUuidByPublicId(table: any, idParam: string) {
@@ -1225,6 +1227,15 @@ export async function registerRoutes(
     requireAuth,
     requireAdminOrSuperAdmin,
     broadcastDeliveryUpdate,
+  });
+
+  const customerInsightsService = new CustomerInsightsService();
+  registerCustomerCommandCenterRoutes({
+    app,
+    storage,
+    requireAdminOrSuperAdmin,
+    logger,
+    customerInsightsService,
   });
 
   app.put("/api/users/:id", requireAuth, async (req, res, next) => {

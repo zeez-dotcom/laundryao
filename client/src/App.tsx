@@ -20,6 +20,7 @@ import CustomerDashboardPage from "@/pages/customer-dashboard";
 import DriverDashboard from "@/pages/driver";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { ThemeProvider } from "@/theme";
+import CommandCenterPage from "@/pages/customers/CommandCenter";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuthContext();
@@ -43,6 +44,9 @@ function Router() {
       {isAuthenticated && <Route path="/" component={POS} />}
       {isAuthenticated && <Route path="/admin" component={AdminDashboard} />}
       {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
+      {isAuthenticated && (
+        <Route path="/customers/:id/command-center" component={CommandCenterPage} />
+      )}
       {isAuthenticated && <Route path="/driver" component={DriverDashboard} />}
       <Route component={NotFound} />
     </Switch>

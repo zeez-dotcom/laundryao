@@ -96,6 +96,7 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 - `GET/PUT /api/customer-insights/:id/actions` returns or overrides the stored action plan (next contact, channel, notes).
 - `POST /api/customer-insights/actions/bulk-send` queues SMS/email notifications, enforces rate limits (default 24h), and records outcomes for each customer.
 - Admin UI supports filtering insights by churn tier, reviewing suggested actions, and confirming bulk outreach with template placeholders (e.g., `{name}`).
+- Command center dossier (`GET /api/customers/:id/command-center`) aggregates profile, order history, balances, package usage, AI-generated summaries, outreach timeline, and exposes inline actions that call existing REST endpoints (payments, customer-insights). Audit entries can be pushed via `POST /api/customers/:id/command-center/audit`.
 
 ## 4. Functional Requirements
 
