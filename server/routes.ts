@@ -4319,7 +4319,7 @@ export async function registerRoutes(
       const schema = z
         .object({
           recommendedAction: z.string().trim().max(500).optional().nullable(),
-          recommendedChannel: z.enum(["sms", "email"]).optional().nullable(),
+          recommendedChannel: z.enum(["sms", "email", "chat"]).optional().nullable(),
           nextContactAt: z.string().datetime().optional().nullable(),
           lastOutcome: z.string().trim().max(500).optional().nullable(),
           planSource: z.enum(["auto", "manual"]).optional(),

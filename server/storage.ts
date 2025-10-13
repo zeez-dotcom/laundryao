@@ -311,7 +311,7 @@ export interface CustomerInsightClothingBreakdown {
 
 export type CustomerChurnTier = "new" | "steady" | "loyal" | "at_risk" | "dormant" | "no_orders";
 
-export type CustomerEngagementChannel = "sms" | "email";
+export type CustomerEngagementChannel = "sms" | "email" | "chat";
 
 export interface CustomerInsight {
   customerId: string;
@@ -4160,7 +4160,8 @@ export class DatabaseStorage {
     }
     if (typeof updates.recommendedChannel !== "undefined") {
       const channel = updates.recommendedChannel;
-      sanitized.recommendedChannel = channel === "sms" || channel === "email" ? channel : null;
+      sanitized.recommendedChannel =
+        channel === "sms" || channel === "email" || channel === "chat" ? channel : null;
     }
     if (typeof updates.nextContactAt !== "undefined") {
       sanitized.nextContactAt = updates.nextContactAt ?? null;
@@ -4170,7 +4171,8 @@ export class DatabaseStorage {
     }
     if (typeof updates.lastActionChannel !== "undefined") {
       const channel = updates.lastActionChannel;
-      sanitized.lastActionChannel = channel === "sms" || channel === "email" ? channel : null;
+      sanitized.lastActionChannel =
+        channel === "sms" || channel === "email" || channel === "chat" ? channel : null;
     }
     if (typeof updates.lastOutcome !== "undefined") {
       sanitized.lastOutcome = updates.lastOutcome ?? null;
