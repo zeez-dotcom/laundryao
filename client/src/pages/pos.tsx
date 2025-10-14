@@ -144,14 +144,17 @@ export default function POS() {
         };
         setCurrentTransaction(buildReceiptData(txWithCustomer, branch as any, user));
         toast({
-          title: "Order completed successfully",
-          description: `Total: ${formatCurrency(order.total)}`,
+          title: t.posOrderCompletedTitle,
+          description: `${t.total}: ${formatCurrency(order.total)}`,
         });
       } else {
         setCurrentTransaction(null);
         toast({
-          title: "Order created successfully",
-          description: `Pay-later order for ${order.customerName} has been created`,
+          title: t.posOrderCreatedTitle,
+          description: t.posPayLaterOrderCreated.replace(
+            "{{customerName}}",
+            order.customerName || t.posWalkInCustomer
+          ),
         });
       }
 
@@ -172,8 +175,8 @@ export default function POS() {
     },
     onError: (error: any) => {
       toast({
-        title: "Error",
-        description: error?.message || "Failed to process order",
+        title: t.error,
+        description: error?.message || t.posFailedToProcessOrder,
         variant: "destructive",
       });
     }
@@ -187,8 +190,11 @@ export default function POS() {
   const handleAddToCart = (clothingItem: ClothingItem, service: LaundryService, quantity: number) => {
     addToCart(clothingItem as any, service, quantity);
     toast({
-      title: "Added to cart",
-      description: `${quantity}x ${clothingItem.name} with ${service.name} service`,
+      title: t.posAddedToCartTitle,
+      description: t.posAddedToCartDescription
+        .replace("{{quantity}}", String(quantity))
+        .replace("{{itemName}}", clothingItem.name)
+        .replace("{{serviceName}}", service.name),
     });
   };
 
@@ -207,8 +213,8 @@ export default function POS() {
   ) => {
     if (cartSummary.items.length === 0) {
       toast({
-        title: "Cart is empty",
-        description: "Please add items to cart before checkout",
+        title: t.posCartEmptyTitle,
+        description: t.posCartEmptyDescription,
         variant: "destructive",
       });
       return;
@@ -218,8 +224,8 @@ export default function POS() {
     const customer = selectedCustomer || null;
     if (!branch?.code) {
       toast({
-        title: "Branch required",
-        description: "Branch code missing",
+        title: t.posBranchRequiredTitle,
+        description: t.posBranchRequiredDescription,
         variant: "destructive",
       });
       return;
@@ -350,14 +356,14 @@ export default function POS() {
   const paymentSummary = useMemo(() => {
     switch (paymentMethod) {
       case "cash":
-        return "Cash";
+        return t.cash;
       case "card":
-        return "Card";
+        return t.card;
       case "pay_later":
       default:
-        return "Pay later";
+        return t.payLater;
     }
-  }, [paymentMethod]);
+  }, [paymentMethod, t]);
 
   const salesCards = useMemo<CardGridCard[]>(() => {
     return [

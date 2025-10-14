@@ -83,12 +83,12 @@ export function POSHeader({ cartItemCount = 0, onToggleCart }: POSHeaderProps) {
 
             {/* Theme toggle (icon-only) */}
             <Button
-              aria-label="Toggle theme"
+              aria-label={t.toggleTheme}
               variant="ghost"
               size="sm"
               className="h-9 w-9 p-0 hover:bg-blue-700 text-white hover:text-white"
               onClick={toggleTheme}
-              title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+              title={theme === 'dark' ? t.switchToLight : t.switchToDark}
             >
               {theme === 'dark' ? (
                 <Sun className="h-4 w-4" />
