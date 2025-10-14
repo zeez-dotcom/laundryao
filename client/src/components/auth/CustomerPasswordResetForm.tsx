@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
@@ -6,27 +6,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Loader2, Phone, Lock, KeyRound, CheckCircle, ArrowLeft } from "lucide-react";
 import { z } from "zod";
+import { useTranslationContext } from "@/context/TranslationContext";
 
-const requestResetSchema = z.object({
-  phoneNumber: z.string().min(8, "Phone number must be at least 8 digits").regex(/^[0-9+]+$/, "Invalid phone number format"),
-});
+type RequestResetFormData = {
+  phoneNumber: string;
+};
 
-const resetPasswordSchema = z.object({
-  otp: z.string().min(6, "OTP must be 6 digits").max(6, "OTP must be 6 digits").regex(/^[0-9]+$/, "OTP must be numeric"),
-  newPassword: z.string().min(4, "Password must be at least 4 characters").max(8, "Password must be at most 8 characters"),
-  confirmPassword: z.string(),
-}).refine((data) => data.newPassword === data.confirmPassword, {
-  message: "Passwords do not match",
-  path: ["confirmPassword"],
-});
-
-type RequestResetFormData = z.infer<typeof requestResetSchema>;
-type ResetPasswordFormData = z.infer<typeof resetPasswordSchema>;
+type ResetPasswordFormData = {
+  otp: string;
+  newPassword: string;
+  confirmPassword: string;
+};
 
 interface CustomerPasswordResetFormProps {
   initialPhoneNumber?: string;
@@ -34,14 +28,48 @@ interface CustomerPasswordResetFormProps {
   onBackToLogin: () => void;
 }
 
-export function CustomerPasswordResetForm({ 
-  initialPhoneNumber = "", 
-  onSuccess, 
-  onBackToLogin 
+export function CustomerPasswordResetForm({
+  initialPhoneNumber = "",
+  onSuccess,
+  onBackToLogin
 }: CustomerPasswordResetFormProps) {
   const { toast } = useToast();
   const [step, setStep] = useState<"request" | "reset">("request");
   const [phoneNumber, setPhoneNumber] = useState(initialPhoneNumber);
+  const { t } = useTranslationContext();
+
+  const requestResetSchema = useMemo(
+    () =>
+      z.object({
+        phoneNumber: z
+          .string()
+          .min(8, t.customerAuth.validation.phoneMin)
+          .regex(/^[0-9+]+$/, t.customerAuth.validation.phoneFormat),
+      }),
+    [t],
+  );
+
+  const resetPasswordSchema = useMemo(
+    () =>
+      z
+        .object({
+          otp: z
+            .string()
+            .min(6, t.customerAuth.validation.otpLength)
+            .max(6, t.customerAuth.validation.otpLength)
+            .regex(/^[0-9]+$/, t.customerAuth.validation.otpNumeric),
+          newPassword: z
+            .string()
+            .min(4, t.customerAuth.validation.passwordMin)
+            .max(8, t.customerAuth.validation.passwordMax),
+          confirmPassword: z.string(),
+        })
+        .refine((data) => data.newPassword === data.confirmPassword, {
+          message: t.customerAuth.validation.passwordsMismatch,
+          path: ["confirmPassword"],
+        }),
+    [t],
+  );
 
   const requestForm = useForm<RequestResetFormData>({
     resolver: zodResolver(requestResetSchema),
@@ -64,18 +92,19 @@ export function CustomerPasswordResetForm({
       const response = await apiRequest("POST", "/customer/request-password-reset", data);
       return await response.json();
     },
-    onSuccess: (data) => {
-      setPhoneNumber(requestForm.getValues("phoneNumber"));
+    onSuccess: () => {
+      const currentPhone = requestForm.getValues("phoneNumber");
+      setPhoneNumber(currentPhone);
       setStep("reset");
       toast({
-        title: "OTP Sent",
-        description: "A 6-digit code has been sent to your mobile number.",
+        title: t.customerAuth.reset.toast.otpSentTitle,
+        description: t.customerAuth.reset.toast.otpSentDescription,
       });
     },
     onError: (error: any) => {
       toast({
-        title: "Failed to Send OTP",
-        description: error.message || "Unable to send OTP. Please try again.",
+        title: t.customerAuth.reset.toast.otpErrorTitle,
+        description: error.message || t.customerAuth.reset.toast.otpErrorDescription,
         variant: "destructive",
       });
     },
@@ -92,15 +121,15 @@ export function CustomerPasswordResetForm({
     },
     onSuccess: () => {
       toast({
-        title: "Password Reset Successful",
-        description: "Your password has been updated successfully.",
+        title: t.customerAuth.reset.toast.successTitle,
+        description: t.customerAuth.reset.toast.successDescription,
       });
       onSuccess();
     },
     onError: (error: any) => {
       toast({
-        title: "Password Reset Failed",
-        description: error.message || "Unable to reset password. Please try again.",
+        title: t.customerAuth.reset.toast.errorTitle,
+        description: error.message || t.customerAuth.reset.toast.errorDescription,
         variant: "destructive",
       });
     },
@@ -114,6 +143,10 @@ export function CustomerPasswordResetForm({
     resetPasswordMutation.mutate(data);
   };
 
+  const maskedPhone = phoneNumber
+    ? phoneNumber.replace(/(\d{3})\d{4}(\d{4})/, "$1****$2")
+    : phoneNumber;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-red-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
       <Card className="w-full max-w-md shadow-xl">
@@ -126,13 +159,14 @@ export function CustomerPasswordResetForm({
             )}
           </div>
           <CardTitle className="text-2xl font-bold">
-            {step === "request" ? "Reset Password" : "Enter OTP"}
+            {step === "request"
+              ? t.customerAuth.reset.titleRequest
+              : t.customerAuth.reset.titleOtp}
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            {step === "request" 
-              ? "Enter your mobile number to receive a reset code"
-              : `Enter the 6-digit code sent to ${phoneNumber.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2')}`
-            }
+            {step === "request"
+              ? t.customerAuth.reset.subtitleRequest
+              : t.customerAuth.reset.subtitleOtp.replace("{phone}", maskedPhone)}
           </p>
         </CardHeader>
 
@@ -147,13 +181,13 @@ export function CustomerPasswordResetForm({
                     <FormItem>
                       <FormLabel className="flex items-center space-x-2">
                         <Phone className="h-4 w-4" />
-                        <span>Mobile Number</span>
+                        <span>{t.customerAuth.login.phoneLabel}</span>
                       </FormLabel>
                       <FormControl>
                         <Input
                           {...field}
                           type="tel"
-                          placeholder="Enter your mobile number"
+                          placeholder={t.customerAuth.reset.phonePlaceholder}
                           className="text-lg"
                           data-testid="input-phone"
                         />
@@ -174,7 +208,9 @@ export function CustomerPasswordResetForm({
                   ) : (
                     <Phone className="h-4 w-4 mr-2" />
                   )}
-                  {requestResetMutation.isPending ? "Sending..." : "Send Reset Code"}
+                  {requestResetMutation.isPending
+                    ? t.customerAuth.reset.buttons.sendLoading
+                    : t.customerAuth.reset.buttons.send}
                 </Button>
 
                 <div className="text-center">
@@ -185,7 +221,7 @@ export function CustomerPasswordResetForm({
                     data-testid="link-back-login"
                   >
                     <ArrowLeft className="h-4 w-4 mr-1" />
-                    Back to Login
+                    {t.customerAuth.reset.buttons.backToLogin}
                   </button>
                 </div>
               </form>
@@ -195,18 +231,17 @@ export function CustomerPasswordResetForm({
           {step === "reset" && (
             <Form {...resetForm}>
               <form onSubmit={resetForm.handleSubmit(onResetPassword)} className="space-y-6">
-
                 <FormField
                   control={resetForm.control}
                   name="otp"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>6-Digit Code</FormLabel>
+                      <FormLabel>{t.customerAuth.reset.codeLabel}</FormLabel>
                       <FormControl>
                         <Input
                           {...field}
                           type="text"
-                          placeholder="000000"
+                          placeholder={t.customerAuth.reset.codePlaceholder}
                           className="text-2xl text-center tracking-widest"
                           maxLength={6}
                           data-testid="input-otp"
@@ -225,13 +260,13 @@ export function CustomerPasswordResetForm({
                       <FormItem>
                         <FormLabel className="flex items-center space-x-2">
                           <Lock className="h-4 w-4" />
-                          <span>New PIN</span>
+                          <span>{t.customerAuth.reset.newPinLabel}</span>
                         </FormLabel>
                         <FormControl>
                           <Input
                             {...field}
                             type="password"
-                            placeholder="New PIN"
+                            placeholder={t.customerAuth.reset.newPinPlaceholder}
                             className="text-lg text-center"
                             maxLength={8}
                             data-testid="input-new-password"
@@ -247,12 +282,12 @@ export function CustomerPasswordResetForm({
                     name="confirmPassword"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Confirm PIN</FormLabel>
+                        <FormLabel>{t.customerAuth.reset.confirmPinLabel}</FormLabel>
                         <FormControl>
                           <Input
                             {...field}
                             type="password"
-                            placeholder="Confirm"
+                            placeholder={t.customerAuth.reset.confirmPinPlaceholder}
                             className="text-lg text-center"
                             maxLength={8}
                             data-testid="input-confirm-password"
@@ -273,9 +308,9 @@ export function CustomerPasswordResetForm({
                     data-testid="button-back"
                   >
                     <ArrowLeft className="h-4 w-4 mr-2" />
-                    Back
+                    {t.customerAuth.reset.buttons.back}
                   </Button>
-                  
+
                   <Button
                     type="submit"
                     disabled={resetPasswordMutation.isPending}
@@ -285,7 +320,9 @@ export function CustomerPasswordResetForm({
                     {resetPasswordMutation.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     ) : null}
-                    {resetPasswordMutation.isPending ? "Updating..." : "Reset PIN"}
+                    {resetPasswordMutation.isPending
+                      ? t.customerAuth.reset.buttons.submitLoading
+                      : t.customerAuth.reset.buttons.submit}
                   </Button>
                 </div>
               </form>

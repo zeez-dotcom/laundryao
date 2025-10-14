@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -12,14 +12,13 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Loader2, Phone, Lock, LogIn, AlertCircle } from "lucide-react";
 import { z } from "zod";
+import { useTranslationContext } from "@/context/TranslationContext";
 
-const loginSchema = z.object({
-  phoneNumber: z.string().min(8, "Phone number must be at least 8 digits").regex(/^[0-9+]+$/, "Invalid phone number format"),
-  password: z.string().min(4, "Password must be at least 4 characters"),
-  rememberMe: z.boolean().optional(),
-});
-
-type LoginFormData = z.infer<typeof loginSchema>;
+type LoginFormData = {
+  phoneNumber: string;
+  password: string;
+  rememberMe?: boolean;
+};
 
 interface CustomerLoginFormProps {
   onSuccess: (customer: any) => void;
@@ -31,6 +30,22 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [loginError, setLoginError] = useState<string | null>(null);
+  const { t } = useTranslationContext();
+
+  const loginSchema = useMemo(
+    () =>
+      z.object({
+        phoneNumber: z
+          .string()
+          .min(8, t.customerAuth.validation.phoneMin)
+          .regex(/^[0-9+]+$/, t.customerAuth.validation.phoneFormat),
+        password: z
+          .string()
+          .min(4, t.customerAuth.validation.passwordMin),
+        rememberMe: z.boolean().optional(),
+      }),
+    [t],
+  );
 
   const form = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -49,19 +64,20 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
     onSuccess: (customer) => {
       setLoginError(null);
       toast({
-        title: "Welcome Back!",
-        description: `Hello ${customer.name}! You are now logged in.`,
+        title: t.customerAuth.login.toast.successTitle,
+        description: t.customerAuth.login.toast.successDescription.replace("{name}", customer.name),
       });
       queryClient.invalidateQueries({ queryKey: ["/customer/me"] });
       onSuccess(customer);
     },
     onError: (error: any) => {
-      const errorMessage = error.message || "Login failed";
-      setLoginError(errorMessage);
-      
-      if (errorMessage.includes("Invalid phone or password")) {
-        form.setError("password", { message: "Invalid phone number or password" });
+      const errorMessage = (error?.message as string | undefined)?.toLowerCase() || "";
+      if (errorMessage.includes("invalid phone") || errorMessage.includes("invalid credentials")) {
+        form.setError("password", { message: t.customerAuth.login.errors.invalidCredentials });
+        setLoginError(t.customerAuth.login.errors.invalidCredentials);
+        return;
       }
+      setLoginError(t.customerAuth.login.errors.generic);
     },
   });
 
@@ -73,7 +89,7 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
   const handleForgotPassword = () => {
     const phoneNumber = form.getValues("phoneNumber");
     if (!phoneNumber) {
-      form.setError("phoneNumber", { message: "Please enter your phone number first" });
+      form.setError("phoneNumber", { message: t.customerAuth.login.errors.phoneRequired });
       return;
     }
     onForgotPassword(phoneNumber);
@@ -88,9 +104,9 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
           <div className="mx-auto bg-green-100 dark:bg-green-900/20 p-3 rounded-full w-fit">
             <LogIn className="h-8 w-8 text-green-600 dark:text-green-400" />
           </div>
-          <CardTitle className="text-2xl font-bold">Welcome Back</CardTitle>
+          <CardTitle className="text-2xl font-bold">{t.customerAuth.login.title}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Sign in to your account to continue ordering
+            {t.customerAuth.login.subtitle}
           </p>
         </CardHeader>
 
@@ -111,13 +127,13 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
                   <FormItem>
                     <FormLabel className="flex items-center space-x-2">
                       <Phone className="h-4 w-4" />
-                      <span>Mobile Number</span>
+                      <span>{t.customerAuth.login.phoneLabel}</span>
                     </FormLabel>
                     <FormControl>
                       <Input
                         {...field}
                         type="tel"
-                        placeholder="Enter your mobile number"
+                        placeholder={t.customerAuth.login.phonePlaceholder}
                         className="text-lg"
                         autoComplete="tel"
                         data-testid="input-phone"
@@ -135,13 +151,13 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
                   <FormItem>
                     <FormLabel className="flex items-center space-x-2">
                       <Lock className="h-4 w-4" />
-                      <span>PIN</span>
+                      <span>{t.customerAuth.login.pinLabel}</span>
                     </FormLabel>
                     <FormControl>
                       <Input
                         {...field}
                         type="password"
-                        placeholder="Enter your 4-digit PIN"
+                        placeholder={t.customerAuth.login.pinPlaceholder}
                         className="text-lg text-center"
                         maxLength={8}
                         autoComplete="current-password"
@@ -167,7 +183,7 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
                         />
                       </FormControl>
                       <FormLabel className="text-sm font-normal">
-                        Remember me
+                        {t.customerAuth.login.rememberMe}
                       </FormLabel>
                     </FormItem>
                   )}
@@ -180,7 +196,7 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
                   data-testid="link-forgot-password"
                   disabled={!watchedPhone}
                 >
-                  Forgot PIN?
+                  {t.customerAuth.login.forgotPin}
                 </button>
               </div>
 
@@ -195,19 +211,21 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
                 ) : (
                   <LogIn className="h-4 w-4 mr-2" />
                 )}
-                {loginMutation.isPending ? "Signing In..." : "Sign In"}
+                {loginMutation.isPending
+                  ? t.customerAuth.login.buttonLoading
+                  : t.customerAuth.login.button}
               </Button>
 
               <div className="text-center">
                 <p className="text-sm text-muted-foreground">
-                  Don't have an account?{" "}
+                  {t.customerAuth.login.ctaPrefix}{" "}
                   <button
                     type="button"
                     onClick={onRegisterRedirect}
                     className="text-green-600 hover:underline font-medium"
                     data-testid="link-register"
                   >
-                    Create Account
+                    {t.customerAuth.login.ctaAction}
                   </button>
                 </p>
               </div>
