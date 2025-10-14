@@ -440,6 +440,110 @@
         "typeMessage": "اكتب رسالة...",
         "send": "إرسال"
     },
+    "customerAuth": {
+        "qr": {
+            "missing": "لم يتم توفير رمز QR أو رمز الفرع.",
+            "invalid": "رمز QR غير صالح. يرجى مسح رمز صالح من أحد فروعنا.",
+            "verifying": "جارٍ التحقق من رمز QR...",
+            "branchSubtitle": "جاهزون لخدمتك • الرمز: {code}"
+        },
+        "login": {
+            "title": "مرحبًا بعودتك",
+            "subtitle": "سجّل دخولك لمتابعة الطلب",
+            "phoneLabel": "رقم الهاتف المحمول",
+            "phonePlaceholder": "أدخل رقم هاتفك المحمول",
+            "pinLabel": "رمز PIN",
+            "pinPlaceholder": "أدخل رمز PIN المكوّن من 4 أرقام",
+            "rememberMe": "تذكرني",
+            "forgotPin": "نسيت رمز PIN؟",
+            "button": "تسجيل الدخول",
+            "buttonLoading": "جارٍ تسجيل الدخول...",
+            "ctaPrefix": "ليس لديك حساب؟",
+            "ctaAction": "إنشاء حساب",
+            "toast": {
+                "successTitle": "مرحبًا بعودتك!",
+                "successDescription": "مرحبًا {name}! تم تسجيل دخولك الآن."
+            },
+            "errors": {
+                "generic": "فشل تسجيل الدخول. يرجى المحاولة مرة أخرى.",
+                "invalidCredentials": "رقم الهاتف أو رمز PIN غير صحيح",
+                "phoneRequired": "يرجى إدخال رقم هاتفك أولاً"
+            }
+        },
+        "registration": {
+            "title": "إنشاء حساب",
+            "subtitle": "الخطوة {step} من {total} - انضم إلينا وابدأ الطلب!",
+            "phonePlaceholder": "مثال: +96512345678 أو 12345678",
+            "nameLabel": "الاسم الكامل",
+            "namePlaceholder": "أدخل اسمك الكامل",
+            "pinPlaceholder": "4-8 أرقام",
+            "confirmPinLabel": "تأكيد رمز PIN",
+            "confirmPinPlaceholder": "أعد إدخال رمز PIN",
+            "cityLabel": "المدينة/المنطقة",
+            "addressLabel": "اسم العنوان",
+            "addressLabelPlaceholder": "مثال: المنزل، المكتب، ...",
+            "addressFieldLabel": "العنوان الكامل",
+            "addressPlaceholder": "الشارع، المبنى، تفاصيل الشقة",
+            "termsLabel": "أوافق على الشروط والأحكام",
+            "termsHelper": "بإنشائك حسابًا، فإنك توافق على سياسة الخصوصية وشروط الخدمة لدينا.",
+            "defaultAddressLabel": "المنزل",
+            "submit": "إنشاء حساب",
+            "ctaPrefix": "لديك حساب بالفعل؟",
+            "ctaAction": "تسجيل الدخول",
+            "toast": {
+                "successTitle": "تم التسجيل بنجاح",
+                "successDescription": "مرحبًا {name}! تم تسجيلك وتسجيل دخولك الآن.",
+                "errorTitle": "فشل التسجيل",
+                "errorDescription": "تعذر إتمام التسجيل. يرجى المحاولة مرة أخرى."
+            }
+        },
+        "reset": {
+            "titleRequest": "إعادة تعيين رمز PIN",
+            "titleOtp": "أدخل رمز التحقق",
+            "subtitleRequest": "أدخل رقم هاتفك لاستلام رمز إعادة التعيين",
+            "subtitleOtp": "أدخل الرمز المكوّن من 6 أرقام المرسل إلى {phone}",
+            "phonePlaceholder": "أدخل رقم هاتفك المحمول",
+            "codeLabel": "رمز مكوّن من 6 أرقام",
+            "codePlaceholder": "000000",
+            "newPinLabel": "رمز PIN جديد",
+            "newPinPlaceholder": "رمز PIN جديد",
+            "confirmPinLabel": "تأكيد رمز PIN",
+            "confirmPinPlaceholder": "تأكيد",
+            "buttons": {
+                "send": "إرسال رمز إعادة التعيين",
+                "sendLoading": "جارٍ الإرسال...",
+                "backToLogin": "العودة لتسجيل الدخول",
+                "back": "رجوع",
+                "submit": "إعادة تعيين رمز PIN",
+                "submitLoading": "جارٍ التحديث..."
+            },
+            "toast": {
+                "otpSentTitle": "تم إرسال الرمز",
+                "otpSentDescription": "تم إرسال رمز مكوّن من 6 أرقام إلى رقم هاتفك.",
+                "otpErrorTitle": "فشل إرسال الرمز",
+                "otpErrorDescription": "تعذر إرسال الرمز. يرجى المحاولة مرة أخرى.",
+                "successTitle": "تمت إعادة التعيين بنجاح",
+                "successDescription": "تم تحديث رمز PIN بنجاح.",
+                "errorTitle": "فشلت إعادة التعيين",
+                "errorDescription": "تعذر إعادة تعيين الرمز. يرجى المحاولة مرة أخرى."
+            }
+        },
+        "validation": {
+            "branchCodeRequired": "رمز الفرع مطلوب",
+            "phoneMin": "يجب أن يكون رقم الهاتف 8 أرقام على الأقل",
+            "phoneFormat": "تنسيق رقم الهاتف غير صالح",
+            "passwordMin": "يجب أن يتكون رمز PIN من 4 أرقام على الأقل",
+            "passwordMax": "يجب ألا يتجاوز رمز PIN 8 أرقام",
+            "nameMin": "يجب أن يكون الاسم مكوّنًا من حرفين على الأقل",
+            "cityRequired": "يرجى اختيار مدينة",
+            "addressMin": "يجب أن يتكون العنوان من 5 أحرف على الأقل",
+            "addressLabelRequired": "اسم العنوان مطلوب",
+            "termsRequired": "يجب الموافقة على الشروط والأحكام",
+            "passwordsMismatch": "رمزا PIN غير متطابقين",
+            "otpLength": "يجب أن يتكون رمز التحقق من 6 أرقام",
+            "otpNumeric": "يجب أن يتكون رمز التحقق من أرقام فقط"
+        }
+    },
     "customerOrder": {
         "invalidQr": "رمز QR غير صالح. يرجى مسح رمز صالح من أحد فروعنا.",
         "verifying": "جارٍ التحقق من رمز QR...",

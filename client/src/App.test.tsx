@@ -6,7 +6,8 @@ import { ThemeProvider, useTheme } from "@/theme";
 // Mock TranslationProvider to avoid async locale loading/spinner
 vi.mock("@/context/TranslationContext", async () => {
   const React = await import("react");
-  const defaultValue = { t: { loading: "Loading" }, language: "en" as const, setLanguage: () => {} };
+  const enMessages = (await import("@/locales/en.json")).default;
+  const defaultValue = { t: enMessages, language: "en" as const, setLanguage: () => {} };
   const TranslationContext = React.createContext(defaultValue);
   return {
     TranslationProvider: ({ children }: { children: React.ReactNode }) => (

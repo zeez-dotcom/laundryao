@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -12,23 +12,19 @@ import { apiRequest } from "@/lib/queryClient";
 import { CitySelect } from "@/components/city-select";
 import { Loader2, User, Phone, Lock, MapPin } from "lucide-react";
 import { z } from "zod";
+import { useTranslationContext } from "@/context/TranslationContext";
 
-const registrationSchema = z.object({
-  branchCode: z.string().min(1, "Branch code is required"),
-  phoneNumber: z.string().min(8, "Phone number must be at least 8 digits").regex(/^[0-9+]+$/, "Invalid phone number format"),
-  name: z.string().min(2, "Name must be at least 2 characters"),
-  password: z.string().min(4, "Password must be at least 4 characters").max(8, "Password must be at most 8 characters"),
-  confirmPassword: z.string(),
-  city: z.string().min(1, "Please select a city"),
-  address: z.string().min(5, "Address must be at least 5 characters"),
-  addressLabel: z.string().min(1, "Address label is required"),
-  agreeToTerms: z.boolean().refine(val => val === true, "You must agree to the terms and conditions"),
-}).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords do not match",
-  path: ["confirmPassword"],
-});
-
-type RegistrationFormData = z.infer<typeof registrationSchema>;
+type RegistrationFormData = {
+  branchCode: string;
+  phoneNumber: string;
+  name: string;
+  password: string;
+  confirmPassword: string;
+  city: string;
+  address: string;
+  addressLabel: string;
+  agreeToTerms: boolean;
+};
 
 interface CustomerRegistrationFormProps {
   branchCode: string;
@@ -40,10 +36,39 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
+  const { t } = useTranslationContext();
 
-  const form = useForm<RegistrationFormData>({
-    resolver: zodResolver(registrationSchema),
-    defaultValues: {
+  const registrationSchema = useMemo(
+    () =>
+      z
+        .object({
+          branchCode: z.string().min(1, t.customerAuth.validation.branchCodeRequired),
+          phoneNumber: z
+            .string()
+            .min(8, t.customerAuth.validation.phoneMin)
+            .regex(/^[0-9+]+$/, t.customerAuth.validation.phoneFormat),
+          name: z.string().min(2, t.customerAuth.validation.nameMin),
+          password: z
+            .string()
+            .min(4, t.customerAuth.validation.passwordMin)
+            .max(8, t.customerAuth.validation.passwordMax),
+          confirmPassword: z.string(),
+          city: z.string().min(1, t.customerAuth.validation.cityRequired),
+          address: z.string().min(5, t.customerAuth.validation.addressMin),
+          addressLabel: z.string().min(1, t.customerAuth.validation.addressLabelRequired),
+          agreeToTerms: z
+            .boolean()
+            .refine((val) => val === true, t.customerAuth.validation.termsRequired),
+        })
+        .refine((data) => data.password === data.confirmPassword, {
+          message: t.customerAuth.validation.passwordsMismatch,
+          path: ["confirmPassword"],
+        }),
+    [t],
+  );
+
+  const defaultValues = useMemo(
+    () => ({
       branchCode,
       phoneNumber: "",
       name: "",
@@ -51,9 +76,15 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
       confirmPassword: "",
       city: "",
       address: "",
-      addressLabel: "Home",
+      addressLabel: t.customerAuth.registration.defaultAddressLabel,
       agreeToTerms: false,
-    },
+    }),
+    [branchCode, t],
+  );
+
+  const form = useForm<RegistrationFormData>({
+    resolver: zodResolver(registrationSchema),
+    defaultValues,
   });
 
   const registrationMutation = useMutation({
@@ -63,16 +94,16 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
     },
     onSuccess: (customer) => {
       toast({
-        title: "Registration Successful",
-        description: `Welcome ${customer.name}! You are now registered and logged in.`,
+        title: t.customerAuth.registration.toast.successTitle,
+        description: t.customerAuth.registration.toast.successDescription.replace("{name}", customer.name),
       });
       queryClient.invalidateQueries({ queryKey: ["/customer/me"] });
       onSuccess(customer);
     },
     onError: (error: any) => {
       toast({
-        title: "Registration Failed",
-        description: error.message || "Unable to register. Please try again.",
+        title: t.customerAuth.registration.toast.errorTitle,
+        description: error.message || t.customerAuth.registration.toast.errorDescription,
         variant: "destructive",
       });
     },
@@ -84,12 +115,12 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
 
   const nextStep = () => {
     if (step === 1) {
-      // Validate first step fields
-      form.trigger(["phoneNumber", "name", "password", "confirmPassword"]).then(isValid => {
-        if (isValid) setStep(2);
-      });
+      void form
+        .trigger(["phoneNumber", "name", "password", "confirmPassword"])
+        .then((isValid) => {
+          if (isValid) setStep(2);
+        });
     } else {
-      // Final submission
       form.handleSubmit(onSubmit)();
     }
   };
@@ -98,6 +129,8 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
     setStep(Math.max(1, step - 1));
   };
 
+  const totalSteps = 2;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
       <Card className="w-full max-w-md shadow-xl">
@@ -105,13 +138,15 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
           <div className="mx-auto bg-blue-100 dark:bg-blue-900/20 p-3 rounded-full w-fit">
             <User className="h-8 w-8 text-blue-600 dark:text-blue-400" />
           </div>
-          <CardTitle className="text-2xl font-bold">Create Account</CardTitle>
+          <CardTitle className="text-2xl font-bold">{t.customerAuth.registration.title}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Step {step} of 2 - Join us and start ordering!
+            {t.customerAuth.registration.subtitle
+              .replace("{step}", String(step))
+              .replace("{total}", String(totalSteps))}
           </p>
           <div className="flex space-x-2 justify-center">
-            <div className={`h-2 w-8 rounded-full ${step >= 1 ? 'bg-blue-600' : 'bg-gray-200'}`} />
-            <div className={`h-2 w-8 rounded-full ${step >= 2 ? 'bg-blue-600' : 'bg-gray-200'}`} />
+            <div className={`h-2 w-8 rounded-full ${step >= 1 ? "bg-blue-600" : "bg-gray-200"}`} />
+            <div className={`h-2 w-8 rounded-full ${step >= 2 ? "bg-blue-600" : "bg-gray-200"}`} />
           </div>
         </CardHeader>
 
@@ -127,13 +162,13 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                       <FormItem>
                         <FormLabel className="flex items-center space-x-2">
                           <Phone className="h-4 w-4" />
-                          <span>Mobile Number</span>
+                          <span>{t.customerAuth.login.phoneLabel}</span>
                         </FormLabel>
                         <FormControl>
                           <Input
                             {...field}
                             type="tel"
-                            placeholder="e.g., +96512345678 or 12345678"
+                            placeholder={t.customerAuth.registration.phonePlaceholder}
                             className="text-lg"
                             data-testid="input-phone"
                           />
@@ -150,12 +185,12 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                       <FormItem>
                         <FormLabel className="flex items-center space-x-2">
                           <User className="h-4 w-4" />
-                          <span>Full Name</span>
+                          <span>{t.customerAuth.registration.nameLabel}</span>
                         </FormLabel>
                         <FormControl>
                           <Input
                             {...field}
-                            placeholder="Enter your full name"
+                            placeholder={t.customerAuth.registration.namePlaceholder}
                             className="text-lg"
                             data-testid="input-name"
                           />
@@ -173,13 +208,13 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                         <FormItem>
                           <FormLabel className="flex items-center space-x-2">
                             <Lock className="h-4 w-4" />
-                            <span>PIN</span>
+                            <span>{t.customerAuth.login.pinLabel}</span>
                           </FormLabel>
                           <FormControl>
                             <Input
                               {...field}
                               type="password"
-                              placeholder="4-8 digits"
+                              placeholder={t.customerAuth.registration.pinPlaceholder}
                               className="text-lg text-center"
                               maxLength={8}
                               data-testid="input-password"
@@ -195,12 +230,12 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                       name="confirmPassword"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Confirm PIN</FormLabel>
+                          <FormLabel>{t.customerAuth.registration.confirmPinLabel}</FormLabel>
                           <FormControl>
                             <Input
                               {...field}
                               type="password"
-                              placeholder="Repeat PIN"
+                              placeholder={t.customerAuth.registration.confirmPinPlaceholder}
                               className="text-lg text-center"
                               maxLength={8}
                               data-testid="input-confirm-password"
@@ -223,13 +258,10 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                       <FormItem>
                         <FormLabel className="flex items-center space-x-2">
                           <MapPin className="h-4 w-4" />
-                          <span>City/Area</span>
+                          <span>{t.customerAuth.registration.cityLabel}</span>
                         </FormLabel>
                         <FormControl>
-                          <CitySelect
-                            value={field.value}
-                            onChange={field.onChange}
-                          />
+                          <CitySelect value={field.value} onChange={field.onChange} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -241,11 +273,11 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                     name="addressLabel"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Address Label</FormLabel>
+                        <FormLabel>{t.customerAuth.registration.addressLabel}</FormLabel>
                         <FormControl>
                           <Input
                             {...field}
-                            placeholder="e.g., Home, Office, etc."
+                            placeholder={t.customerAuth.registration.addressLabelPlaceholder}
                             data-testid="input-address-label"
                           />
                         </FormControl>
@@ -259,11 +291,11 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                     name="address"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Full Address</FormLabel>
+                        <FormLabel>{t.customerAuth.registration.addressFieldLabel}</FormLabel>
                         <FormControl>
                           <Input
                             {...field}
-                            placeholder="Street, building, apartment details"
+                            placeholder={t.customerAuth.registration.addressPlaceholder}
                             className="min-h-[60px]"
                             data-testid="input-address"
                           />
@@ -287,10 +319,10 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                         </FormControl>
                         <div className="space-y-1 leading-none">
                           <FormLabel className="text-sm">
-                            I agree to the Terms and Conditions
+                            {t.customerAuth.registration.termsLabel}
                           </FormLabel>
                           <p className="text-xs text-muted-foreground">
-                            By creating an account, you agree to our privacy policy and terms of service.
+                            {t.customerAuth.registration.termsHelper}
                           </p>
                         </div>
                       </FormItem>
@@ -308,34 +340,34 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
                     className="flex-1"
                     data-testid="button-previous"
                   >
-                    Previous
+                    {t.previous}
                   </Button>
                 )}
-                
+
                 <Button
                   type="button"
-                  onClick={step === 2 ? form.handleSubmit(onSubmit) : nextStep}
+                  onClick={step === totalSteps ? form.handleSubmit(onSubmit) : nextStep}
                   disabled={registrationMutation.isPending}
                   className="flex-1"
-                  data-testid={step === 2 ? "button-register" : "button-next"}
+                  data-testid={step === totalSteps ? "button-register" : "button-next"}
                 >
                   {registrationMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-2" />
                   ) : null}
-                  {step === 2 ? "Create Account" : "Next"}
+                  {step === totalSteps ? t.customerAuth.registration.submit : t.next}
                 </Button>
               </div>
 
               <div className="text-center">
                 <p className="text-sm text-muted-foreground">
-                  Already have an account?{" "}
+                  {t.customerAuth.registration.ctaPrefix}{" "}
                   <button
                     type="button"
                     onClick={onLoginRedirect}
                     className="text-blue-600 hover:underline font-medium"
                     data-testid="link-login"
                   >
-                    Sign In
+                    {t.customerAuth.registration.ctaAction}
                   </button>
                 </p>
               </div>

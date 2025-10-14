@@ -440,6 +440,110 @@
     "typeMessage": "Type a message...",
     "send": "Send"
   },
+  "customerAuth": {
+    "qr": {
+      "missing": "No QR code or branch code provided.",
+      "invalid": "Invalid QR code. Please scan a valid QR code from one of our branch locations.",
+      "verifying": "Verifying QR code...",
+      "branchSubtitle": "Ready to serve you • Code: {code}"
+    },
+    "login": {
+      "title": "Welcome Back",
+      "subtitle": "Sign in to your account to continue ordering",
+      "phoneLabel": "Mobile Number",
+      "phonePlaceholder": "Enter your mobile number",
+      "pinLabel": "PIN",
+      "pinPlaceholder": "Enter your 4-digit PIN",
+      "rememberMe": "Remember me",
+      "forgotPin": "Forgot PIN?",
+      "button": "Sign In",
+      "buttonLoading": "Signing In...",
+      "ctaPrefix": "Don't have an account?",
+      "ctaAction": "Create Account",
+      "toast": {
+        "successTitle": "Welcome Back!",
+        "successDescription": "Hello {name}! You are now logged in."
+      },
+      "errors": {
+        "generic": "Login failed. Please try again.",
+        "invalidCredentials": "Invalid phone number or password",
+        "phoneRequired": "Please enter your phone number first"
+      }
+    },
+    "registration": {
+      "title": "Create Account",
+      "subtitle": "Step {step} of {total} - Join us and start ordering!",
+      "phonePlaceholder": "e.g., +96512345678 or 12345678",
+      "nameLabel": "Full Name",
+      "namePlaceholder": "Enter your full name",
+      "pinPlaceholder": "4-8 digits",
+      "confirmPinLabel": "Confirm PIN",
+      "confirmPinPlaceholder": "Repeat PIN",
+      "cityLabel": "City/Area",
+      "addressLabel": "Address Label",
+      "addressLabelPlaceholder": "e.g., Home, Office, etc.",
+      "addressFieldLabel": "Full Address",
+      "addressPlaceholder": "Street, building, apartment details",
+      "termsLabel": "I agree to the Terms and Conditions",
+      "termsHelper": "By creating an account, you agree to our privacy policy and terms of service.",
+      "defaultAddressLabel": "Home",
+      "submit": "Create Account",
+      "ctaPrefix": "Already have an account?",
+      "ctaAction": "Sign In",
+      "toast": {
+        "successTitle": "Registration Successful",
+        "successDescription": "Welcome {name}! You are now registered and logged in.",
+        "errorTitle": "Registration Failed",
+        "errorDescription": "Unable to register. Please try again."
+      }
+    },
+    "reset": {
+      "titleRequest": "Reset Password",
+      "titleOtp": "Enter OTP",
+      "subtitleRequest": "Enter your mobile number to receive a reset code",
+      "subtitleOtp": "Enter the 6-digit code sent to {phone}",
+      "phonePlaceholder": "Enter your mobile number",
+      "codeLabel": "6-Digit Code",
+      "codePlaceholder": "000000",
+      "newPinLabel": "New PIN",
+      "newPinPlaceholder": "New PIN",
+      "confirmPinLabel": "Confirm PIN",
+      "confirmPinPlaceholder": "Confirm",
+      "buttons": {
+        "send": "Send Reset Code",
+        "sendLoading": "Sending...",
+        "backToLogin": "Back to Login",
+        "back": "Back",
+        "submit": "Reset PIN",
+        "submitLoading": "Updating..."
+      },
+      "toast": {
+        "otpSentTitle": "OTP Sent",
+        "otpSentDescription": "A 6-digit code has been sent to your mobile number.",
+        "otpErrorTitle": "Failed to Send OTP",
+        "otpErrorDescription": "Unable to send OTP. Please try again.",
+        "successTitle": "Password Reset Successful",
+        "successDescription": "Your password has been updated successfully.",
+        "errorTitle": "Password Reset Failed",
+        "errorDescription": "Unable to reset password. Please try again."
+      }
+    },
+    "validation": {
+      "branchCodeRequired": "Branch code is required",
+      "phoneMin": "Phone number must be at least 8 digits",
+      "phoneFormat": "Invalid phone number format",
+      "passwordMin": "PIN must be at least 4 digits",
+      "passwordMax": "PIN must be at most 8 digits",
+      "nameMin": "Name must be at least 2 characters",
+      "cityRequired": "Please select a city",
+      "addressMin": "Address must be at least 5 characters",
+      "addressLabelRequired": "Address label is required",
+      "termsRequired": "You must agree to the terms and conditions",
+      "passwordsMismatch": "PINs do not match",
+      "otpLength": "OTP must be 6 digits",
+      "otpNumeric": "OTP must be numeric"
+    }
+  },
   "customerOrder": {
     "invalidQr": "Invalid QR code. Please scan a valid QR code from one of our branch locations.",
     "verifying": "Verifying QR code...",

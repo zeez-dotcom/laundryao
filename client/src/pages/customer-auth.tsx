@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Store, AlertCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { LanguageSelector } from "@/components/language-selector";
+import { useTranslationContext } from "@/context/TranslationContext";
 
 interface QRCodeData {
   qrCode: {
@@ -39,6 +40,7 @@ function CustomerAuthContent() {
   const [authView, setAuthView] = useState<AuthView>("login");
   const [resetPhoneNumber, setResetPhoneNumber] = useState("");
   const { customer, isLoading: isAuthLoading, isAuthenticated } = useCustomerAuth();
+  const { t } = useTranslationContext();
 
   // Fetch QR code and branch data
   const {
@@ -52,7 +54,7 @@ function CustomerAuthContent() {
         const response = await apiRequest("GET", `/api/qr/${qrCode}`);
         if (!response.ok) {
           const errorData = await response.json();
-          throw new Error(errorData.message || "Invalid QR code");
+          throw new Error(errorData.message || t.customerAuth.qr.invalid);
         }
         return await response.json();
       }
@@ -60,7 +62,7 @@ function CustomerAuthContent() {
         const response = await apiRequest("GET", `/api/branches/${branchCodeParam}`);
         if (!response.ok) {
           const errorData = await response.json();
-          throw new Error(errorData.message || "Invalid branch code");
+          throw new Error(errorData.message || t.customerAuth.qr.invalid);
         }
         const branch = await response.json();
         // Fabricate minimal qrCode info to satisfy existing UI typings
@@ -75,7 +77,7 @@ function CustomerAuthContent() {
           branch,
         } as QRCodeData;
       }
-      throw new Error("No QR code or branch code provided");
+      throw new Error(t.customerAuth.qr.missing);
     },
     enabled: !!qrCode || !!branchCodeParam,
     retry: 1,
@@ -132,7 +134,9 @@ function CustomerAuthContent() {
             <div className="text-center space-y-4">
               <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-600" />
               <p className="text-muted-foreground">
-                {isQRLoading ? "Verifying QR code..." : "Loading..."}
+                {isQRLoading
+                  ? t.customerAuth.qr.verifying
+                  : t.loading}
               </p>
             </div>
           </CardContent>
@@ -143,15 +147,16 @@ function CustomerAuthContent() {
 
   // Show error if QR code is invalid
   if ((!qrCode && !branchCodeParam) || qrError || !qrData) {
+    const qrErrorMessage = !qrCode && !branchCodeParam
+      ? t.customerAuth.qr.missing
+      : t.customerAuth.qr.invalid;
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                {qrError instanceof Error ? qrError.message : "Invalid QR code. Please scan a valid QR code from one of our branch locations."}
-              </AlertDescription>
+              <AlertDescription>{qrErrorMessage}</AlertDescription>
             </Alert>
           </CardContent>
         </Card>
@@ -174,7 +179,7 @@ function CustomerAuthContent() {
             <div>
               <h1 className="font-semibold text-lg">{branch.name}</h1>
               <p className="text-sm text-muted-foreground">
-                Ready to serve you • Code: {branch.code}
+                {t.customerAuth.qr.branchSubtitle.replace("{code}", branch.code)}
               </p>
             </div>
           </div>
