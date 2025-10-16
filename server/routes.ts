@@ -71,6 +71,9 @@ import { registerHealthRoutes } from "./routes/health";
 import { registerCatalogRoutes } from "./routes/catalog";
 import { registerSmartOrderRoutes } from "./routes/orders.smart";
 import { registerDeliveryRoutes } from "./routes/delivery";
+import { registerDeliveryMessageRoutes } from "./routes/delivery-messages";
+import { registerDeliveryActionRoutes } from "./routes/delivery-actions";
+import type { DeliveryChannelEvent } from "./types/delivery-channel";
 import { registerCustomerCommandCenterRoutes } from "./routes/customers/command-center";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
@@ -497,25 +500,40 @@ export async function registerRoutes(
       });
     });
 
-  const broadcastDeliveryUpdate = async (data: {
-    orderId: string;
-    deliveryStatus: string | null;
-    driverId: string | null;
-  }) => {
-    const tracking = await storage.getDeliveryTrackingSnapshot(data.orderId);
-    const msg = JSON.stringify({
-      ...data,
-      etaMinutes: tracking?.etaMinutes ?? null,
-      distanceKm: tracking?.distanceKm ?? null,
-      driverLocation: tracking?.driverLocation
-        ? {
-            lat: tracking.driverLocation.lat,
-            lng: tracking.driverLocation.lng,
-            timestamp: tracking.driverLocation.timestamp.toISOString(),
-          }
-        : null,
-      deliveryLocation: tracking?.deliveryLocation ?? null,
-    });
+  const broadcastDeliveryEvent = async (event: DeliveryChannelEvent) => {
+    const tracking = await storage.getDeliveryTrackingSnapshot(event.orderId);
+    const payload: Record<string, unknown> = {
+      eventType: event.type,
+      orderId: event.orderId,
+    };
+
+    if (event.type === "status") {
+      payload.deliveryStatus = event.deliveryStatus;
+      payload.driverId = event.driverId;
+    } else if (event.type === "message") {
+      payload.message = event.message;
+    } else if (event.type === "reschedule") {
+      payload.reschedule = event.reschedule;
+    } else if (event.type === "compensation") {
+      payload.compensation = event.compensation;
+    }
+
+    if (tracking) {
+      payload.tracking = {
+        etaMinutes: tracking.etaMinutes ?? null,
+        distanceKm: tracking.distanceKm ?? null,
+        driverLocation: tracking.driverLocation
+          ? {
+              lat: tracking.driverLocation.lat,
+              lng: tracking.driverLocation.lng,
+              timestamp: tracking.driverLocation.timestamp.toISOString(),
+            }
+          : null,
+        deliveryLocation: tracking.deliveryLocation ?? null,
+      };
+    }
+
+    const msg = JSON.stringify(payload);
     for (const client of deliveryOrderWss.clients) {
       if (client.readyState === client.OPEN) {
         client.send(msg);
@@ -1327,9 +1345,26 @@ export async function registerRoutes(
     logger,
     requireAuth,
     requireAdminOrSuperAdmin,
-    broadcastDeliveryUpdate,
+    broadcastDeliveryEvent,
     eventBus,
     optimizationService,
+  });
+
+  registerDeliveryMessageRoutes({
+    app,
+    storage,
+    logger,
+    requireAuth,
+    broadcastDeliveryEvent,
+    eventBus,
+  });
+
+  registerDeliveryActionRoutes({
+    app,
+    storage,
+    logger,
+    requireAuth,
+    broadcastDeliveryEvent,
   });
 
   const customerInsightsService = new CustomerInsightsService();

@@ -14,16 +14,11 @@ import {
 } from "@shared/schema";
 
 import type { IStorage } from "../storage";
+import type { DeliveryChannelEvent } from "../types/delivery-channel";
 import { db } from "../db";
 import { haversineDistance } from "../utils/geolocation";
 import { createAnalyticsEvent, type EventBus } from "../services/event-bus";
 import { DeliveryOptimizationService, type AssignmentRecommendation } from "../services/delivery-optimization";
-
-type DeliveryBroadcastPayload = {
-  orderId: string;
-  deliveryStatus: string | null;
-  driverId: string | null;
-};
 
 const deliveryStatusValues = [...deliveryStatusEnum] as [DeliveryStatus, ...DeliveryStatus[]];
 
@@ -79,7 +74,7 @@ interface DeliveryRoutesDeps {
   logger: Logger;
   requireAuth: RequestHandler;
   requireAdminOrSuperAdmin: RequestHandler;
-  broadcastDeliveryUpdate: (payload: DeliveryBroadcastPayload) => Promise<void>;
+  broadcastDeliveryEvent: (event: DeliveryChannelEvent) => Promise<void>;
   eventBus: EventBus;
   optimizationService?: DeliveryOptimizationService;
 }
@@ -104,7 +99,7 @@ export function registerDeliveryRoutes({
   logger,
   requireAuth,
   requireAdminOrSuperAdmin,
-  broadcastDeliveryUpdate,
+  broadcastDeliveryEvent,
   eventBus,
   optimizationService,
 }: DeliveryRoutesDeps): void {
@@ -570,7 +565,8 @@ export function registerDeliveryRoutes({
       }
 
       res.json(updated);
-      await broadcastDeliveryUpdate({
+      await broadcastDeliveryEvent({
+        type: "status",
         orderId: updated.orderId,
         deliveryStatus: updated.deliveryStatus,
         driverId: updated.driverId || null,
