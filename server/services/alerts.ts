@@ -448,9 +448,22 @@ export class AlertingEngine {
     this.clock = options.clock ?? (() => new Date());
   }
 
-  async configureRule(rule: Omit<AlertRule, "id" | "createdAt" | "updatedAt" | "lastTriggeredAt" | "nextRunAt">): Promise<AlertRule> {
+  async configureRule(
+    rule: Omit<AlertRule, "id" | "createdAt" | "updatedAt" | "lastTriggeredAt" | "nextRunAt">,
+  ): Promise<AlertRule> {
     const cohortKey = rule.cohortKey || computeCohortKey(rule.cohort);
-    return this.repository.createRule({ ...rule, cohortKey });
+    const created = await this.repository.createRule({ ...rule, cohortKey });
+    const now = this.clock();
+    const createdNextRun = created.nextRunAt ? new Date(created.nextRunAt) : null;
+    if (!createdNextRun || createdNextRun > now) {
+      const immediate = new Date(now.getTime() - 1).toISOString();
+      const updated = await this.repository.updateRule(created.id, { nextRunAt: immediate });
+      if (updated) {
+        return updated;
+      }
+      created.nextRunAt = immediate;
+    }
+    return created;
   }
 
   async updateRule(id: string, updates: Partial<AlertRule>): Promise<AlertRule | null> {

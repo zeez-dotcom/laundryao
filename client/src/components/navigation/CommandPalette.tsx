@@ -71,6 +71,22 @@ export function CommandPalette() {
         shortcut: "G D",
         run: () => setLocation("/driver"),
       },
+      {
+        id: "navigate-workflows",
+        label: "Workflow Builder",
+        description: "Design automation workflows and simulate triggers",
+        group: "Navigation",
+        shortcut: "G W",
+        run: () => setLocation("/automation/workflows"),
+      },
+      {
+        id: "navigate-integrations",
+        label: "Integrations Catalog",
+        description: "Browse OAuth connectors for accounting, marketing, and messaging",
+        group: "Navigation",
+        shortcut: "G I",
+        run: () => setLocation("/automation/integrations"),
+      },
     ]);
 
     return () => unregister();

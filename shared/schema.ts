@@ -66,6 +66,21 @@ export const deliveryStatus = enumType("delivery_status", deliveryStatusEnum);
 export const cityType = enumType("city_type", cityTypeEnum);
 export const paymentMethod = enumType("payment_method", paymentMethodEnum);
 
+export const workflowStatusEnum = ["draft", "active", "archived"] as const;
+export const workflowExecutionStatusEnum = [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+] as const;
+export const workflowNodeKindEnum = ["trigger", "action", "condition"] as const;
+
+export const workflowStatus = enumType("workflow_status", workflowStatusEnum);
+export const workflowExecutionStatus = enumType(
+  "workflow_execution_status",
+  workflowExecutionStatusEnum,
+);
+
 export const clothingItems = pgTable("clothing_items", {
   publicId: serial("public_id").unique(),
   id: uuid("id").primaryKey().default(uuidFn),
@@ -734,6 +749,141 @@ export const driverLocationTelemetry = pgTable(
   }),
 );
 
+export const workflowDefinitions = pgTable(
+  "workflow_definitions",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: workflowStatus("status").default("draft").notNull(),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdBy: uuid("created_by").references(() => users.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    archivedAt: timestamptz("archived_at"),
+  },
+  (table) => ({
+    branchIdx: index("workflow_definitions_branch_idx").on(table.branchId),
+    statusIdx: index("workflow_definitions_status_idx").on(table.status),
+  }),
+);
+
+export const workflowNodes = pgTable(
+  "workflow_nodes",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    workflowId: uuid("workflow_id")
+      .references(() => workflowDefinitions.id, { onDelete: "cascade" })
+      .notNull(),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    kind: text("kind").notNull(),
+    type: text("type").notNull(),
+    config: jsonb("config")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    positionX: integer("position_x").default(0).notNull(),
+    positionY: integer("position_y").default(0).notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    workflowKeyUnique: uniqueIndex("workflow_nodes_workflow_key_unique").on(
+      table.workflowId,
+      table.key,
+    ),
+    workflowIdx: index("workflow_nodes_workflow_idx").on(table.workflowId),
+  }),
+);
+
+export const workflowEdges = pgTable(
+  "workflow_edges",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    workflowId: uuid("workflow_id")
+      .references(() => workflowDefinitions.id, { onDelete: "cascade" })
+      .notNull(),
+    sourceNodeId: uuid("source_node_id")
+      .references(() => workflowNodes.id, { onDelete: "cascade" })
+      .notNull(),
+    targetNodeId: uuid("target_node_id")
+      .references(() => workflowNodes.id, { onDelete: "cascade" })
+      .notNull(),
+    label: text("label"),
+    condition: jsonb("condition")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    workflowIdx: index("workflow_edges_workflow_idx").on(table.workflowId),
+    sourceIdx: index("workflow_edges_source_idx").on(table.sourceNodeId),
+    targetIdx: index("workflow_edges_target_idx").on(table.targetNodeId),
+  }),
+);
+
+export const workflowExecutions = pgTable(
+  "workflow_executions",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    workflowId: uuid("workflow_id")
+      .references(() => workflowDefinitions.id, { onDelete: "cascade" })
+      .notNull(),
+    triggerType: text("trigger_type").notNull(),
+    status: workflowExecutionStatus("status").default("pending").notNull(),
+    context: jsonb("context")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    triggerPayload: jsonb("trigger_payload")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    startedAt: timestamptz("started_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    completedAt: timestamptz("completed_at"),
+    errorMessage: text("error_message"),
+  },
+  (table) => ({
+    workflowIdx: index("workflow_executions_workflow_idx").on(table.workflowId),
+    statusIdx: index("workflow_executions_status_idx").on(table.status),
+    startedIdx: index("workflow_executions_started_idx").on(table.startedAt),
+  }),
+);
+
+export const workflowExecutionEvents = pgTable(
+  "workflow_execution_events",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    executionId: uuid("execution_id")
+      .references(() => workflowExecutions.id, { onDelete: "cascade" })
+      .notNull(),
+    nodeId: uuid("node_id").references(() => workflowNodes.id, {
+      onDelete: "set null",
+    }),
+    eventType: text("event_type").notNull(),
+    message: text("message"),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    executionIdx: index("workflow_execution_events_execution_idx").on(table.executionId),
+    nodeIdx: index("workflow_execution_events_node_idx").on(table.nodeId),
+  }),
+);
+
 export const insertClothingItemSchema = createInsertSchema(clothingItems)
   .omit({
     id: true,
@@ -767,6 +917,85 @@ export const insertItemServicePriceSchema = createInsertSchema(itemServicePrices
     clothingItemId: z.string(),
     serviceId: z.string(),
     branchId: z.string(),
+  });
+
+export type WorkflowDefinition = typeof workflowDefinitions.$inferSelect;
+export type WorkflowNode = typeof workflowNodes.$inferSelect;
+export type WorkflowEdge = typeof workflowEdges.$inferSelect;
+export type WorkflowExecution = typeof workflowExecutions.$inferSelect;
+export type WorkflowExecutionEvent = typeof workflowExecutionEvents.$inferSelect;
+
+export const insertWorkflowDefinitionSchema = createInsertSchema(workflowDefinitions)
+  .omit({
+    id: true,
+    status: true,
+    metadata: true,
+    createdAt: true,
+    updatedAt: true,
+    archivedAt: true,
+  })
+  .extend({
+    name: z.string().min(1, "Workflow name is required"),
+    branchId: z.string().optional(),
+    createdBy: z.string().optional(),
+  });
+
+export const insertWorkflowNodeSchema = createInsertSchema(workflowNodes)
+  .omit({
+    id: true,
+    workflowId: true,
+    createdAt: true,
+    updatedAt: true,
+  })
+  .extend({
+    key: z.string().min(1),
+    kind: z.enum(workflowNodeKindEnum),
+    type: z.string().min(1),
+    config: z.record(z.any()).optional(),
+    positionX: z.number().int().optional(),
+    positionY: z.number().int().optional(),
+  });
+
+export const insertWorkflowEdgeSchema = createInsertSchema(workflowEdges)
+  .omit({
+    id: true,
+    workflowId: true,
+    createdAt: true,
+  })
+  .extend({
+    sourceNodeId: z.string(),
+    targetNodeId: z.string(),
+    condition: z.record(z.any()).optional(),
+  });
+
+export const insertWorkflowExecutionSchema = createInsertSchema(workflowExecutions)
+  .omit({
+    id: true,
+    startedAt: true,
+    completedAt: true,
+    errorMessage: true,
+    status: true,
+  })
+  .extend({
+    workflowId: z.string(),
+    triggerType: z.string(),
+    context: z.record(z.any()).optional(),
+    triggerPayload: z.record(z.any()).optional(),
+    metadata: z.record(z.any()).optional(),
+  });
+
+export const insertWorkflowExecutionEventSchema = createInsertSchema(
+  workflowExecutionEvents,
+)
+  .omit({
+    id: true,
+    createdAt: true,
+  })
+  .extend({
+    executionId: z.string(),
+    nodeId: z.string().optional(),
+    eventType: z.string(),
+    payload: z.record(z.any()).optional(),
   });
 
 export const insertProductSchema = createInsertSchema(products)

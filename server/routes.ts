@@ -86,6 +86,8 @@ import { AlertingEngine } from "./services/alerts";
 import { registerAnalyticsWorkspaceRoutes } from "./routes/analytics";
 import { registerAlertRoutes } from "./routes/alerts";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
+import { registerWorkflowRoutes } from "./routes/workflows";
+import { WorkflowEngine } from "./services/workflows/engine";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
 async function resolveUuidByPublicId(table: any, idParam: string) {
@@ -474,12 +476,15 @@ export async function registerRoutes(
     notificationService,
     forecastingService,
   });
+  const workflowEngine = new WorkflowEngine({ logger });
 
-  setInterval(() => {
-    alertingEngine.runDueRules().catch((error) => {
-      logger.error({ err: error }, "scheduled alert evaluation failed");
-    });
-  }, 60_000);
+  if (process.env.NODE_ENV !== "test") {
+    setInterval(() => {
+      alertingEngine.runDueRules().catch((error) => {
+        logger.error({ err: error }, "scheduled alert evaluation failed");
+      });
+    }, 60_000);
+  }
 
   const runMiddleware = (req: any, middleware: RequestHandler) =>
     new Promise<void>((resolve, reject) => {
@@ -1533,6 +1538,7 @@ export async function registerRoutes(
 
   registerAnalyticsWorkspaceRoutes(app, forecastingService);
   registerAlertRoutes(app, alertingEngine);
+  registerWorkflowRoutes(app, workflowEngine);
 
   // Public branch info
   app.get("/api/branches/:code", async (req, res) => {
