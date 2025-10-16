@@ -77,6 +77,7 @@ import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
 import { CustomerInsightsService } from "./services/customer-insights";
+import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
 async function resolveUuidByPublicId(table: any, idParam: string) {
@@ -149,6 +150,10 @@ const RATE_LIMIT_CONFIG = {
 } as const;
 
 const MAX_BULK_CUSTOMER_ACTIONS = 50;
+
+interface RegisterRoutesOptions {
+  eventBus: EventBus;
+}
 
 /**
  * Enhanced rate limiting with exponential backoff and temporary lockouts
@@ -444,8 +449,10 @@ export async function computeTotalsWithCredits(
 export async function registerRoutes(
   app: Express,
   notificationService: NotificationService,
+  options: RegisterRoutesOptions,
 ): Promise<Server> {
   const httpServer = createServer(app);
+  const { eventBus } = options;
   const deliveryOrderWss = new WebSocketServer({ noServer: true });
   const driverLocationWss = new WebSocketServer({ noServer: true });
   const sessionMiddleware = getAdminSession();
@@ -530,6 +537,31 @@ export async function registerRoutes(
             client.send(payload);
           }
         }
+
+        await eventBus.publish(
+          createAnalyticsEvent({
+            source: "api.driver-location",
+            category: "driver.telemetry",
+            name: "location_updated",
+            payload: {
+              driverId: snapshot.driverId,
+              lat: snapshot.lat,
+              lng: snapshot.lng,
+              speedKph: undefined,
+              accuracyMeters: undefined,
+              orderId: undefined,
+              deliveryId: undefined,
+            },
+            actor: {
+              actorId: user.id,
+              actorType: "driver",
+              actorName: getActorName(user),
+            },
+            context: {
+              tenantId: user.branchId ?? undefined,
+            },
+          }),
+        );
       } catch {
         /* ignore */
       }
@@ -1227,6 +1259,7 @@ export async function registerRoutes(
     requireAuth,
     requireAdminOrSuperAdmin,
     broadcastDeliveryUpdate,
+    eventBus,
   });
 
   const customerInsightsService = new CustomerInsightsService();
@@ -1236,6 +1269,7 @@ export async function registerRoutes(
     requireAdminOrSuperAdmin,
     logger,
     customerInsightsService,
+    eventBus,
   });
 
   app.put("/api/users/:id", requireAuth, async (req, res, next) => {
@@ -4362,8 +4396,51 @@ export async function registerRoutes(
         updates.rateLimitedUntil = null;
       }
 
+      const metadata: Record<string, unknown> = {};
+      if (typeof data.recommendedAction !== "undefined") {
+        metadata.recommendedAction = data.recommendedAction;
+      }
+      if (typeof data.recommendedChannel !== "undefined") {
+        metadata.recommendedChannel = data.recommendedChannel;
+      }
+      if (typeof data.nextContactAt !== "undefined") {
+        metadata.nextContactAt = data.nextContactAt;
+      }
+      if (typeof data.lastOutcome !== "undefined") {
+        metadata.lastOutcome = data.lastOutcome;
+      }
+      if (typeof data.planSource !== "undefined") {
+        metadata.planSource = data.planSource;
+      }
+
       const plan = await storage.updateCustomerEngagementPlan(rawId, updates, customer.branchId);
       res.json(plan ?? null);
+
+      await eventBus.publish(
+        createAnalyticsEvent({
+          source: "api.customer-insights.plan",
+          category: "campaign.interaction",
+          name: "plan_updated",
+          payload: {
+            customerId: customer.id,
+            branchId: customer.branchId ?? null,
+            campaignId: plan?.id ?? undefined,
+            channel: data.recommendedChannel ?? plan?.recommendedChannel ?? undefined,
+            templateKey: undefined,
+            status: "updated",
+            reason: data.lastOutcome ?? plan?.lastOutcome ?? undefined,
+            metadata: Object.keys(metadata).length ? metadata : undefined,
+          },
+          actor: {
+            actorId: user.id,
+            actorType: "user",
+            actorName: getActorName(user),
+          },
+          context: {
+            tenantId: customer.branchId ?? undefined,
+          },
+        }),
+      );
     } catch (error) {
       logger.error({ err: error }, "Failed to update customer engagement plan");
       res.status(500).json({ message: "Failed to update customer engagement plan" });
@@ -4413,6 +4490,7 @@ export async function registerRoutes(
         status: "sent" | "skipped" | "failed";
         reason?: string;
       }> = [];
+      const eventPromises: Array<Promise<void>> = [];
 
       for (const customerId of customerIds) {
         const customer = customerMap.get(customerId);
@@ -4500,8 +4578,36 @@ export async function registerRoutes(
         await storage.updateCustomerEngagementPlan(customerId, planUpdates, customer.branchId);
 
         results.push({ customerId, status, reason });
+
+        eventPromises.push(
+          eventBus.publish(
+            createAnalyticsEvent({
+              source: "api.customer-insights.bulk-send",
+              category: "campaign.interaction",
+              name: status === "sent" ? "outreach_completed" : "outreach_attempted",
+              payload: {
+                customerId,
+                branchId: customer.branchId ?? null,
+                campaignId: templateKey ?? undefined,
+                channel,
+                templateKey: templateKey ?? undefined,
+                status,
+                reason,
+              },
+              actor: {
+                actorId: user.id,
+                actorType: "user",
+                actorName: getActorName(user),
+              },
+              context: {
+                tenantId: customer.branchId ?? undefined,
+              },
+            }),
+          ),
+        );
       }
 
+      await Promise.all(eventPromises);
       res.json({ results });
     } catch (error) {
       logger.error({ err: error }, "Failed to queue outreach notifications");

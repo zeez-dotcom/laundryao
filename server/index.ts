@@ -7,6 +7,8 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import logger from "./logger";
 import { NotificationService } from "./services/notification";
+import { createEventBusFromEnv } from "./services/event-bus";
+import { createPostgresWarehouseWriterFromEnv, EventSink } from "./services/event-sink";
 import { assertDbConnection } from "./db";
 
 async function waitForDb(retries = 10): Promise<void> {
@@ -141,7 +143,34 @@ app.get("/health", (_req, res) =>
   }
 
   const notificationService = new NotificationService();
-  const server = await registerRoutes(app, notificationService);
+  const eventBus = createEventBusFromEnv(logger);
+  const writer = createPostgresWarehouseWriterFromEnv(logger);
+  let eventSink: EventSink | null = null;
+  if (writer) {
+    eventSink = new EventSink({
+      eventBus,
+      writer,
+      flushIntervalMs: Number.parseInt(process.env.EVENT_SINK_FLUSH_INTERVAL_MS || "5000", 10),
+      maxBatchSize: Number.parseInt(process.env.EVENT_SINK_BATCH_SIZE || "100", 10),
+      logger,
+    });
+    eventSink.start();
+  }
+  const server = await registerRoutes(app, notificationService, { eventBus });
+
+  const gracefulShutdown = async () => {
+    try {
+      if (eventSink) {
+        await eventSink.stop();
+      }
+      await eventBus.shutdown();
+    } finally {
+      process.exit(0);
+    }
+  };
+
+  process.on("SIGTERM", gracefulShutdown);
+  process.on("SIGINT", gracefulShutdown);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

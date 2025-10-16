@@ -14,19 +14,26 @@ process.env.SESSION_STORE = 'memory';
 import { registerRoutes } from './routes';
 import { NotificationService } from './services/notification';
 import { storage } from './storage';
+import { EventBus } from './services/event-bus';
+import type { AnalyticsEvent } from '@shared/events';
 
 async function startServer() {
   const app = express();
   app.use(express.json());
-  const server = await registerRoutes(app, new NotificationService());
+  const eventBus = new EventBus({ driver: 'memory' });
+  const capturedEvents: AnalyticsEvent[] = [];
+  eventBus.on((event) => {
+    capturedEvents.push(event);
+  });
+  const server = await registerRoutes(app, new NotificationService(), { eventBus });
   await new Promise<void>((resolve) => {
     server.listen(0, resolve);
   });
-  return server;
+  return { server, capturedEvents, eventBus };
 }
 
 test('authenticated driver updates broadcast using session user id', async () => {
-  const server = await startServer();
+  const { server, capturedEvents, eventBus } = await startServer();
   const originalGetUserByUsername = storage.getUserByUsername;
   const originalGetUser = storage.getUser;
   const originalUpdateDriverLocation = storage.updateDriverLocation;
@@ -100,11 +107,15 @@ test('authenticated driver updates broadcast using session user id', async () =>
       timestamp: stubTimestamp.toISOString(),
     });
     assert.deepEqual(updateCalls, [[driverUser.id, lat, lng]]);
+    const telemetryEvent = capturedEvents.find((event) => event.category === 'driver.telemetry');
+    assert.ok(telemetryEvent);
+    assert.equal((telemetryEvent!.payload as any).driverId, driverUser.id);
   } finally {
     storage.getUserByUsername = originalGetUserByUsername;
     storage.getUser = originalGetUser;
     storage.updateDriverLocation = originalUpdateDriverLocation;
     storage.getLatestDriverLocations = originalGetLatestDriverLocations;
+    await eventBus.shutdown();
 
     if (ws) {
       if (ws.readyState === WebSocket.OPEN) {
@@ -122,7 +133,7 @@ test('authenticated driver updates broadcast using session user id', async () =>
 });
 
 test('unauthenticated websocket upgrade is rejected', async () => {
-  const server = await startServer();
+  const { server, eventBus } = await startServer();
   const { port } = server.address() as AddressInfo;
 
   try {
@@ -147,5 +158,6 @@ test('unauthenticated websocket upgrade is rejected', async () => {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
+    await eventBus.shutdown();
   }
 });

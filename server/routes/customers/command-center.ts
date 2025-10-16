@@ -7,6 +7,7 @@ import type { IStorage } from "../../storage";
 import { db } from "../../db";
 import type { UserWithBranch } from "@shared/schema";
 import { CustomerInsightsService } from "../../services/customer-insights";
+import { createAnalyticsEvent, type EventBus } from "../../services/event-bus";
 
 export interface CommandCenterOutreachEvent {
   id: string;
@@ -32,6 +33,7 @@ interface RegisterCustomerCommandCenterRoutesDeps {
   logger: Logger;
   customerInsightsService: CustomerInsightsService;
   fetchOutreachEvents?: (customerId: string) => Promise<CommandCenterOutreachEvent[]>;
+  eventBus: EventBus;
 }
 
 function toIso(value: string | Date | null | undefined): string | null {
@@ -48,6 +50,16 @@ function toNumber(value: string | number | null | undefined): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function formatActorName(user?: { firstName?: string | null; lastName?: string | null; username?: string | null }): string {
+  if (!user) return "system";
+  const parts = [user.firstName, user.lastName]
+    .filter((part): part is string => Boolean(part && part.trim()));
+  if (parts.length) {
+    return parts.join(" ");
+  }
+  return user.username || "system";
 }
 
 async function resolveCustomerId(rawId: string): Promise<string> {
@@ -95,6 +107,7 @@ export function registerCustomerCommandCenterRoutes({
   logger,
   customerInsightsService,
   fetchOutreachEvents = defaultFetchOutreachEvents,
+  eventBus,
 }: RegisterCustomerCommandCenterRoutesDeps): void {
   app.get(
     "/api/customers/:id/command-center",
@@ -337,6 +350,30 @@ export function registerCustomerCommandCenterRoutes({
         description: parsed.data.description,
         occurredAt: parsed.data.occurredAt || new Date().toISOString(),
       });
+      const actorUser = req.user as UserWithBranch | undefined;
+      await eventBus.publish(
+        createAnalyticsEvent({
+          source: "api.command-center.audit",
+          category: "campaign.interaction",
+          name: "outreach_attempted",
+          payload: {
+            customerId: req.params.id,
+            branchId: actorUser?.branchId ?? null,
+            campaignId: parsed.data.eventId,
+            channel: parsed.data.category,
+            status: "updated",
+            reason: parsed.data.description,
+          },
+          actor: {
+            actorId: actorUser?.id ?? "system",
+            actorType: "user",
+            actorName: formatActorName(actorUser),
+          },
+          context: {
+            tenantId: actorUser?.branchId ?? undefined,
+          },
+        }),
+      );
       res.status(204).send();
     },
   );
