@@ -83,33 +83,33 @@ export default function POS() {
   useEffect(() => {
     registerGlossaryEntries([
       {
-        term: "Progressive disclosure",
-        description: "Operators expand accordions to reveal advanced POS tools only when they need them.",
+        term: t.posGlossaryProgressiveDisclosureTerm,
+        description: t.posGlossaryProgressiveDisclosureDescription,
       },
       {
-        term: "Session checklist",
-        description: "Persistent reminders that ensure every order is complete before handoff.",
+        term: t.posGlossarySessionChecklistTerm,
+        description: t.posGlossarySessionChecklistDescription,
       },
     ]);
     const cleanup = registerTour({
       id: "pos-sales",
-      title: "POS workspace tour",
-      description: "Learn how the new card layout guides selling workflows.",
+      title: t.posTourSalesTitle,
+      description: t.posTourSalesDescription,
       steps: [
         {
           id: "pos-card-grid",
-          title: "Card-based layout",
-          description: "Each card holds a major task. Expand sections to reveal catalog tools and cart management.",
+          title: t.posTourSalesCardGridTitle,
+          description: t.posTourSalesCardGridDescription,
         },
         {
           id: "pos-accordion",
-          title: "Catalog to checkout",
-          description: "Use the catalog accordion to add items, then jump to the checkout accordion without leaving the page.",
+          title: t.posTourSalesCatalogTitle,
+          description: t.posTourSalesCatalogDescription,
         },
         {
           id: "pos-checklist",
-          title: "Session checklist",
-          description: "Track payment, coupons, and receipts so no detail is missed.",
+          title: t.posTourSalesChecklistTitle,
+          description: t.posTourSalesChecklistDescription,
         },
       ],
     });
@@ -117,7 +117,13 @@ export default function POS() {
       startTour("pos-sales");
     }
     return () => cleanup();
-  }, [isTourDismissed, registerGlossaryEntries, registerTour, startTour]);
+  }, [
+    isTourDismissed,
+    registerGlossaryEntries,
+    registerTour,
+    startTour,
+    t,
+  ]);
 
   const checkoutMutation = useMutation({
     mutationFn: async ({ order, transaction }: { order: any; transaction?: any }) => {
@@ -369,15 +375,18 @@ export default function POS() {
     return [
       {
         id: "sales-workspace",
-        title: "Sales workspace",
-        description: "Guide every order from catalog selection to checkout without leaving the page.",
+        title: t.posSalesWorkspaceTitle,
+        description: t.posSalesWorkspaceDescription,
         icon: <ShoppingCart className="size-5" aria-hidden="true" />,
         accent: "primary",
         accordionSections: [
           {
             id: "sales-catalog",
-            title: "Catalog & services",
-            summary: `Items in cart: ${cartSummary.itemCount}`,
+            title: t.posSalesCatalogTitle,
+            summary: t.posSalesCatalogSummary.replace(
+              "{{count}}",
+              String(cartSummary.itemCount),
+            ),
             defaultOpen: true,
             content: (
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -417,22 +426,25 @@ export default function POS() {
           },
           {
             id: "sales-summary",
-            title: "Session summary",
-            summary: `Current total: ${formatCurrency(cartSummary.total)}`,
+            title: t.posSessionSummaryTitle,
+            summary: t.posSessionSummarySummary.replace(
+              "{{total}}",
+              formatCurrency(cartSummary.total),
+            ),
             content: (
               <div className="space-y-3 text-[var(--text-sm)] text-muted-foreground">
                 <div>
-                  <span className="font-medium text-foreground">Payment method:</span> {paymentSummary}
+                  <span className="font-medium text-foreground">{t.paymentMethod}:</span> {paymentSummary}
                 </div>
                 <div>
-                  <span className="font-medium text-foreground">Customer:</span> {selectedCustomer?.name ?? "Walk-in"}
+                  <span className="font-medium text-foreground">{t.customer}:</span> {selectedCustomer?.name ?? t.posWalkInCustomer}
                 </div>
                 <div>
-                  <span className="font-medium text-foreground">Coupon:</span> {appliedCoupon?.code ?? "None"}
+                  <span className="font-medium text-foreground">{t.posCouponLabel}:</span> {appliedCoupon?.code ?? t.posNone}
                   {couponError ? <span className="ml-2 text-destructive">{couponError}</span> : null}
                 </div>
                 <div>
-                  <span className="font-medium text-foreground">Cart items:</span> {cartSummary.items.length}
+                  <span className="font-medium text-foreground">{t.posCartItemsLabel}:</span> {cartSummary.items.length}
                 </div>
               </div>
             ),
@@ -441,18 +453,18 @@ export default function POS() {
         checklist: [
           {
             id: "select-customer",
-            label: "Confirm customer profile",
-            description: "Select or create the customer before adding loyalty rewards.",
+            label: t.posChecklistConfirmCustomerLabel,
+            description: t.posChecklistConfirmCustomerDescription,
           },
           {
             id: "apply-coupon",
-            label: "Check for active coupons",
-            description: "Search for campaign codes before finishing payment.",
+            label: t.posChecklistCheckCouponLabel,
+            description: t.posChecklistCheckCouponDescription,
           },
           {
             id: "send-receipt",
-            label: "Send a digital receipt",
-            description: "Email or SMS the receipt immediately after payment posts.",
+            label: t.posChecklistSendReceiptLabel,
+            description: t.posChecklistSendReceiptDescription,
           },
         ],
         persistChecklistKey: "pos-sales",
@@ -484,6 +496,7 @@ export default function POS() {
     setCouponCode,
     toggleCart,
     updateQuantity,
+    t,
   ]);
 
   const viewCards = useMemo<CardGridCard[]>(() => {
@@ -494,14 +507,14 @@ export default function POS() {
         return [
           {
             id: "customers",
-            title: "Customer management",
-            description: "Search, edit, and assign customers during checkout.",
+            title: t.posCustomersCardTitle,
+            description: t.posCustomersCardDescription,
             icon: <Users className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "customers-workspace",
-                title: "Customer workspace",
-                summary: "Locate customers, update records, and attach to the active sale.",
+                title: t.posCustomersWorkspaceTitle,
+                summary: t.posCustomersWorkspaceSummary,
                 defaultOpen: true,
                 content: (
                   <CustomerManagement
@@ -516,18 +529,18 @@ export default function POS() {
             checklist: [
               {
                 id: "verify-contact",
-                label: "Verify contact details",
-                description: "Confirm phone and address before scheduling delivery.",
+                label: t.posCustomersChecklistVerifyContactLabel,
+                description: t.posCustomersChecklistVerifyContactDescription,
               },
               {
                 id: "check-loyalty",
-                label: "Review loyalty status",
-                description: "Mention available rewards to boost retention.",
+                label: t.posCustomersChecklistReviewLoyaltyLabel,
+                description: t.posCustomersChecklistReviewLoyaltyDescription,
               },
               {
                 id: "note-preferences",
-                label: "Capture customer preferences",
-                description: "Record fabric care notes or delivery instructions.",
+                label: t.posCustomersChecklistCapturePreferencesLabel,
+                description: t.posCustomersChecklistCapturePreferencesDescription,
               },
             ],
             persistChecklistKey: "pos-customers",
@@ -537,14 +550,14 @@ export default function POS() {
         return [
           {
             id: "orders",
-            title: "Order tracking",
-            description: "Monitor live order status without leaving the POS.",
+            title: t.posOrdersCardTitle,
+            description: t.posOrdersCardDescription,
             icon: <Truck className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "orders-feed",
-                title: "Active orders",
-                summary: "See real-time updates for in-store and delivery orders.",
+                title: t.posOrdersWorkspaceTitle,
+                summary: t.posOrdersWorkspaceSummary,
                 defaultOpen: true,
                 content: <OrderTracking />,
               },
@@ -552,13 +565,13 @@ export default function POS() {
             checklist: [
               {
                 id: "update-status",
-                label: "Update delayed orders",
-                description: "Notify customers proactively when pickups slip.",
+                label: t.posOrdersChecklistUpdateStatusLabel,
+                description: t.posOrdersChecklistUpdateStatusDescription,
               },
               {
                 id: "confirm-delivery",
-                label: "Confirm delivery windows",
-                description: "Double-check driver assignments for rush orders.",
+                label: t.posOrdersChecklistConfirmDeliveryLabel,
+                description: t.posOrdersChecklistConfirmDeliveryDescription,
               },
             ],
             persistChecklistKey: "pos-orders",
@@ -568,17 +581,17 @@ export default function POS() {
         return [
           {
             id: "order-management",
-            title: "Operations dashboard",
-            description: "Batch manage tickets, SLAs, and escalations.",
+            title: t.posOperationsCardTitle,
+            description: t.posOperationsCardDescription,
             icon: <TrendingUp className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "order-management-workspace",
-                title: "Management workspace",
-                summary: "Bulk actions and escalations for complex orders.",
+                title: t.posOperationsWorkspaceTitle,
+                summary: t.posOperationsWorkspaceSummary,
                 defaultOpen: true,
                 content: (
-                  <Suspense fallback={<LoadingScreen message="Loading order management..." />}>
+                  <Suspense fallback={<LoadingScreen message={t.posLoadingOrderManagement} />}>
                     <OrderManagementDashboard />
                   </Suspense>
                 ),
@@ -587,13 +600,13 @@ export default function POS() {
             checklist: [
               {
                 id: "audit-sla",
-                label: "Audit SLA breaches",
-                description: "Resolve escalations before close of business.",
+                label: t.posOperationsChecklistAuditLabel,
+                description: t.posOperationsChecklistAuditDescription,
               },
               {
                 id: "assign-followup",
-                label: "Assign follow-up",
-                description: "Route complex issues to the right owner.",
+                label: t.posOperationsChecklistAssignFollowUpLabel,
+                description: t.posOperationsChecklistAssignFollowUpDescription,
               },
             ],
             persistChecklistKey: "pos-order-management",
@@ -603,20 +616,20 @@ export default function POS() {
         return [
           {
             id: "packages",
-            title: "Package center",
-            description: "Manage bundles and let the assistant answer questions.",
+            title: t.posPackagesCardTitle,
+            description: t.posPackagesCardDescription,
             icon: <Package className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "packages-workspace",
-                title: "Package catalog",
-                summary: "Create, edit, and review package usage.",
+                title: t.posPackagesWorkspaceTitle,
+                summary: t.posPackagesWorkspaceSummary,
                 defaultOpen: true,
                 content: (
                   <div className="space-y-4">
                     <div className="flex justify-end">
                       <Button onClick={() => setShowChatbot((prev) => !prev)} variant="outline" size="sm">
-                        {showChatbot ? "Hide assistant" : "Open package assistant"}
+                        {showChatbot ? t.posPackagesHideAssistant : t.posPackagesOpenAssistant}
                       </Button>
                     </div>
                     <PackageList />
@@ -628,13 +641,13 @@ export default function POS() {
             checklist: [
               {
                 id: "package-refresh",
-                label: "Refresh bundle pricing",
-                description: "Ensure discounts match current promotions.",
+                label: t.posPackagesChecklistRefreshPricingLabel,
+                description: t.posPackagesChecklistRefreshPricingDescription,
               },
               {
                 id: "assistant-demo",
-                label: "Demo assistant",
-                description: "Walk teammates through the chatbot recommendations.",
+                label: t.posPackagesChecklistDemoAssistantLabel,
+                description: t.posPackagesChecklistDemoAssistantDescription,
               },
             ],
             persistChecklistKey: "pos-packages",
@@ -644,14 +657,14 @@ export default function POS() {
         return [
           {
             id: "reports",
-            title: "Performance reports",
-            description: "Monitor sales velocity and staff productivity.",
+            title: t.posReportsCardTitle,
+            description: t.posReportsCardDescription,
             icon: <BarChart3 className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "reports-dashboard",
-                title: "Analytics dashboard",
-                summary: "Track KPIs in real time.",
+                title: t.posReportsWorkspaceTitle,
+                summary: t.posReportsWorkspaceSummary,
                 defaultOpen: true,
                 content: <ReportsDashboard />,
               },
@@ -659,13 +672,13 @@ export default function POS() {
             checklist: [
               {
                 id: "share-daily",
-                label: "Share daily snapshot",
-                description: "Post key KPIs to the operations channel at close.",
+                label: t.posReportsChecklistShareSnapshotLabel,
+                description: t.posReportsChecklistShareSnapshotDescription,
               },
               {
                 id: "watch-trends",
-                label: "Watch order trends",
-                description: "Compare today against last week to adjust staffing.",
+                label: t.posReportsChecklistWatchTrendsLabel,
+                description: t.posReportsChecklistWatchTrendsDescription,
               },
             ],
             persistChecklistKey: "pos-reports",
@@ -675,14 +688,14 @@ export default function POS() {
         return [
           {
             id: "delivery-requests",
-            title: "Delivery requests",
-            description: "Approve or reject new delivery pickups.",
+            title: t.posDeliveryRequestsCardTitle,
+            description: t.posDeliveryRequestsCardDescription,
             icon: <Truck className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "delivery-requests-workspace",
-                title: "Requests queue",
-                summary: "Process new pickup and drop-off requests.",
+                title: t.posDeliveryRequestsWorkspaceTitle,
+                summary: t.posDeliveryRequestsWorkspaceSummary,
                 defaultOpen: true,
                 content: <DeliveryOrderRequests />,
               },
@@ -690,13 +703,13 @@ export default function POS() {
             checklist: [
               {
                 id: "route-balance",
-                label: "Balance driver routes",
-                description: "Distribute pickups evenly across available drivers.",
+                label: t.posDeliveryRequestsChecklistBalanceRoutesLabel,
+                description: t.posDeliveryRequestsChecklistBalanceRoutesDescription,
               },
               {
                 id: "confirm-window",
-                label: "Confirm service window",
-                description: "Verify requested times align with branch capacity.",
+                label: t.posDeliveryRequestsChecklistConfirmWindowLabel,
+                description: t.posDeliveryRequestsChecklistConfirmWindowDescription,
               },
             ],
             persistChecklistKey: "pos-delivery-requests",
@@ -706,14 +719,14 @@ export default function POS() {
         return [
           {
             id: "delivery-orders",
-            title: "Delivery monitoring",
-            description: "Track active delivery jobs and completion status.",
+            title: t.posDeliveryOrdersCardTitle,
+            description: t.posDeliveryOrdersCardDescription,
             icon: <Truck className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "delivery-orders-workspace",
-                title: "Active deliveries",
-                summary: "See driver progress and mark deliveries complete.",
+                title: t.posDeliveryOrdersWorkspaceTitle,
+                summary: t.posDeliveryOrdersWorkspaceSummary,
                 defaultOpen: true,
                 content: <DeliveryOrders />,
               },
@@ -721,13 +734,13 @@ export default function POS() {
             checklist: [
               {
                 id: "notify-customer",
-                label: "Notify customer on completion",
-                description: "Send confirmation as soon as the driver marks delivery done.",
+                label: t.posDeliveryOrdersChecklistNotifyCustomerLabel,
+                description: t.posDeliveryOrdersChecklistNotifyCustomerDescription,
               },
               {
                 id: "flag-issues",
-                label: "Flag delivery issues",
-                description: "Escalate late or failed deliveries immediately.",
+                label: t.posDeliveryOrdersChecklistFlagIssuesLabel,
+                description: t.posDeliveryOrdersChecklistFlagIssuesDescription,
               },
             ],
             persistChecklistKey: "pos-delivery-orders",
@@ -737,14 +750,14 @@ export default function POS() {
         return [
           {
             id: "inventory",
-            title: "Inventory management",
-            description: "Track stock levels and adjust availability.",
+            title: t.posInventoryCardTitle,
+            description: t.posInventoryCardDescription,
             icon: <Settings className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "inventory-workspace",
-                title: "Inventory workspace",
-                summary: "Adjust stock and sync with suppliers.",
+                title: t.posInventoryWorkspaceTitle,
+                summary: t.posInventoryWorkspaceSummary,
                 defaultOpen: true,
                 content: <InventoryManagement />,
               },
@@ -752,13 +765,13 @@ export default function POS() {
             checklist: [
               {
                 id: "reorder-points",
-                label: "Review reorder points",
-                description: "Update thresholds after major promotions.",
+                label: t.posInventoryChecklistReorderPointsLabel,
+                description: t.posInventoryChecklistReorderPointsDescription,
               },
               {
                 id: "sync-suppliers",
-                label: "Sync with suppliers",
-                description: "Send purchase orders for low-stock categories.",
+                label: t.posInventoryChecklistSyncSuppliersLabel,
+                description: t.posInventoryChecklistSyncSuppliersDescription,
               },
             ],
             persistChecklistKey: "pos-inventory",
@@ -768,14 +781,14 @@ export default function POS() {
         return [
           {
             id: "settings",
-            title: "System settings",
-            description: "Configure receipt printing, taxes, and integrations.",
+            title: t.posSettingsCardTitle,
+            description: t.posSettingsCardDescription,
             icon: <Settings className="size-5" aria-hidden="true" />,
             accordionSections: [
               {
                 id: "settings-panel",
-                title: "Settings workspace",
-                summary: "Adjust POS defaults and integrations.",
+                title: t.posSettingsWorkspaceTitle,
+                summary: t.posSettingsWorkspaceSummary,
                 defaultOpen: true,
                 content: <SystemSettings />,
               },
@@ -783,13 +796,13 @@ export default function POS() {
             checklist: [
               {
                 id: "backup-config",
-                label: "Backup configuration",
-                description: "Export settings after making critical changes.",
+                label: t.posSettingsChecklistBackupConfigLabel,
+                description: t.posSettingsChecklistBackupConfigDescription,
               },
               {
                 id: "announce-change",
-                label: "Announce changes",
-                description: "Notify staff about new hardware or policy updates.",
+                label: t.posSettingsChecklistAnnounceChangesLabel,
+                description: t.posSettingsChecklistAnnounceChangesDescription,
               },
             ],
             persistChecklistKey: "pos-settings",
@@ -805,23 +818,24 @@ export default function POS() {
     showChatbot,
     setShowChatbot,
     setActiveView,
+    t,
   ]);
 
   const currentCards = viewCards.length ? viewCards : [
     {
       id: "upcoming",
-      title: "Coming soon",
-      description: "This module is under development.",
+      title: t.posUpcomingCardTitle,
+      description: t.posUpcomingCardDescription,
       icon: <Settings className="size-5" aria-hidden="true" />,
       accordionSections: [
         {
           id: "upcoming-overview",
-          title: "Preview",
-          summary: "Stay tuned for updates.",
+          title: t.posUpcomingSectionTitle,
+          summary: t.posUpcomingSectionSummary,
           defaultOpen: true,
           content: (
             <p className="text-[var(--text-sm)] text-muted-foreground">
-              We&apos;re actively building this workspace. Use the command palette (⌘K / Ctrl+K) to submit feedback.
+              {t.posUpcomingBody}
             </p>
           ),
         },
@@ -829,8 +843,8 @@ export default function POS() {
       checklist: [
         {
           id: "share-feedback",
-          label: "Share feedback",
-          description: "Open the command palette and log your feature request.",
+          label: t.posUpcomingChecklistLabel,
+          description: t.posUpcomingChecklistDescription,
         },
       ],
       persistChecklistKey: "pos-upcoming",
@@ -843,8 +857,11 @@ export default function POS() {
 
       <div className="hidden border-b bg-[var(--surface-elevated)] px-6 py-3 text-[var(--text-sm)] text-muted-foreground lg:flex lg:items-center lg:justify-between">
         <span>
-          Work the shift with <GlossaryTooltip term="Progressive disclosure" className="ml-1" /> and a persistent
-          <GlossaryTooltip term="Session checklist" className="ml-1" />.
+          {t.posShiftBannerPrefix}
+          <GlossaryTooltip term={t.posGlossaryProgressiveDisclosureTerm} className="ml-1" />
+          {t.posShiftBannerConnector}
+          <GlossaryTooltip term={t.posGlossarySessionChecklistTerm} className="ml-1" />
+          {t.posShiftBannerSuffix}
         </span>
         <LanguageSelector />
       </div>
