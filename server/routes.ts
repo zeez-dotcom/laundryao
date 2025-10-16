@@ -122,6 +122,7 @@ function getActorName(user?: { firstName?: string | null; lastName?: string | nu
 const parseAmount = (value: string | number | null | undefined) =>
   Number.parseFloat(typeof value === "string" ? value : value != null ? String(value) : "0");
 import { WebSocketServer } from "ws";
+import type WebSocket from "ws";
 
 const upload = multer();
 const uploadDir = path.resolve(import.meta.dirname, "uploads");
@@ -137,6 +138,20 @@ const uploadLogo = multer({
 });
 
 const passwordResetTokens = new Map<string, { userId: string; expires: Date }>();
+
+type DeliveryPortalSession = {
+  deliveryId: string;
+  orderId: string;
+  contact: string;
+  customerName?: string | null;
+  expiresAt?: number;
+};
+
+type DeliveryOrderSubscriber =
+  | { type: "staff"; userId: string; role: User["role"]; branchId: string | null }
+  | { type: "portal"; deliveryId: string; orderId: string };
+
+const ALLOWED_DELIVERY_WS_ROLES = new Set<User["role"]>(["admin", "super_admin", "driver"]);
 
 // Enhanced security: Comprehensive rate limiting for all auth endpoints
 interface RateLimitRecord {
@@ -468,6 +483,7 @@ export async function registerRoutes(
   const { eventBus } = options;
   const deliveryOrderWss = new WebSocketServer({ noServer: true });
   const driverLocationWss = new WebSocketServer({ noServer: true });
+  const deliveryOrderSubscribers = new Map<WebSocket, DeliveryOrderSubscriber>();
   const sessionMiddleware = getAdminSession();
   const passportInitialize = passport.initialize();
   const passportSession = passport.session();
@@ -535,11 +551,57 @@ export async function registerRoutes(
 
     const msg = JSON.stringify(payload);
     for (const client of deliveryOrderWss.clients) {
-      if (client.readyState === client.OPEN) {
-        client.send(msg);
+      if (client.readyState !== client.OPEN) {
+        continue;
       }
+      const subscription = deliveryOrderSubscribers.get(client);
+      if (!subscription) {
+        continue;
+      }
+      if (subscription.type === "portal" && subscription.orderId !== event.orderId) {
+        continue;
+      }
+      client.send(msg);
     }
   };
+
+  deliveryOrderWss.on("connection", (ws, req) => {
+    const user = (req as any).user as User | undefined;
+    const portalSession = (req as any).deliveryPortalSession as DeliveryPortalSession | undefined;
+
+    if (user) {
+      if (!ALLOWED_DELIVERY_WS_ROLES.has(user.role)) {
+        ws.close(1008, "Forbidden");
+        return;
+      }
+      deliveryOrderSubscribers.set(ws, {
+        type: "staff",
+        userId: user.id,
+        role: user.role,
+        branchId: user.branchId ?? null,
+      });
+    } else if (portalSession) {
+      if (portalSession.expiresAt && portalSession.expiresAt < Date.now()) {
+        ws.close(4401, "Session expired");
+        return;
+      }
+      deliveryOrderSubscribers.set(ws, {
+        type: "portal",
+        deliveryId: portalSession.deliveryId,
+        orderId: portalSession.orderId,
+      });
+    } else {
+      ws.close(1008, "Unauthorized");
+      return;
+    }
+
+    const cleanup = () => {
+      deliveryOrderSubscribers.delete(ws);
+    };
+
+    ws.on("close", cleanup);
+    ws.on("error", cleanup);
+  });
 
   driverLocationWss.on("connection", (ws, req) => {
     const user = (req as any).user as User | undefined;
@@ -656,6 +718,38 @@ export async function registerRoutes(
   httpServer.on("upgrade", async (req, socket, head) => {
     const { pathname } = new URL(req.url || "", "http://localhost");
     if (pathname === "/ws/delivery-orders") {
+      try {
+        await runMiddleware(req, sessionMiddleware);
+        await runMiddleware(req, passportInitialize);
+        await runMiddleware(req, passportSession);
+      } catch {
+        socket.destroy();
+        return;
+      }
+
+      const requestAny = req as any;
+      const portalSession = (requestAny.session?.deliveryPortal ?? undefined) as DeliveryPortalSession | undefined;
+      const user = requestAny.user as User | undefined;
+
+      if (portalSession?.expiresAt && portalSession.expiresAt < Date.now()) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      if (user) {
+        if (!ALLOWED_DELIVERY_WS_ROLES.has(user.role)) {
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+      } else if (!portalSession) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      requestAny.deliveryPortalSession = portalSession ?? undefined;
       deliveryOrderWss.handleUpgrade(req, socket, head, (ws) => {
         deliveryOrderWss.emit("connection", ws, req);
       });
