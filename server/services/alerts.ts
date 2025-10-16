@@ -2,7 +2,13 @@ import { randomUUID, createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { db } from "../db";
 import { NotificationService } from "./notification";
-import type { ForecastingService, ForecastRecord, CohortFilter } from "./forecasting";
+import type {
+  ForecastingService,
+  ForecastRecord,
+  CohortFilter,
+  ForecastMetric,
+  HistoricalMetricRow,
+} from "./forecasting";
 
 export type AlertComparisonOperator = "above" | "below" | "equal" | "outside_bounds";
 
@@ -389,38 +395,126 @@ function withinQuietHours(now: Date, quietHours?: { start: string; end: string }
   return minutes >= startMinutes || minutes < endMinutes;
 }
 
+const FORECAST_METRICS = ["orders", "revenue", "average_order_value"] as const;
+
+function isForecastMetric(metric: string): metric is ForecastMetric {
+  return (FORECAST_METRICS as readonly string[]).includes(metric);
+}
+
+function parseMetricKey(metricKey: string): { metric: ForecastMetric | null; qualifier: string } {
+  const [rawMetric, qualifier = "actual"] = metricKey.includes(":")
+    ? metricKey.split(":", 2)
+    : [metricKey, "actual"];
+  if (!isForecastMetric(rawMetric)) {
+    return { metric: null, qualifier };
+  }
+  return { metric: rawMetric, qualifier };
+}
+
+function resolveActualValue(metric: ForecastMetric, row: HistoricalMetricRow): number {
+  switch (metric) {
+    case "orders":
+      return Number(row.orders ?? 0);
+    case "revenue":
+      return Number(row.revenue ?? 0);
+    case "average_order_value": {
+      const orders = Number(row.orders ?? 0);
+      const revenue = Number(row.revenue ?? 0);
+      if (!Number.isFinite(orders) || orders <= 0) return 0;
+      const value = revenue / orders;
+      return Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+    }
+    default:
+      return 0;
+  }
+}
+
+function findLatestActual(metric: ForecastMetric, rows: HistoricalMetricRow[]): number | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const value = resolveActualValue(metric, rows[index]!);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function formatDateForQuery(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 class ForecastBackedMetricProvider implements MetricProvider {
   constructor(private readonly forecastingService: ForecastingService) {}
 
   async getMetricValue(options: MetricProviderOptions): Promise<number | null> {
-    const [metric, qualifier] = options.metric.includes(":") ? options.metric.split(":", 2) : [options.metric, "actual"];
+    const { metric, qualifier } = parseMetricKey(options.metric);
+    if (!metric) {
+      return null;
+    }
+
     if (qualifier === "forecast") {
       const forecasts = await this.forecastingService.getForecasts({
         metric: metric as any,
         branchId: options.branchId ?? null,
         cohort: options.cohort ?? null,
-        startDate: new Date().toISOString().slice(0, 10),
-        endDate: new Date().toISOString().slice(0, 10),
+        startDate: formatDateForQuery(new Date()),
+        endDate: formatDateForQuery(new Date()),
       });
       const latest = forecasts[forecasts.length - 1];
       return latest ? latest.value : null;
     }
-    const accuracy = await this.forecastingService.evaluateAccuracy({
-      metric: metric as any,
+
+    if (["forecast_error", "error", "mae"].includes(qualifier)) {
+      const accuracy = await this.forecastingService.evaluateAccuracy({
+        metric,
+        branchId: options.branchId ?? null,
+        cohort: options.cohort ?? null,
+        compareDays: 1,
+      });
+      return accuracy.sampleSize > 0 ? accuracy.meanAbsoluteError : null;
+    }
+
+    const end = new Date();
+    const lookbacks = [30, 90, 180];
+
+    for (const days of lookbacks) {
+      const start = new Date(end);
+      start.setDate(end.getDate() - days);
+      const historical = await this.forecastingService.getHistoricalSeries({
+        metric,
+        branchId: options.branchId ?? null,
+        cohort: options.cohort ?? null,
+        startDate: formatDateForQuery(start),
+        endDate: formatDateForQuery(end),
+      });
+      const latest = findLatestActual(metric, historical);
+      if (latest != null) {
+        return latest;
+      }
+    }
+
+    const historical = await this.forecastingService.getHistoricalSeries({
+      metric,
       branchId: options.branchId ?? null,
       cohort: options.cohort ?? null,
-      compareDays: 1,
+      startDate: "1970-01-01",
+      endDate: formatDateForQuery(end),
     });
-    return accuracy.sampleSize > 0 ? accuracy.meanAbsoluteError : null;
+
+    return findLatestActual(metric, historical);
   }
 
   async getForecastBand(options: MetricProviderOptions): Promise<Pick<ForecastRecord, "lowerBound" | "upperBound"> | null> {
+    const { metric } = parseMetricKey(options.metric);
+    if (!metric) {
+      return null;
+    }
     const forecasts = await this.forecastingService.getForecasts({
-      metric: options.metric.split(":")[0] as any,
+      metric,
       branchId: options.branchId ?? null,
       cohort: options.cohort ?? null,
-      startDate: new Date().toISOString().slice(0, 10),
-      endDate: new Date().toISOString().slice(0, 10),
+      startDate: formatDateForQuery(new Date()),
+      endDate: formatDateForQuery(new Date()),
     });
     const latest = forecasts[forecasts.length - 1];
     return latest ? { lowerBound: latest.lowerBound, upperBound: latest.upperBound } : null;
