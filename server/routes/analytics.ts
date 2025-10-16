@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Express, Request } from "express";
 import { Router } from "express";
 import { sql } from "drizzle-orm";
-import { requireAuth } from "../auth";
+import { requireAuth, requireAnalyticsDatasetAccess, requireAnalyticsDatasetManage } from "../auth";
 import { db } from "../db";
 import type { ForecastingService, ForecastMetric, CohortFilter } from "../services/forecasting";
 
@@ -80,7 +80,7 @@ function buildCohortClause(req: Request) {
 
 export function registerAnalyticsWorkspaceRoutes(app: Express, forecasting: ForecastingService): void {
   const router = Router();
-  router.use(requireAuth);
+  router.use(requireAuth, requireAnalyticsDatasetAccess);
 
   router.get("/views", async (req, res) => {
     await ensureViewsTable();
@@ -116,7 +116,7 @@ export function registerAnalyticsWorkspaceRoutes(app: Express, forecasting: Fore
     res.json({ views });
   });
 
-  router.post("/views", async (req, res) => {
+  router.post("/views", requireAnalyticsDatasetManage, async (req, res) => {
     await ensureViewsTable();
     const userId = (req.user as any)?.id ?? null;
     const body = req.body as Partial<WorkspaceViewRecord>;
@@ -139,7 +139,7 @@ export function registerAnalyticsWorkspaceRoutes(app: Express, forecasting: Fore
     res.status(201).json({ id: viewId });
   });
 
-  router.put("/views/:id", async (req, res) => {
+  router.put("/views/:id", requireAnalyticsDatasetManage, async (req, res) => {
     await ensureViewsTable();
     const userId = (req.user as any)?.id ?? null;
     const body = req.body as Partial<WorkspaceViewRecord>;

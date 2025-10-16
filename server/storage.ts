@@ -31,6 +31,9 @@ import {
     itemServicePrices,
     transactions,
     users,
+    permissions,
+    rolePermissions,
+    userPermissions,
     categories,
     branches,
     customers,
@@ -139,6 +142,13 @@ const VALID_DELIVERY_STATUSES = [
   "in_transit",
   "delivered",
 ] as const;
+
+export const RBAC_PERMISSION_SLUGS = {
+  analyticsRead: "analytics.datasets.read",
+  analyticsManage: "analytics.datasets.manage",
+  workflowEdit: "workflows.builder.edit",
+  workflowPublish: "workflows.builder.publish",
+} as const;
 
 const PAY_LATER_AGGREGATE = `
   SELECT order_id, SUM(amount) AS amount
@@ -402,6 +412,8 @@ export interface IStorage {
   updateUserPassword(id: string, password: string): Promise<UserWithBranch | undefined>;
   updateUserBranch(id: string, branchId: string | null): Promise<UserWithBranch | undefined>;
   getUsers(): Promise<UserWithBranch[]>;
+  getRolePermissions(role: string): Promise<string[]>;
+  getUserPermissions(userId: string): Promise<string[]>;
   
   // Category operations
   getCategories(userId: string): Promise<Category[]>;
@@ -802,6 +814,12 @@ export class MemStorage {
   private notifications: Notification[];
   private orderPrints: OrderPrint[];
   private securitySettings: SecuritySettings;
+  private permissionCatalog: Map<
+    string,
+    { resource: string; action: string; description?: string }
+  >;
+  private rolePermissionMap: Map<string, Set<string>>;
+  private userPermissionMap: Map<string, Set<string>>;
 
   constructor() {
     this.products = new Map();
@@ -828,10 +846,70 @@ export class MemStorage {
       passwordPolicy: "",
       updatedAt: new Date(),
     };
+    this.permissionCatalog = new Map();
+    this.rolePermissionMap = new Map();
+    this.userPermissionMap = new Map();
     this.initializeData();
   }
 
+  private initializePermissions() {
+    const definitions: Array<{
+      slug: string;
+      resource: string;
+      action: string;
+      description: string;
+    }> = [
+      {
+        slug: RBAC_PERMISSION_SLUGS.analyticsRead,
+        resource: "analytics.datasets",
+        action: "read",
+        description: "View curated analytics datasets and dashboards",
+      },
+      {
+        slug: RBAC_PERMISSION_SLUGS.analyticsManage,
+        resource: "analytics.datasets",
+        action: "manage",
+        description: "Create or modify analytics datasets and derived views",
+      },
+      {
+        slug: RBAC_PERMISSION_SLUGS.workflowEdit,
+        resource: "workflows.builder",
+        action: "edit",
+        description: "Design and edit workflow definitions",
+      },
+      {
+        slug: RBAC_PERMISSION_SLUGS.workflowPublish,
+        resource: "workflows.builder",
+        action: "publish",
+        description: "Publish workflow changes to production",
+      },
+    ];
+
+    for (const def of definitions) {
+      this.permissionCatalog.set(def.slug, {
+        resource: def.resource,
+        action: def.action,
+        description: def.description,
+      });
+    }
+
+    const defaultRoleMap: Record<string, string[]> = {
+      super_admin: definitions.map((def) => def.slug),
+      admin: [
+        RBAC_PERMISSION_SLUGS.analyticsRead,
+        RBAC_PERMISSION_SLUGS.workflowEdit,
+        RBAC_PERMISSION_SLUGS.workflowPublish,
+      ],
+      user: [RBAC_PERMISSION_SLUGS.analyticsRead],
+    };
+
+    for (const [role, slugs] of Object.entries(defaultRoleMap)) {
+      this.rolePermissionMap.set(role, new Set(slugs));
+    }
+  }
+
   private initializeData() {
+    this.initializePermissions();
     // Initialize products
     const initialProducts: InsertProduct[] = [
       {
@@ -1631,10 +1709,20 @@ export class MemStorage {
     return this.securitySettings;
   }
 
+  private computePermissions(user: User | undefined): string[] {
+    if (!user) return [];
+    const roleSet = this.rolePermissionMap.get(user.role) ?? new Set<string>();
+    const userSet = this.userPermissionMap.get(user.id) ?? new Set<string>();
+    const combined = new Set<string>();
+    for (const slug of roleSet) combined.add(slug);
+    for (const slug of userSet) combined.add(slug);
+    return Array.from(combined).sort();
+  }
+
   private buildUserWithBranch(user: User | undefined): UserWithBranch | undefined {
     if (!user) return undefined;
     const branch = user.branchId ? this.branches.get(user.branchId) ?? null : null;
-    return { ...user, branch };
+    return { ...user, branch, permissions: this.computePermissions(user) };
   }
 
   // User methods (stub for MemStorage - not used in production)
@@ -1761,7 +1849,15 @@ export class MemStorage {
   }
 
   async getUsers(): Promise<UserWithBranch[]> {
-    return Array.from(this.users.values()).map(user => this.buildUserWithBranch(user)!);
+    return Array.from(this.users.values()).map((user) => this.buildUserWithBranch(user)!);
+  }
+
+  async getRolePermissions(role: string): Promise<string[]> {
+    return Array.from(this.rolePermissionMap.get(role) ?? []).sort();
+  }
+
+  async getUserPermissions(userId: string): Promise<string[]> {
+    return Array.from(this.userPermissionMap.get(userId) ?? []).sort();
   }
 
   // Category methods (stub for MemStorage - not used in production)
@@ -1976,6 +2072,34 @@ export class MemStorage {
 }
 
 export class DatabaseStorage {
+  async getRolePermissions(role: string): Promise<string[]> {
+    const rows = await db
+      .select({ slug: permissions.slug })
+      .from(rolePermissions)
+      .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+      .where(eq(rolePermissions.role, role));
+    return rows.map((row) => row.slug).sort();
+  }
+
+  async getUserPermissions(userId: string): Promise<string[]> {
+    const rows = await db
+      .select({ slug: permissions.slug })
+      .from(userPermissions)
+      .innerJoin(permissions, eq(userPermissions.permissionId, permissions.id))
+      .where(eq(userPermissions.userId, userId));
+    return rows.map((row) => row.slug).sort();
+  }
+
+  private async computePermissions(role: string, userId: string): Promise<string[]> {
+    const [rolePerms, userPerms] = await Promise.all([
+      this.getRolePermissions(role),
+      this.getUserPermissions(userId),
+    ]);
+    const combined = new Set<string>(rolePerms);
+    for (const slug of userPerms) combined.add(slug);
+    return Array.from(combined).sort();
+  }
+
   private async withTenant<T>(branchId: string | undefined, fn: (tx: any) => Promise<T>): Promise<T> {
     // Always run in a transaction; set app.branch_id if provided
     return await db.transaction(async (tx) => {
@@ -2016,7 +2140,8 @@ export class DatabaseStorage {
       .leftJoin(branches, eq(users.branchId, branches.id))
       .where(eq(users.id, id));
     if (!result) return undefined;
-    return { ...result.user, branch: result.branch };
+    const permissions = await this.computePermissions(result.user.role, result.user.id);
+    return { ...result.user, branch: result.branch, permissions };
   }
 
   async getUserByUsername(username: string): Promise<UserWithBranch | undefined> {
@@ -2026,7 +2151,8 @@ export class DatabaseStorage {
       .leftJoin(branches, eq(users.branchId, branches.id))
       .where(eq(users.username, username));
     if (!result) return undefined;
-    return { ...result.user, branch: result.branch };
+    const permissions = await this.computePermissions(result.user.role, result.user.id);
+    return { ...result.user, branch: result.branch, permissions };
   }
 
   private async initializeUserCatalog(userId: string): Promise<void> {
@@ -2188,7 +2314,52 @@ export class DatabaseStorage {
       .select({ user: users, branch: branches })
       .from(users)
       .leftJoin(branches, eq(users.branchId, branches.id));
-    return results.map((r) => ({ ...r.user, branch: r.branch }));
+    if (!results.length) return [];
+
+    const userIds = results.map((r) => r.user.id);
+    const roles = Array.from(new Set(results.map((r) => r.user.role)));
+
+    const [rolePermRows, userPermRows] = await Promise.all([
+      db
+        .select({ role: rolePermissions.role, slug: permissions.slug })
+        .from(rolePermissions)
+        .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+        .where(inArray(rolePermissions.role, roles)),
+      db
+        .select({ userId: userPermissions.userId, slug: permissions.slug })
+        .from(userPermissions)
+        .innerJoin(permissions, eq(userPermissions.permissionId, permissions.id))
+        .where(inArray(userPermissions.userId, userIds)),
+    ]);
+
+    const roleMap = new Map<string, Set<string>>();
+    for (const row of rolePermRows) {
+      if (!roleMap.has(row.role)) {
+        roleMap.set(row.role, new Set());
+      }
+      roleMap.get(row.role)!.add(row.slug);
+    }
+
+    const userMap = new Map<string, Set<string>>();
+    for (const row of userPermRows) {
+      if (!userMap.has(row.userId)) {
+        userMap.set(row.userId, new Set());
+      }
+      userMap.get(row.userId)!.add(row.slug);
+    }
+
+    return results.map((r) => {
+      const combined = new Set<string>(roleMap.get(r.user.role) ?? []);
+      const userSet = userMap.get(r.user.id);
+      if (userSet) {
+        for (const slug of userSet) combined.add(slug);
+      }
+      return {
+        ...r.user,
+        branch: r.branch,
+        permissions: Array.from(combined).sort(),
+      };
+    });
   }
 
   // Category methods

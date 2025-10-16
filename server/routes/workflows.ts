@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth, requireAdminOrSuperAdmin } from "../auth";
+import { requireAuth, requireWorkflowBuilderEdit, requireWorkflowBuilderPublish } from "../auth";
 import type { WorkflowEngine } from "../services/workflows/engine";
 
 const workflowPayloadSchema = z.object({
@@ -18,7 +18,7 @@ const triggerSimulationSchema = z.object({
 export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): void {
   const router = Router();
 
-  router.get("/catalog", requireAuth, (_req, res) => {
+  router.get("/catalog", requireAuth, requireWorkflowBuilderEdit, (_req, res) => {
     res.json({
       triggers: engine.listTriggers().map((trigger) => ({
         type: trigger.type,
@@ -34,16 +34,27 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
     });
   });
 
-  router.get("/", requireAuth, async (_req, res) => {
+  router.get("/", requireAuth, requireWorkflowBuilderEdit, async (_req, res) => {
     const workflows = await engine.listWorkflows();
     res.json({ workflows });
   });
 
-  router.post("/", requireAdminOrSuperAdmin, async (req, res) => {
+  router.post("/", requireWorkflowBuilderEdit, async (req, res) => {
     try {
       const payload = workflowPayloadSchema.parse(req.body);
       const workflow = await engine.createWorkflow(payload);
       res.status(201).json(workflow);
+      if (req.audit) {
+        await req.audit.log({
+          type: "workflow.created",
+          entityType: "workflow",
+          entityId: workflow.id,
+          metadata: {
+            name: (workflow as any).name ?? null,
+            nodeCount: payload.nodes.length,
+          },
+        });
+      }
     } catch (error) {
       res.status(400).json({
         message: "Failed to create workflow",
@@ -52,7 +63,7 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
     }
   });
 
-  router.get("/:id", requireAuth, async (req, res) => {
+  router.get("/:id", requireAuth, requireWorkflowBuilderEdit, async (req, res) => {
     const workflow = await engine.getWorkflow(req.params.id);
     if (!workflow) {
       res.status(404).json({ message: "Workflow not found" });
@@ -61,7 +72,7 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
     res.json(workflow);
   });
 
-  router.put("/:id", requireAdminOrSuperAdmin, async (req, res) => {
+  router.put("/:id", requireWorkflowBuilderEdit, async (req, res) => {
     try {
       const payload = workflowPayloadSchema.parse(req.body);
       const workflow = await engine.updateWorkflow(req.params.id, payload);
@@ -70,6 +81,17 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
         return;
       }
       res.json(workflow);
+      if (req.audit) {
+        await req.audit.log({
+          type: "workflow.updated",
+          entityType: "workflow",
+          entityId: workflow.id,
+          metadata: {
+            nodeCount: payload.nodes.length,
+            edgeCount: payload.edges.length,
+          },
+        });
+      }
     } catch (error) {
       res.status(400).json({
         message: "Failed to update workflow",
@@ -78,25 +100,44 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
     }
   });
 
-  router.delete("/:id", requireAdminOrSuperAdmin, async (req, res) => {
+  router.delete("/:id", requireWorkflowBuilderEdit, async (req, res) => {
     const deleted = await engine.deleteWorkflow(req.params.id);
     if (!deleted) {
       res.status(404).json({ message: "Workflow not found" });
       return;
     }
+    if (req.audit) {
+      await req.audit.log({
+        type: "workflow.deleted",
+        entityType: "workflow",
+        entityId: req.params.id,
+        severity: "warning",
+      });
+    }
     res.status(204).send();
   });
 
-  router.post("/:id/validate", requireAdminOrSuperAdmin, async (req, res) => {
+  router.post("/:id/validate", requireWorkflowBuilderEdit, async (req, res) => {
     const result = await engine.validateWorkflow(req.params.id);
     if (!result) {
       res.status(404).json({ message: "Workflow not found" });
       return;
     }
+    if (req.audit) {
+      await req.audit.log({
+        type: "workflow.validated",
+        entityType: "workflow",
+        entityId: req.params.id,
+        metadata: {
+          warnings: result.warnings.length,
+          errors: result.errors.length,
+        },
+      });
+    }
     res.json(result);
   });
 
-  router.post("/:id/simulate", requireAdminOrSuperAdmin, async (req, res) => {
+  router.post("/:id/simulate", requireWorkflowBuilderEdit, async (req, res) => {
     try {
       const payload = triggerSimulationSchema.parse(req.body);
       const simulation = await engine.simulateWorkflow(
@@ -108,6 +149,16 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
         res.status(404).json({ message: "Workflow not found" });
         return;
       }
+      if (req.audit) {
+        await req.audit.log({
+          type: "workflow.simulated",
+          entityType: "workflow",
+          entityId: req.params.id,
+          metadata: {
+            triggerType: payload.triggerType,
+          },
+        });
+      }
       res.json(simulation);
     } catch (error) {
       res.status(400).json({
@@ -117,10 +168,21 @@ export function registerWorkflowRoutes(app: Express, engine: WorkflowEngine): vo
     }
   });
 
-  router.post("/trigger/:type", requireAdminOrSuperAdmin, async (req, res) => {
+  router.post("/trigger/:type", requireWorkflowBuilderPublish, async (req, res) => {
     try {
       const payload = z.record(z.any()).parse(req.body ?? {});
       const results = await engine.runTrigger(req.params.type, payload);
+      if (req.audit) {
+        await req.audit.log({
+          type: "workflow.triggered",
+          entityType: "workflow_trigger",
+          entityId: req.params.type,
+          severity: "warning",
+          metadata: {
+            resultCount: Array.isArray(results) ? results.length : 0,
+          },
+        });
+      }
       res.json({ results });
     } catch (error) {
       res.status(400).json({

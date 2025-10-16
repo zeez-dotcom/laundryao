@@ -10,6 +10,8 @@ import { NotificationService } from "./services/notification";
 import { createEventBusFromEnv } from "./services/event-bus";
 import { createPostgresWarehouseWriterFromEnv, EventSink } from "./services/event-sink";
 import { assertDbConnection } from "./db";
+import { DataQualityService } from "./services/data-quality";
+import { ComplianceScheduler } from "./services/compliance";
 
 async function waitForDb(retries = 10): Promise<void> {
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -146,6 +148,8 @@ app.get("/health", (_req, res) =>
   const eventBus = createEventBusFromEnv(logger);
   const writer = createPostgresWarehouseWriterFromEnv(logger);
   let eventSink: EventSink | null = null;
+  const dataQualityService = new DataQualityService();
+  const complianceScheduler = new ComplianceScheduler();
   if (writer) {
     eventSink = new EventSink({
       eventBus,
@@ -158,11 +162,18 @@ app.get("/health", (_req, res) =>
   }
   const server = await registerRoutes(app, notificationService, { eventBus });
 
+  if (process.env.NODE_ENV !== "test") {
+    dataQualityService.start();
+    complianceScheduler.start();
+  }
+
   const gracefulShutdown = async () => {
     try {
       if (eventSink) {
         await eventSink.stop();
       }
+      complianceScheduler.stop();
+      dataQualityService.stop();
       await eventBus.shutdown();
     } finally {
       process.exit(0);
