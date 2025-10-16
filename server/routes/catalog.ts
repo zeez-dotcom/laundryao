@@ -23,6 +23,7 @@ import {
   parseWorksheetData,
   parsePricingMatrixWorksheet,
 } from "../utils/excel";
+import { registerCatalogExperimentRoutes } from "./catalog/experiments";
 
 const branchSelectionSchema = z.object({
   branchId: z
@@ -418,4 +419,10 @@ export function registerCatalogRoutes({
       }
     },
   );
+
+  registerCatalogExperimentRoutes({
+    app,
+    requireAdminOrSuperAdmin,
+    logger,
+  });
 }
