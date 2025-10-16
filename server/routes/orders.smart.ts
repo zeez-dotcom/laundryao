@@ -51,8 +51,27 @@ export function registerSmartOrderRoutes({
     }
 
     const { branchId, customerId, limit } = parsed.data;
+    const currentUser = req.user as UserWithBranch | undefined;
+    const isSuperAdmin = currentUser?.role === "super_admin";
+
+    if (!isSuperAdmin) {
+      if (!currentUser?.branchId) {
+        return res.status(403).json({ message: "Branch access required" });
+      }
+      if (currentUser.branchId !== branchId) {
+        return res.status(403).json({ message: "You are not authorized to access this branch" });
+      }
+    }
 
     try {
+      if (customerId) {
+        const tenantBranchId = isSuperAdmin ? branchId : currentUser?.branchId;
+        const customer = await storage.getCustomer(customerId, tenantBranchId);
+        if (!customer) {
+          return res.status(404).json({ message: "Customer not found" });
+        }
+      }
+
       const packages = customerId
         ? await storage.getCustomerPackagesWithUsage(customerId)
         : [];
@@ -62,7 +81,7 @@ export function registerSmartOrderRoutes({
       ]);
 
       if (anomalyResult.auditTrail.length) {
-        const actorUser = req.user as UserWithBranch | undefined;
+        const actorUser = currentUser;
         await Promise.all(
           anomalyResult.auditTrail.map((entry) =>
             eventBus.publish(
