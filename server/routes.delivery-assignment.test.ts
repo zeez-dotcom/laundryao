@@ -15,7 +15,7 @@ const logger = {
   warn: () => undefined,
   error: () => undefined,
 } as any;
-const broadcastDeliveryUpdate = async () => {
+const broadcastDeliveryEvent = async () => {
   /* no-op */
 };
 const eventBus = { publish: async () => undefined } as any;
@@ -54,7 +54,7 @@ function createApp(options: { optimizationService?: Partial<DeliveryOptimization
     logger,
     requireAuth: noopAuth,
     requireAdminOrSuperAdmin: noopAuth,
-    broadcastDeliveryUpdate,
+    broadcastDeliveryEvent,
     eventBus,
     optimizationService: options.optimizationService as DeliveryOptimizationService | undefined,
   });

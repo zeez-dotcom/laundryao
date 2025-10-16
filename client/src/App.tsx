@@ -17,6 +17,7 @@ import CustomerOrderPage from "@/pages/customer-order";
 import CustomerAuthPage from "@/pages/customer-auth";
 import CustomerOrderingPage from "@/pages/customer-ordering";
 import CustomerDashboardPage from "@/pages/customer-dashboard";
+import DeliveryTrackingPage from "@/pages/portal/DeliveryTracking";
 import DriverDashboard from "@/pages/driver";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { ThemeProvider } from "@/theme";
@@ -46,6 +47,7 @@ function Router() {
       <Route path="/customer-auth" component={CustomerAuthPage} />
       <Route path="/customer-dashboard" component={CustomerDashboardPage} />
       <Route path="/customer-ordering" component={CustomerOrderingPage} />
+      <Route path="/portal/delivery-tracking" component={DeliveryTrackingPage} />
       <Route path="/forgot-password" component={ForgotPasswordPage} />
       <Route path="/reset-password/:token" component={ResetPasswordPage} />
       {!isAuthenticated && <Route component={() => <LoginForm />} />}

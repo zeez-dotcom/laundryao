@@ -627,12 +627,18 @@ export interface IStorage {
   // Delivery orders
   getDeliveryOrders(branchId?: string, status?: DeliveryStatus): Promise<(DeliveryOrder & { order: Order })[]>;
   getDeliveryOrdersByDriver(driverId: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
+  getDeliveryOrderById(id: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
   assignDeliveryOrder(orderId: string, driverId: string): Promise<(DeliveryOrder & { order: Order }) | undefined>;
   getDeliveryOrdersByStatus(status: string, branchId?: string): Promise<(DeliveryOrder & { order: Order })[]>;
   updateDeliveryStatus(
     orderId: string,
     status: DeliveryStatus,
     actor?: string,
+  ): Promise<(DeliveryOrder & { order: Order }) | undefined>;
+  updateDeliverySchedule(
+    deliveryId: string,
+    scheduledTime: Date,
+    actor?: string | null,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
   updateDriverLocation(update: DriverLocationUpdateInput): Promise<DriverLocationSnapshot>;
@@ -643,6 +649,8 @@ export interface IStorage {
     options?: { limit?: number; sinceMinutes?: number },
   ): Promise<DriverLocationSnapshot[]>;
   getDeliveryTrackingSnapshot(orderId: string): Promise<DeliveryTrackingSnapshot | null>;
+  logOrderStatus(orderId: string, status: string, actor?: string | null): Promise<void>;
+  appendDeliveryNote(deliveryId: string, note: string): Promise<void>;
 
     // Order print history
     recordOrderPrint(orderId: string, printedBy: string): Promise<OrderPrint>;
@@ -5795,6 +5803,16 @@ export class DatabaseStorage {
     });
   }
 
+  async getDeliveryOrderById(id: string): Promise<(DeliveryOrder & { order: Order }) | undefined> {
+    const [result] = await db
+      .select({ order: orders, delivery: deliveryOrders })
+      .from(deliveryOrders)
+      .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+      .where(eq(deliveryOrders.id, id));
+    if (!result) return undefined;
+    return { ...result.delivery, order: result.order } as any;
+  }
+
   async assignDeliveryOrder(
     orderId: string,
     driverId: string,
@@ -5866,6 +5884,37 @@ export class DatabaseStorage {
           actor || null,
         );
       }
+
+      return { ...updated, order: existing.order };
+    });
+  }
+
+  async updateDeliverySchedule(
+    deliveryId: string,
+    scheduledTime: Date,
+    actor?: string | null,
+  ): Promise<(DeliveryOrder & { order: Order }) | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ order: orders, delivery: deliveryOrders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(eq(deliveryOrders.id, deliveryId));
+      if (!existing) return undefined;
+
+      const [updated] = await tx
+        .update(deliveryOrders)
+        .set({ scheduledDeliveryTime: scheduledTime, updatedAt: sql`CURRENT_TIMESTAMP` })
+        .where(eq(deliveryOrders.id, deliveryId))
+        .returning();
+
+      await this.recordStatusEvent(
+        tx,
+        existing.order.id,
+        "delivery:scheduled",
+        actor ?? null,
+        scheduledTime,
+      );
 
       return { ...updated, order: existing.order };
     });
@@ -6217,6 +6266,28 @@ export class DatabaseStorage {
       driverLocation,
       deliveryLocation,
     };
+  }
+
+  async logOrderStatus(orderId: string, status: string, actor?: string | null): Promise<void> {
+    await db.insert(orderStatusHistory).values({
+      orderId,
+      status,
+      actor: actor ?? null,
+      occurredAt: new Date(),
+    });
+  }
+
+  async appendDeliveryNote(deliveryId: string, note: string): Promise<void> {
+    const noteLine = `[${new Date().toISOString()}] ${note}`;
+    await db.execute(sql`
+      UPDATE delivery_orders
+      SET delivery_notes = CASE
+          WHEN delivery_notes IS NULL OR delivery_notes = '' THEN ${noteLine}
+          ELSE delivery_notes || E'\n' || ${noteLine}
+        END,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${deliveryId}
+    `);
   }
 
   async getOrdersByBranch(branchId: string, options: { status?: string; limit?: number } = {}): Promise<Order[]> {
