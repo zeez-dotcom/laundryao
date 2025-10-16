@@ -17,6 +17,7 @@ import type { IStorage } from "../storage";
 import { db } from "../db";
 import { haversineDistance } from "../utils/geolocation";
 import { createAnalyticsEvent, type EventBus } from "../services/event-bus";
+import { DeliveryOptimizationService, type AssignmentRecommendation } from "../services/delivery-optimization";
 
 type DeliveryBroadcastPayload = {
   orderId: string;
@@ -80,6 +81,7 @@ interface DeliveryRoutesDeps {
   requireAdminOrSuperAdmin: RequestHandler;
   broadcastDeliveryUpdate: (payload: DeliveryBroadcastPayload) => Promise<void>;
   eventBus: EventBus;
+  optimizationService?: DeliveryOptimizationService;
 }
 
 function isValidStatus(value: string): value is DeliveryStatus {
@@ -104,6 +106,7 @@ export function registerDeliveryRoutes({
   requireAdminOrSuperAdmin,
   broadcastDeliveryUpdate,
   eventBus,
+  optimizationService,
 }: DeliveryRoutesDeps): void {
   app.post("/api/delivery-orders", async (req, res) => {
     const sessionCustomerId = (req.session as { customerId?: string } | undefined)?.customerId;
@@ -202,10 +205,23 @@ export function registerDeliveryRoutes({
         }),
       );
 
+      let autoAssignment: AssignmentRecommendation | null = null;
+      if (deliveryRecord && optimizationService) {
+        try {
+          autoAssignment = await optimizationService.autoAssignDelivery(deliveryRecord.id);
+        } catch (assignError) {
+          logger.warn(
+            { err: assignError, deliveryId: deliveryRecord.id },
+            "Failed to auto-assign delivery order",
+          );
+        }
+      }
+
       res.status(201).json({
         orderId: newOrder.id,
         orderNumber: newOrder.orderNumber,
         total: newOrder.total,
+        autoAssignment,
       });
     } catch (error) {
       logger.error({ err: error }, "Error creating delivery order");
@@ -420,6 +436,102 @@ export function registerDeliveryRoutes({
     } catch (error) {
       logger.error({ err: error }, "Failed to fetch drivers");
       res.status(500).json({ message: "Failed to fetch drivers" });
+    }
+  });
+
+  app.get("/api/control-tower/overview", requireAdminOrSuperAdmin, async (req, res) => {
+    if (!optimizationService) {
+      return res.status(501).json({ message: "Delivery optimization service unavailable" });
+    }
+
+    try {
+      const user = req.user as UserWithBranch;
+      const { branchId: branchQuery } = req.query as { branchId?: string };
+      const branchId =
+        user.role === "super_admin"
+          ? branchQuery || user.branchId || undefined
+          : user.branchId || undefined;
+      if (!branchId) {
+        return res.status(400).json({ message: "Branch context required" });
+      }
+
+      const overview = await optimizationService.buildControlTowerOverview(branchId);
+      res.json(overview);
+    } catch (error) {
+      logger.error({ err: error }, "Failed to build control tower overview");
+      res.status(500).json({ message: "Failed to build control tower overview" });
+    }
+  });
+
+  app.post("/api/control-tower/assignments/preview", requireAdminOrSuperAdmin, async (req, res) => {
+    if (!optimizationService) {
+      return res.status(501).json({ message: "Delivery optimization service unavailable" });
+    }
+
+    try {
+      const user = req.user as UserWithBranch;
+      const body = req.body as {
+        branchId?: string;
+        deliveryIds?: string[];
+        respectManualAssignments?: boolean;
+      };
+      const branchId =
+        user.role === "super_admin"
+          ? body.branchId || user.branchId || undefined
+          : user.branchId || undefined;
+      if (!branchId) {
+        return res.status(400).json({ message: "Branch context required" });
+      }
+
+      const deliveryIds = Array.isArray(body.deliveryIds)
+        ? body.deliveryIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        : undefined;
+
+      const plan = await optimizationService.recommendAssignments({
+        branchId,
+        deliveryIds,
+        respectManualAssignments: body.respectManualAssignments !== false,
+      });
+      res.json(plan);
+    } catch (error) {
+      logger.error({ err: error }, "Failed to preview assignments");
+      res.status(500).json({ message: "Failed to preview assignments" });
+    }
+  });
+
+  app.post("/api/control-tower/assignments/override", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { deliveryId, driverId } = req.body as { deliveryId?: string; driverId?: string };
+      if (!deliveryId || !driverId) {
+        return res.status(400).json({ message: "deliveryId and driverId are required" });
+      }
+
+      const [deliveryRow] = await db
+        .select({ delivery: deliveryOrders, order: orders })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(eq(deliveryOrders.id, deliveryId))
+        .limit(1);
+
+      if (!deliveryRow) {
+        return res.status(404).json({ message: "Delivery not found" });
+      }
+
+      const branchId = deliveryRow.order.branchId ?? deliveryRow.delivery.branchId ?? null;
+      if (user.role !== "super_admin" && user.branchId !== branchId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const updated = await storage.assignDeliveryOrder(deliveryRow.order.id, driverId);
+      if (!updated) {
+        return res.status(400).json({ message: "Unable to assign driver" });
+      }
+
+      res.json({ deliveryId, driverId });
+    } catch (error) {
+      logger.error({ err: error }, "Failed to override delivery assignment");
+      res.status(500).json({ message: "Failed to override assignment" });
     }
   });
 

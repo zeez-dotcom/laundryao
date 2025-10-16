@@ -88,6 +88,7 @@ import {
   type CityType, type DeliveryMode, type PaymentMethodType,
   customerSessions, branchDeliverySettings, branchDeliveryItems, branchDeliveryPackages, branchPaymentMethods, branchQRCodes, deliveryOrders,
   driverLocations,
+  driverLocationTelemetry,
   type DriverLocation,
   expenses, type Expense, type InsertExpense,
   orderStatusEnum,
@@ -118,7 +119,7 @@ import {
   mapLaundryServiceSeeds,
 } from "./seed-data";
 import { PRICE_MATRIX } from "./seed-prices";
-import { haversineDistance } from "./utils/geolocation";
+import { calculateBearing, estimateSpeedKph, haversineDistance } from "./utils/geolocation";
 
 // Simple UUID v4-ish validator to guard raw SQL string interpolation
 function assertUuid(id: string) {
@@ -173,11 +174,38 @@ function buildOrderDateFilter(alias: string, filter: ReportDateRangeFilter): str
 const DRIVER_LOCATION_RETENTION_MINUTES = 60 * 24; // keep one day of history
 const AVERAGE_DRIVER_SPEED_KMH = 35;
 
-type DriverLocationSnapshot = {
+export type DriverLocationSnapshot = {
   driverId: string;
   lat: number;
   lng: number;
   timestamp: Date;
+  speedKph?: number | null;
+  heading?: number | null;
+  accuracyMeters?: number | null;
+  altitudeMeters?: number | null;
+  source?: string | null;
+  batteryLevelPct?: number | null;
+  orderId?: string | null;
+  deliveryId?: string | null;
+  isManualOverride?: boolean;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type DriverLocationUpdateInput = {
+  driverId: string;
+  lat: number;
+  lng: number;
+  heading?: number | null;
+  speedKph?: number | null;
+  accuracyMeters?: number | null;
+  altitudeMeters?: number | null;
+  source?: string | null;
+  batteryLevelPct?: number | null;
+  recordedAt?: Date;
+  orderId?: string | null;
+  deliveryId?: string | null;
+  isManualOverride?: boolean;
+  metadata?: Record<string, unknown> | null;
 };
 
 type DeliveryTrackingSnapshot = {
@@ -607,7 +635,7 @@ export interface IStorage {
     actor?: string,
   ): Promise<(DeliveryOrder & { order: Order }) | undefined>;
 
-  updateDriverLocation(driverId: string, lat: number, lng: number): Promise<DriverLocationSnapshot>;
+  updateDriverLocation(update: DriverLocationUpdateInput): Promise<DriverLocationSnapshot>;
   getLatestDriverLocations(driverIds?: string[]): Promise<DriverLocationSnapshot[]>;
   getLatestDriverLocation(driverId: string): Promise<DriverLocationSnapshot | undefined>;
   getDriverLocationHistory(
@@ -5843,8 +5871,52 @@ export class DatabaseStorage {
     });
   }
 
-  async updateDriverLocation(driverId: string, lat: number, lng: number): Promise<DriverLocationSnapshot> {
-    const recordedAt = new Date();
+  async updateDriverLocation(update: DriverLocationUpdateInput): Promise<DriverLocationSnapshot> {
+    const recordedAt = update.recordedAt ?? new Date();
+    const { driverId, lat, lng } = update;
+
+    const [previous] = await db
+      .select({
+        lat: driverLocationTelemetry.lat,
+        lng: driverLocationTelemetry.lng,
+        recordedAt: driverLocationTelemetry.recordedAt,
+        speedKph: driverLocationTelemetry.speedKph,
+        heading: driverLocationTelemetry.heading,
+      })
+      .from(driverLocationTelemetry)
+      .where(eq(driverLocationTelemetry.driverId, driverId))
+      .orderBy(desc(driverLocationTelemetry.recordedAt))
+      .limit(1);
+
+    let derivedSpeed: number | null = null;
+    let derivedHeading: number | null = null;
+
+    if (previous) {
+      const prevLat = Number(previous.lat);
+      const prevLng = Number(previous.lng);
+      const distanceKm = haversineDistance(prevLat, prevLng, lat, lng);
+      const elapsedMs = recordedAt.getTime() - previous.recordedAt.getTime();
+      const computedSpeed = estimateSpeedKph(distanceKm, elapsedMs);
+      if (computedSpeed != null) {
+        derivedSpeed = computedSpeed;
+      }
+      if (distanceKm > 0.01) {
+        derivedHeading = calculateBearing(prevLat, prevLng, lat, lng);
+      } else if (previous.heading != null) {
+        derivedHeading = Number(previous.heading);
+      }
+    }
+
+    const finalSpeed = update.speedKph ?? derivedSpeed ?? null;
+    const finalHeading = update.heading ?? derivedHeading ?? null;
+    const finalAccuracy = update.accuracyMeters ?? null;
+    const finalAltitude = update.altitudeMeters ?? null;
+    const finalBattery = update.batteryLevelPct ?? null;
+    const finalSource = update.source ?? null;
+    const finalOrderId = update.orderId ?? null;
+    const finalDeliveryId = update.deliveryId ?? null;
+    const finalIsManual = Boolean(update.isManualOverride);
+
     const [row] = await db
       .insert(driverLocations)
       .values({
@@ -5867,17 +5939,45 @@ export class DatabaseStorage {
         recordedAt: driverLocations.recordedAt,
       });
 
-    const inserted =
-      row ?? ({ driverId, lat: lat.toString(), lng: lng.toString(), recordedAt } as DriverLocation);
+    await db.insert(driverLocationTelemetry).values({
+      driverId,
+      lat: lat.toString(),
+      lng: lng.toString(),
+      speedKph: finalSpeed != null ? finalSpeed.toString() : null,
+      heading: finalHeading != null ? finalHeading.toString() : null,
+      accuracyMeters: finalAccuracy != null ? finalAccuracy.toString() : null,
+      altitudeMeters: finalAltitude != null ? finalAltitude.toString() : null,
+      batteryLevelPct: finalBattery != null ? finalBattery.toString() : null,
+      source: finalSource,
+      orderId: finalOrderId,
+      deliveryId: finalDeliveryId,
+      recordedAt,
+      metadata: update.metadata ?? {},
+      isManualOverride: finalIsManual,
+    });
 
     const cutoff = new Date(Date.now() - DRIVER_LOCATION_RETENTION_MINUTES * 60 * 1000);
     await db.delete(driverLocations).where(lt(driverLocations.recordedAt, cutoff));
+    await db.delete(driverLocationTelemetry).where(lt(driverLocationTelemetry.recordedAt, cutoff));
+
+    const inserted =
+      row ?? ({ driverId, lat: lat.toString(), lng: lng.toString(), recordedAt } as DriverLocation);
 
     return {
       driverId: inserted.driverId,
       lat: Number(inserted.lat),
       lng: Number(inserted.lng),
       timestamp: inserted.recordedAt,
+      speedKph: finalSpeed,
+      heading: finalHeading,
+      accuracyMeters: finalAccuracy,
+      altitudeMeters: finalAltitude,
+      source: finalSource,
+      batteryLevelPct: finalBattery,
+      orderId: finalOrderId,
+      deliveryId: finalDeliveryId,
+      isManualOverride: finalIsManual,
+      metadata: update.metadata ?? null,
     };
   }
 
@@ -5901,18 +6001,73 @@ export class DatabaseStorage {
       ORDER BY driver_id, recorded_at DESC`,
     );
 
-    return (result.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>).map(
-      (row) => ({
+    const rows = result.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>;
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const telemetryFilter = sql`WHERE driver_id IN (${sql.join(
+      rows.map((row) => sql`${row.driver_id}`),
+      sql`, `,
+    )})`;
+
+    const telemetryResult = await db.execute(
+      sql`SELECT DISTINCT ON (driver_id)
+        driver_id,
+        speed_kph,
+        heading,
+        accuracy_meters,
+        altitude_meters,
+        battery_level_pct,
+        source,
+        order_id,
+        delivery_id,
+        is_manual_override,
+        metadata
+      FROM driver_location_telemetry
+      ${telemetryFilter}
+      ORDER BY driver_id, recorded_at DESC`,
+    );
+
+    const telemetryMap = new Map(
+      (telemetryResult.rows as Array<{
+        driver_id: string;
+        speed_kph: string | null;
+        heading: string | null;
+        accuracy_meters: string | null;
+        altitude_meters: string | null;
+        battery_level_pct: string | null;
+        source: string | null;
+        order_id: string | null;
+        delivery_id: string | null;
+        is_manual_override: boolean | null;
+        metadata: Record<string, unknown> | null;
+      }>).map((entry) => [entry.driver_id, entry]),
+    );
+
+    return rows.map((row) => {
+      const telemetry = telemetryMap.get(row.driver_id);
+      return {
         driverId: row.driver_id,
         lat: Number(row.lat),
         lng: Number(row.lng),
         timestamp: row.recorded_at,
-      }),
-    );
+        speedKph: telemetry?.speed_kph != null ? Number(telemetry.speed_kph) : null,
+        heading: telemetry?.heading != null ? Number(telemetry.heading) : null,
+        accuracyMeters: telemetry?.accuracy_meters != null ? Number(telemetry.accuracy_meters) : null,
+        altitudeMeters: telemetry?.altitude_meters != null ? Number(telemetry.altitude_meters) : null,
+        batteryLevelPct: telemetry?.battery_level_pct != null ? Number(telemetry.battery_level_pct) : null,
+        source: telemetry?.source ?? null,
+        orderId: telemetry?.order_id ?? null,
+        deliveryId: telemetry?.delivery_id ?? null,
+        isManualOverride: telemetry?.is_manual_override ?? false,
+        metadata: telemetry?.metadata ?? null,
+      } satisfies DriverLocationSnapshot;
+    });
   }
 
   async getLatestDriverLocation(driverId: string): Promise<DriverLocationSnapshot | undefined> {
-    const result = await db.execute(
+    const locationResult = await db.execute(
       sql`SELECT driver_id, lat, lng, recorded_at
       FROM driver_locations
       WHERE driver_id = ${driverId}
@@ -5920,14 +6075,46 @@ export class DatabaseStorage {
       LIMIT 1`,
     );
 
-    const row = (result.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>)[0];
+    const row = (locationResult.rows as Array<{ driver_id: string; lat: string; lng: string; recorded_at: Date }>)[0];
     if (!row) return undefined;
+
+    const telemetryResult = await db.execute(
+      sql`SELECT speed_kph, heading, accuracy_meters, altitude_meters, battery_level_pct, source, order_id, delivery_id, is_manual_override, metadata
+      FROM driver_location_telemetry
+      WHERE driver_id = ${driverId}
+      ORDER BY recorded_at DESC
+      LIMIT 1`,
+    );
+
+    const telemetry = (telemetryResult.rows as Array<{
+      speed_kph: string | null;
+      heading: string | null;
+      accuracy_meters: string | null;
+      altitude_meters: string | null;
+      battery_level_pct: string | null;
+      source: string | null;
+      order_id: string | null;
+      delivery_id: string | null;
+      is_manual_override: boolean | null;
+      metadata: Record<string, unknown> | null;
+    }>)[0];
+
     return {
       driverId: row.driver_id,
       lat: Number(row.lat),
       lng: Number(row.lng),
       timestamp: row.recorded_at,
-    };
+      speedKph: telemetry?.speed_kph != null ? Number(telemetry.speed_kph) : null,
+      heading: telemetry?.heading != null ? Number(telemetry.heading) : null,
+      accuracyMeters: telemetry?.accuracy_meters != null ? Number(telemetry.accuracy_meters) : null,
+      altitudeMeters: telemetry?.altitude_meters != null ? Number(telemetry.altitude_meters) : null,
+      batteryLevelPct: telemetry?.battery_level_pct != null ? Number(telemetry.battery_level_pct) : null,
+      source: telemetry?.source ?? null,
+      orderId: telemetry?.order_id ?? null,
+      deliveryId: telemetry?.delivery_id ?? null,
+      isManualOverride: telemetry?.is_manual_override ?? false,
+      metadata: telemetry?.metadata ?? null,
+    } satisfies DriverLocationSnapshot;
   }
 
   async getDriverLocationHistory(
@@ -5935,22 +6122,32 @@ export class DatabaseStorage {
     options: { limit?: number; sinceMinutes?: number } = {},
   ): Promise<DriverLocationSnapshot[]> {
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 500);
-    const conditions: any[] = [eq(driverLocations.driverId, driverId)];
+    const conditions: any[] = [eq(driverLocationTelemetry.driverId, driverId)];
     if (options.sinceMinutes && options.sinceMinutes > 0) {
       const since = new Date(Date.now() - options.sinceMinutes * 60 * 1000);
-      conditions.push(gte(driverLocations.recordedAt, since));
+      conditions.push(gte(driverLocationTelemetry.recordedAt, since));
     }
 
     const rows = await db
       .select({
-        driverId: driverLocations.driverId,
-        lat: driverLocations.lat,
-        lng: driverLocations.lng,
-        recordedAt: driverLocations.recordedAt,
+        driverId: driverLocationTelemetry.driverId,
+        lat: driverLocationTelemetry.lat,
+        lng: driverLocationTelemetry.lng,
+        recordedAt: driverLocationTelemetry.recordedAt,
+        speedKph: driverLocationTelemetry.speedKph,
+        heading: driverLocationTelemetry.heading,
+        accuracyMeters: driverLocationTelemetry.accuracyMeters,
+        altitudeMeters: driverLocationTelemetry.altitudeMeters,
+        batteryLevelPct: driverLocationTelemetry.batteryLevelPct,
+        source: driverLocationTelemetry.source,
+        orderId: driverLocationTelemetry.orderId,
+        deliveryId: driverLocationTelemetry.deliveryId,
+        isManualOverride: driverLocationTelemetry.isManualOverride,
+        metadata: driverLocationTelemetry.metadata,
       })
-      .from(driverLocations)
+      .from(driverLocationTelemetry)
       .where(and(...conditions))
-      .orderBy(desc(driverLocations.recordedAt))
+      .orderBy(desc(driverLocationTelemetry.recordedAt))
       .limit(limit);
 
     return rows.map((row) => ({
@@ -5958,7 +6155,17 @@ export class DatabaseStorage {
       lat: Number(row.lat),
       lng: Number(row.lng),
       timestamp: row.recordedAt,
-    }));
+      speedKph: row.speedKph != null ? Number(row.speedKph) : null,
+      heading: row.heading != null ? Number(row.heading) : null,
+      accuracyMeters: row.accuracyMeters != null ? Number(row.accuracyMeters) : null,
+      altitudeMeters: row.altitudeMeters != null ? Number(row.altitudeMeters) : null,
+      batteryLevelPct: row.batteryLevelPct != null ? Number(row.batteryLevelPct) : null,
+      source: row.source ?? null,
+      orderId: row.orderId ?? null,
+      deliveryId: row.deliveryId ?? null,
+      isManualOverride: row.isManualOverride ?? false,
+      metadata: row.metadata ?? null,
+    } satisfies DriverLocationSnapshot));
   }
 
   async getDeliveryTrackingSnapshot(orderId: string): Promise<DeliveryTrackingSnapshot | null> {

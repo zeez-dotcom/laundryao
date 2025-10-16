@@ -80,6 +80,7 @@ import fs from "fs";
 import { CustomerInsightsService } from "./services/customer-insights";
 import { OrderSuggestionsService } from "./services/order-suggestions";
 import { OrderAnomaliesService } from "./services/order-anomalies";
+import { DeliveryOptimizationService } from "./services/delivery-optimization";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
@@ -526,21 +527,60 @@ export async function registerRoutes(
       }
 
       try {
-        const { lat, lng } = JSON.parse(msg.toString());
-        if (typeof lat !== "number" || typeof lng !== "number") {
+        const payload = JSON.parse(msg.toString()) as Record<string, unknown>;
+        const lat = Number((payload as any).lat);
+        const lng = Number((payload as any).lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
           return;
         }
 
-        const snapshot = await storage.updateDriverLocation(user.id, lat, lng);
-        const payload = JSON.stringify({
+        const parseNumber = (value: unknown) =>
+          typeof value === "number" && Number.isFinite(value) ? value : undefined;
+        const parseString = (value: unknown) => (typeof value === "string" && value.trim().length > 0 ? value : undefined);
+        const parseDate = (value: unknown) => {
+          if (typeof value !== "string") return undefined;
+          const time = Date.parse(value);
+          return Number.isNaN(time) ? undefined : new Date(time);
+        };
+        const metadataValue = (payload as Record<string, unknown>)["metadata"];
+
+        const snapshot = await storage.updateDriverLocation({
+          driverId: user.id,
+          lat,
+          lng,
+          speedKph: parseNumber((payload as any).speedKph ?? (payload as any).speed),
+          heading: parseNumber((payload as any).heading),
+          accuracyMeters: parseNumber((payload as any).accuracyMeters ?? (payload as any).accuracy),
+          altitudeMeters: parseNumber((payload as any).altitudeMeters ?? (payload as any).altitude),
+          batteryLevelPct: parseNumber((payload as any).batteryLevelPct ?? (payload as any).batteryPct),
+          source: parseString((payload as any).source),
+          orderId: parseString((payload as any).orderId),
+          deliveryId: parseString((payload as any).deliveryId),
+          recordedAt: parseDate((payload as any).timestamp ?? (payload as any).recordedAt),
+          metadata:
+            typeof metadataValue === "object" && metadataValue !== null && !Array.isArray(metadataValue)
+              ? (metadataValue as Record<string, unknown>)
+              : undefined,
+          isManualOverride: Boolean((payload as any).isManualOverride),
+        });
+        const broadcastPayload = JSON.stringify({
           driverId: snapshot.driverId,
           lat: snapshot.lat,
           lng: snapshot.lng,
+          speedKph: snapshot.speedKph ?? null,
+          heading: snapshot.heading ?? null,
+          accuracyMeters: snapshot.accuracyMeters ?? null,
+          altitudeMeters: snapshot.altitudeMeters ?? null,
+          batteryLevelPct: snapshot.batteryLevelPct ?? null,
+          orderId: snapshot.orderId ?? null,
+          deliveryId: snapshot.deliveryId ?? null,
+          source: snapshot.source ?? null,
+          isManualOverride: snapshot.isManualOverride ?? false,
           timestamp: snapshot.timestamp.toISOString(),
         });
         for (const client of driverLocationWss.clients) {
           if (client.readyState === client.OPEN) {
-            client.send(payload);
+            client.send(broadcastPayload);
           }
         }
 
@@ -553,10 +593,11 @@ export async function registerRoutes(
               driverId: snapshot.driverId,
               lat: snapshot.lat,
               lng: snapshot.lng,
-              speedKph: undefined,
-              accuracyMeters: undefined,
-              orderId: undefined,
-              deliveryId: undefined,
+              speedKph: snapshot.speedKph ?? undefined,
+              heading: snapshot.heading ?? undefined,
+              accuracyMeters: snapshot.accuracyMeters ?? undefined,
+              orderId: snapshot.orderId ?? undefined,
+              deliveryId: snapshot.deliveryId ?? undefined,
             },
             actor: {
               actorId: user.id,
@@ -1258,6 +1299,8 @@ export async function registerRoutes(
     }
   });
 
+  const optimizationService = new DeliveryOptimizationService({ storage, logger });
+
   registerDeliveryRoutes({
     app,
     storage,
@@ -1266,6 +1309,7 @@ export async function registerRoutes(
     requireAdminOrSuperAdmin,
     broadcastDeliveryUpdate,
     eventBus,
+    optimizationService,
   });
 
   const customerInsightsService = new CustomerInsightsService();
