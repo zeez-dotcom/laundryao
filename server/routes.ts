@@ -91,6 +91,7 @@ import { registerAlertRoutes } from "./routes/alerts";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 import { registerWorkflowRoutes } from "./routes/workflows";
 import { WorkflowEngine } from "./services/workflows/engine";
+import { registerGraphql } from "./graphql";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
 async function resolveUuidByPublicId(table: any, idParam: string) {
@@ -1368,6 +1369,18 @@ export async function registerRoutes(
   });
 
   const customerInsightsService = new CustomerInsightsService();
+
+  await registerGraphql({
+    app,
+    httpServer,
+    storage,
+    workflowEngine,
+    requireAuth,
+    services: {
+      customerInsightsService,
+      optimizationService,
+    },
+  });
   registerCustomerCommandCenterRoutes({
     app,
     storage,

@@ -80,6 +80,7 @@ services:
       - EVENT_SINK_BATCH_SIZE=50
       - EVENT_SINK_FLUSH_INTERVAL_MS=5000
       - WAREHOUSE_DATABASE_URL=postgres://warehouse:warehouse@warehouse-db:5432/laundry_warehouse
+      - ENABLE_GRAPHQL_PLAYGROUND=true
     ports:
       - "5000:5000"
     depends_on:
