@@ -11,6 +11,73 @@ import { createAnalyticsEvent } from "../services/event-bus";
 const deliveryOtpStore = new Map<string, { otp: string; expiresAt: Date }>();
 const deliveryMessages = new Map<string, DeliveryMessagePayload[]>();
 
+type PortalChannel = "sms" | "email";
+
+function normalizeContact(contact: string, channel: PortalChannel): string | null {
+  if (channel === "sms") {
+    const digits = contact.replace(/\D+/g, "");
+    return digits.length > 0 ? digits : null;
+  }
+  const normalized = contact.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+async function resolveAuthorizedContact(
+  storage: IStorage,
+  delivery: Awaited<ReturnType<typeof resolveDelivery>>,
+  channel: PortalChannel,
+): Promise<string | null> {
+  if (!delivery) return null;
+  const order = (delivery.order ?? {}) as any;
+
+  if (channel === "sms") {
+    const fromOrder = typeof order.customerPhone === "string" ? normalizeContact(order.customerPhone, "sms") : null;
+    if (fromOrder) return fromOrder;
+  } else {
+    const fromOrder = typeof order.customerEmail === "string" ? normalizeContact(order.customerEmail, "email") : null;
+    if (fromOrder) return fromOrder;
+  }
+
+  if (order.customerId) {
+    try {
+      const customer = await storage.getCustomer(order.customerId, order.branchId ?? undefined);
+      if (!customer) return null;
+      if (channel === "sms" && customer.phoneNumber) {
+        return normalizeContact(customer.phoneNumber, "sms");
+      }
+      if (channel === "email" && customer.email) {
+        return normalizeContact(customer.email, "email");
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+type ContactValidationResult =
+  | { status: "ok"; contact: string }
+  | { status: "missing" }
+  | { status: "mismatch" };
+
+async function validatePortalContact(
+  storage: IStorage,
+  delivery: Awaited<ReturnType<typeof resolveDelivery>>,
+  channel: PortalChannel,
+  contact: string,
+): Promise<ContactValidationResult> {
+  const expected = await resolveAuthorizedContact(storage, delivery, channel);
+  if (!expected) {
+    return { status: "missing" };
+  }
+  const normalized = normalizeContact(contact, channel);
+  if (!normalized || normalized !== expected) {
+    return { status: "mismatch" };
+  }
+  return { status: "ok", contact: expected };
+}
+
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -110,8 +177,17 @@ export function registerDeliveryMessageRoutes({
         return res.status(404).json({ message: "Delivery not found" });
       }
 
+      const validation = await validatePortalContact(storage, delivery, channel, contact);
+      if (validation.status === "missing") {
+        return res.status(422).json({ message: "No contact available for the selected channel" });
+      }
+      if (validation.status === "mismatch") {
+        logger.warn({ deliveryId }, "delivery portal contact mismatch");
+        return res.status(403).json({ message: "Contact does not match delivery" });
+      }
+
       const otp = generateOtp();
-      const key = `${deliveryId}:${contact}`;
+      const key = `${deliveryId}:${channel}:${validation.contact}`;
       deliveryOtpStore.set(key, {
         otp,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
@@ -135,13 +211,22 @@ export function registerDeliveryMessageRoutes({
 
   app.post("/api/portal/delivery-auth/verify", async (req, res) => {
     try {
-      const { deliveryId, contact, otp } = authVerifySchema.parse(req.body);
+      const { deliveryId, contact, otp, channel } = authVerifySchema.parse(req.body);
       const delivery = await resolveDelivery(storage, deliveryId);
       if (!delivery) {
         return res.status(404).json({ message: "Delivery not found" });
       }
 
-      const key = `${deliveryId}:${contact}`;
+      const validation = await validatePortalContact(storage, delivery, channel, contact);
+      if (validation.status === "missing") {
+        return res.status(422).json({ message: "No contact available for the selected channel" });
+      }
+      if (validation.status === "mismatch") {
+        logger.warn({ deliveryId }, "delivery portal contact mismatch on verify");
+        return res.status(403).json({ message: "Contact does not match delivery" });
+      }
+
+      const key = `${deliveryId}:${channel}:${validation.contact}`;
       if (!verifyOtp(key, otp)) {
         return res.status(401).json({ message: "Invalid verification code" });
       }
@@ -149,7 +234,7 @@ export function registerDeliveryMessageRoutes({
       (req.session as any).deliveryPortal = {
         deliveryId,
         orderId: delivery.orderId,
-        contact,
+        contact: validation.contact,
         customerName: (delivery.order as any).customerName ?? null,
         expiresAt: Date.now() + 30 * 60 * 1000,
       };
