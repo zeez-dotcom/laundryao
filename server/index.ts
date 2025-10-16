@@ -204,5 +204,8 @@ app.get("/health", (_req, res) =>
 
   server.listen(listenOpts, () => {
     log(`serving on http://${host}:${port}`);
+    if (app.get("env") !== "production") {
+      log(`GraphQL playground available at http://${host}:${port}/graphql`);
+    }
   });
 })();
