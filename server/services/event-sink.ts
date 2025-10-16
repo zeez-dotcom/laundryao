@@ -75,16 +75,23 @@ export class EventSink {
   }
 
   async flush(): Promise<void> {
-    if (!this.buffers.size) return;
     if (this.flushing) {
       await this.flushing;
+      if (!this.buffers.size) {
+        return;
+      }
+    } else if (!this.buffers.size) {
       return;
     }
-    this.flushing = this.flushInternal();
+
+    const flushPromise = this.flushInternal();
+    this.flushing = flushPromise;
     try {
-      await this.flushing;
+      await flushPromise;
     } finally {
-      this.flushing = undefined;
+      if (this.flushing === flushPromise) {
+        this.flushing = undefined;
+      }
     }
   }
 
