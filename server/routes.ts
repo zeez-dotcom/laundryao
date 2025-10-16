@@ -55,6 +55,7 @@ import {
   getAdminSession,
 } from "./auth";
 import { attachTenant } from "./middleware/tenant-context";
+import { auditMiddleware } from "./middleware/audit";
 import { seedSuperAdmin } from "./seed-superadmin";
 import { seedPackages } from "./seed-packages";
 import { seedBranches } from "./seed-branches";
@@ -810,6 +811,7 @@ export async function registerRoutes(
     passportInitialize,
     passportSession,
   });
+  app.use(auditMiddleware);
   // Attach derived tenantId (branch) to each request for downstream use
   app.use(attachTenant);
   // Optional: seed data only when explicitly enabled
@@ -3526,6 +3528,16 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Customer not found" });
       }
       const customer = await storage.updateCustomer(id, data, branchId);
+      if (req.audit) {
+        await req.audit.log({
+          type: "customer.updated",
+          entityType: "customer",
+          entityId: id,
+          metadata: {
+            updatedFields: Object.keys(data),
+          },
+        });
+      }
       res.json(customer);
     } catch (error) {
       res.status(500).json({ message: "Failed to update customer" });
@@ -3563,6 +3575,21 @@ export async function registerRoutes(
             `Your password has been reset. Your new password is: ${password}`,
           );
         }
+      }
+
+      if (req.audit) {
+        await req.audit.log({
+          type: "customer.password_reset",
+          entityType: "customer",
+          entityId: id,
+          severity: "warning",
+          metadata: {
+            notifyChannels: {
+              sms: Boolean(notify && updated?.phoneNumber),
+              email: Boolean(notify && updated?.email),
+            },
+          },
+        });
       }
 
       res.json({ message: "Password updated" });

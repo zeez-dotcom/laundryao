@@ -184,6 +184,49 @@ export const users = pgTable("users", {
   updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const permissions = pgTable(
+  "permissions",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    slug: text("slug").notNull().unique(),
+    resource: text("resource").notNull(),
+    action: text("action").notNull(),
+    description: text("description"),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+);
+
+export const rolePermissions = pgTable(
+  "role_permissions",
+  {
+    role: text("role").notNull(),
+    permissionId: uuid("permission_id")
+      .references(() => permissions.id, { onDelete: "cascade" })
+      .notNull(),
+    grantedAt: timestamptz("granted_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.role, table.permissionId] }),
+  }),
+);
+
+export const userPermissions = pgTable(
+  "user_permissions",
+  {
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    permissionId: uuid("permission_id")
+      .references(() => permissions.id, { onDelete: "cascade" })
+      .notNull(),
+    grantedAt: timestamptz("granted_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.permissionId] }),
+  }),
+);
+
 // Categories table for organizing clothing items and services
 export const categories = pgTable("categories", {
   publicId: serial("public_id").unique(),
@@ -477,6 +520,54 @@ export const expenses = pgTable("expenses", {
   createdBy: uuid("created_by").references(() => users.id).notNull(),
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    eventType: text("event_type").notNull(),
+    actorId: uuid("actor_id"),
+    actorType: text("actor_type").notNull().default("system"),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    severity: text("severity").notNull().default("info"),
+    requestId: text("request_id"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    entityIdx: index("audit_events_entity_idx").on(table.entityType, table.entityId),
+    eventTypeIdx: index("audit_events_event_type_idx").on(table.eventType),
+  }),
+);
+
+export const dataQualityRuns = pgTable("data_quality_runs", {
+  id: uuid("id").primaryKey().default(uuidFn),
+  startedAt: timestamptz("started_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  completedAt: timestamptz("completed_at"),
+  status: text("status").notNull().default("running"),
+  checkTypes: jsonb("check_types").notNull().default(sql`'[]'::jsonb`),
+});
+
+export const dataQualityExceptions = pgTable(
+  "data_quality_exceptions",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    runId: uuid("run_id")
+      .references(() => dataQualityRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    checkName: text("check_name").notNull(),
+    severity: text("severity").notNull().default("medium"),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    detectedAt: timestamptz("detected_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    details: jsonb("details").notNull().default(sql`'{}'::jsonb`),
+  },
+  (table) => ({
+    runIdx: index("data_quality_exceptions_run_idx").on(table.runId),
+    checkIdx: index("data_quality_exceptions_check_idx").on(table.checkName),
+  }),
+);
 
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().default(uuidFn),
@@ -1344,7 +1435,7 @@ export type CouponService = typeof couponServices.$inferSelect;
 export type InsertCouponService = z.infer<typeof insertCouponServiceSchema>;
 export type SecuritySettings = typeof securitySettings.$inferSelect;
 export type InsertSecuritySettings = z.infer<typeof insertSecuritySettingsSchema>;
-export type UserWithBranch = User & { branch: Branch | null };
+export type UserWithBranch = User & { branch: Branch | null; permissions: string[] };
 
 export interface OrderTimelineEvent {
   id: string;
@@ -1484,6 +1575,13 @@ export type DeliveryOrder = typeof deliveryOrders.$inferSelect;
 export type InsertDeliveryOrder = z.infer<typeof insertDeliveryOrderSchema>;
 export type DriverLocation = typeof driverLocations.$inferSelect;
 export type InsertDriverLocation = typeof driverLocations.$inferInsert;
+
+export type Permission = typeof permissions.$inferSelect;
+export type RolePermission = typeof rolePermissions.$inferSelect;
+export type UserPermission = typeof userPermissions.$inferSelect;
+export type AuditEvent = typeof auditEvents.$inferSelect;
+export type DataQualityRun = typeof dataQualityRuns.$inferSelect;
+export type DataQualityException = typeof dataQualityExceptions.$inferSelect;
 
 // Enhanced types for existing tables with new enums
 export type OrderStatus = typeof orderStatusEnum[number];

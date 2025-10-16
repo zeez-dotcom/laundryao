@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { differenceInMinutes } from "date-fns";
+import { recordAuditEvent } from "../../middleware/audit";
 
 export type IntegrationCategory =
   | "accounting"
@@ -126,11 +127,31 @@ export abstract class ConnectorBase {
   }
 
   async registerWebhook(event: string, targetUrl: string): Promise<WebhookRegistration> {
-    return this.registry.register(event, targetUrl);
+    const registration = this.registry.register(event, targetUrl);
+    await recordAuditEvent(
+      {
+        type: "integration.webhook_registered",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { event, targetUrl },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
+    return registration;
   }
 
   async removeWebhook(id: string): Promise<boolean> {
-    return this.registry.remove(id);
+    const removed = this.registry.remove(id);
+    await recordAuditEvent(
+      {
+        type: "integration.webhook_removed",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { webhookId: id, removed },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
+    return removed;
   }
 
   async authorize(accountId: string, code: string): Promise<OAuthToken> {
@@ -139,6 +160,18 @@ export abstract class ConnectorBase {
     }
     const token = await this.oauthManager.exchange(code);
     this.tokens.set(accountId, token);
+    await recordAuditEvent(
+      {
+        type: "integration.oauth_authorized",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: {
+          accountId,
+          scopes: this.metadata.oauth?.scopes ?? [],
+        },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
     return token;
   }
 
@@ -160,14 +193,31 @@ export class AccountingConnector extends ConnectorBase {
   async syncInvoices(context: ConnectorContext): Promise<{ synced: number }> {
     await this.getValidToken(context.accountId);
     const count = Math.floor(Math.random() * 5) + 1;
+    await recordAuditEvent(
+      {
+        type: "integration.accounting.sync",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { accountId: context.accountId, branchId: context.branchId, recordsSynced: count },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
     return { synced: count };
   }
 
   async exportLedger(context: ConnectorContext): Promise<{ url: string }> {
     await this.getValidToken(context.accountId);
-    return {
-      url: `https://api.example.com/ledger/${context.accountId}/${Date.now()}`,
-    };
+    const url = `https://api.example.com/ledger/${context.accountId}/${Date.now()}`;
+    await recordAuditEvent(
+      {
+        type: "integration.accounting.export",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { accountId: context.accountId, branchId: context.branchId, url },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
+    return { url };
   }
 }
 
@@ -178,6 +228,15 @@ export class MarketingAutomationConnector extends ConnectorBase {
     payload: Record<string, unknown>,
   ): Promise<{ status: string }> {
     await this.getValidToken(context.accountId);
+    await recordAuditEvent(
+      {
+        type: "integration.marketing.trigger",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { accountId: context.accountId, journeyId, payload },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
     return {
       status: `Journey ${journeyId} triggered for ${context.accountId}`,
     };
@@ -188,9 +247,17 @@ export class MarketingAutomationConnector extends ConnectorBase {
     profile: Record<string, unknown>,
   ): Promise<{ profileId: string }> {
     await this.getValidToken(context.accountId);
-    return {
-      profileId: profile.id ? String(profile.id) : randomUUID(),
-    };
+    const profileId = profile.id ? String(profile.id) : randomUUID();
+    await recordAuditEvent(
+      {
+        type: "integration.marketing.upsert_profile",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: { accountId: context.accountId, profileId },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
+    return { profileId };
   }
 }
 
@@ -198,12 +265,28 @@ export class MessagingConnector extends ConnectorBase {
   async sendMessage(
     context: ConnectorContext,
     channel: "sms" | "whatsapp" | "push",
-    _message: string,
-    _metadata: Record<string, unknown> = {},
+    message: string,
+    messageMetadata: Record<string, unknown> = {},
   ): Promise<{ id: string; channel: string }> {
     await this.getValidToken(context.accountId);
+    const id = randomUUID();
+    await recordAuditEvent(
+      {
+        type: "integration.messaging.dispatch",
+        entityType: "integration",
+        entityId: this.metadata.id,
+        metadata: {
+          accountId: context.accountId,
+          channel,
+          payloadLength: message.length,
+          metadata: messageMetadata,
+          messageId: id,
+        },
+      },
+      { source: this.metadata.id, actorType: "system" },
+    );
     return {
-      id: randomUUID(),
+      id,
       channel,
     };
   }

@@ -3,10 +3,10 @@ import { Strategy as LocalStrategy } from "passport-local";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import pgSession from "connect-pg-simple";
-import { storage } from "./storage";
+import { storage, RBAC_PERMISSION_SLUGS } from "./storage";
 import { pool } from "./db";
 import bcrypt from "bcryptjs";
-import type { User } from "@shared/schema";
+import type { User, UserWithBranch } from "@shared/schema";
 // duplicate RequestHandler import removed
 import crypto, { randomUUID } from "node:crypto";
 import logger from "./logger";
@@ -27,7 +27,7 @@ function resolveSessionSecret() {
 export const SESSION_SECRET = resolveSessionSecret();
 
 // Hardcoded super admin credentials for development/testing
-const hardcodedAdmin: User = {
+const hardcodedAdmin: UserWithBranch = {
   publicId: 0 as any,
   id: "superadmin",
   username: "superadmin",
@@ -40,6 +40,8 @@ const hardcodedAdmin: User = {
   branchId: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  branch: null,
+  permissions: Object.values(RBAC_PERMISSION_SLUGS),
 };
 
 
@@ -180,11 +182,14 @@ export async function setupAuth(app: Express, options: SetupAuthOptions = {}) {
       console.log("Deserializing user with ID:", id);
       if (id === hardcodedAdmin.id) {
         console.log("Found hardcoded admin");
-        return done(null, hardcodedAdmin);
+        return done(null, { ...hardcodedAdmin, permissions: Array.from(collectPermissions(hardcodedAdmin)) });
       }
       const user = await storage.getUser(id);
       console.log("Deserialized user:", user ? "found" : "not found");
-      done(null, user);
+      if (user) {
+        user.permissions = Array.from(collectPermissions(user));
+      }
+      done(null, user ?? false);
     } catch (error) {
       console.error("Deserialization error:", error);
       done(error as any);
@@ -204,14 +209,14 @@ export const requireAuth: RequestHandler = (req, res, next) => {
 };
 
 export const requireSuperAdmin: RequestHandler = (req, res, next) => {
-  if (req.isAuthenticated() && (req.user as User)?.role === 'super_admin') {
+  if (req.isAuthenticated() && (req.user as UserWithBranch)?.role === 'super_admin') {
     return next();
   }
   res.status(403).json({ message: "Super admin access required" });
 };
 
 export const requireAdminOrSuperAdmin: RequestHandler = (req, res, next) => {
-  const user = req.user as User;
+  const user = req.user as UserWithBranch;
   if (req.isAuthenticated() && (user?.role === 'admin' || user?.role === 'super_admin')) {
     return next();
   }
@@ -220,13 +225,49 @@ export const requireAdminOrSuperAdmin: RequestHandler = (req, res, next) => {
 
 export const requireCustomerOrAdmin: RequestHandler = (req, res, next) => {
   const customerId = (req.session as any)?.customerId as string | undefined;
-  const user = req.user as User;
+  const user = req.user as UserWithBranch | undefined;
   const isAdmin = req.isAuthenticated() && (user?.role === 'admin' || user?.role === 'super_admin');
   if (customerId || isAdmin) {
     return next();
   }
   res.status(401).json({ message: "Login required" });
 };
+
+function collectPermissions(user: UserWithBranch | undefined | null): Set<string> {
+  const effective = new Set<string>();
+  if (!user) return effective;
+  const base = Array.isArray(user.permissions) ? user.permissions : [];
+  for (const slug of base) {
+    if (typeof slug === 'string') {
+      effective.add(slug);
+    }
+  }
+  if (user.role === 'super_admin') {
+    for (const slug of Object.values(RBAC_PERMISSION_SLUGS)) {
+      effective.add(slug);
+    }
+  }
+  return effective;
+}
+
+function userHasPermission(user: UserWithBranch | undefined | null, permission: string): boolean {
+  return collectPermissions(user).has(permission);
+}
+
+export function requirePermission(permission: string): RequestHandler {
+  return (req, res, next) => {
+    const user = req.user as UserWithBranch | undefined;
+    if (req.isAuthenticated() && userHasPermission(user, permission)) {
+      return next();
+    }
+    res.status(403).json({ message: "Permission denied" });
+  };
+}
+
+export const requireAnalyticsDatasetAccess = requirePermission(RBAC_PERMISSION_SLUGS.analyticsRead);
+export const requireAnalyticsDatasetManage = requirePermission(RBAC_PERMISSION_SLUGS.analyticsManage);
+export const requireWorkflowBuilderEdit = requirePermission(RBAC_PERMISSION_SLUGS.workflowEdit);
+export const requireWorkflowBuilderPublish = requirePermission(RBAC_PERMISSION_SLUGS.workflowPublish);
 
 // Minimal driver token utilities for tests and lightweight endpoints
 // Token format: a simple opaque string containing the driver id
