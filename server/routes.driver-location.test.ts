@@ -59,11 +59,26 @@ test('authenticated driver updates broadcast using session user id', async () =>
   storage.getUserByUsername = async (username: string) =>
     username === driverUser.username ? driverUser : undefined;
   storage.getUser = async (id: string) => (id === driverUser.id ? driverUser : undefined);
-  const updateCalls: Array<[string, number, number]> = [];
+  const updateCalls: Array<Record<string, unknown>> = [];
   const stubTimestamp = new Date("2024-01-01T00:00:00.000Z");
-  storage.updateDriverLocation = async (driverId: string, lat: number, lng: number) => {
-    updateCalls.push([driverId, lat, lng]);
-    return { driverId, lat, lng, timestamp: stubTimestamp };
+  storage.updateDriverLocation = async (update: any) => {
+    updateCalls.push(update);
+    return {
+      driverId: update.driverId,
+      lat: update.lat,
+      lng: update.lng,
+      timestamp: stubTimestamp,
+      speedKph: 32,
+      heading: 180,
+      accuracyMeters: 5,
+      altitudeMeters: 10,
+      batteryLevelPct: 0.8,
+      orderId: "order-100",
+      deliveryId: "delivery-200",
+      source: "gps",
+      isManualOverride: false,
+      metadata: { ping: "test" },
+    } as any;
   };
   storage.getLatestDriverLocations = async () => [];
 
@@ -104,12 +119,26 @@ test('authenticated driver updates broadcast using session user id', async () =>
       driverId: driverUser.id,
       lat,
       lng,
+      speedKph: 32,
+      heading: 180,
+      accuracyMeters: 5,
+      altitudeMeters: 10,
+      batteryLevelPct: 0.8,
+      orderId: "order-100",
+      deliveryId: "delivery-200",
+      source: "gps",
+      isManualOverride: false,
       timestamp: stubTimestamp.toISOString(),
     });
-    assert.deepEqual(updateCalls, [[driverUser.id, lat, lng]]);
+    assert.equal(updateCalls.length, 1);
+    assert.equal(updateCalls[0]?.driverId, driverUser.id);
+    assert.equal(updateCalls[0]?.lat, lat);
+    assert.equal(updateCalls[0]?.lng, lng);
     const telemetryEvent = capturedEvents.find((event) => event.category === 'driver.telemetry');
     assert.ok(telemetryEvent);
     assert.equal((telemetryEvent!.payload as any).driverId, driverUser.id);
+    assert.equal((telemetryEvent!.payload as any).heading, 180);
+    assert.equal((telemetryEvent!.payload as any).speedKph, 32);
   } finally {
     storage.getUserByUsername = originalGetUserByUsername;
     storage.getUser = originalGetUser;

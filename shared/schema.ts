@@ -702,6 +702,38 @@ export const driverLocations = pgTable(
   }),
 );
 
+export const driverLocationTelemetry = pgTable(
+  "driver_location_telemetry",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    driverId: uuid("driver_id").references(() => users.id).notNull(),
+    lat: numeric("lat", { precision: 9, scale: 6 }).notNull(),
+    lng: numeric("lng", { precision: 9, scale: 6 }).notNull(),
+    speedKph: numeric("speed_kph", { precision: 6, scale: 2 }),
+    heading: numeric("heading", { precision: 6, scale: 2 }),
+    accuracyMeters: numeric("accuracy_meters", { precision: 7, scale: 2 }),
+    altitudeMeters: numeric("altitude_meters", { precision: 7, scale: 2 }),
+    batteryLevelPct: numeric("battery_level_pct", { precision: 5, scale: 2 }),
+    source: varchar("source", { length: 64 }),
+    orderId: uuid("order_id").references(() => orders.id),
+    deliveryId: uuid("delivery_id").references(() => deliveryOrders.id),
+    recordedAt: timestamptz("recorded_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    metadata: jsonb("metadata")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    isManualOverride: boolean("is_manual_override").default(false).notNull(),
+  },
+  (table) => ({
+    driverRecordedIdx: index("driver_location_telemetry_driver_recorded_idx").on(
+      table.driverId,
+      table.recordedAt,
+    ),
+    recordedAtIdx: index("driver_location_telemetry_recorded_idx").on(table.recordedAt),
+    deliveryIdx: index("driver_location_telemetry_delivery_idx").on(table.deliveryId),
+  }),
+);
+
 export const insertClothingItemSchema = createInsertSchema(clothingItems)
   .omit({
     id: true,
