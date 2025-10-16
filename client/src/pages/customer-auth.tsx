@@ -6,7 +6,7 @@ import { CustomerRegistrationForm } from "@/components/auth/CustomerRegistration
 import { CustomerLoginForm } from "@/components/auth/CustomerLoginForm";
 import { CustomerPasswordResetForm } from "@/components/auth/CustomerPasswordResetForm";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Loader2, Store, AlertCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { LanguageSelector } from "@/components/language-selector";
@@ -156,6 +156,7 @@ function CustomerAuthContent() {
           <CardContent className="pt-6">
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
+              <AlertTitle>{t.customerAuth.qr.errorTitle}</AlertTitle>
               <AlertDescription>{qrErrorMessage}</AlertDescription>
             </Alert>
           </CardContent>
@@ -177,7 +178,9 @@ function CustomerAuthContent() {
               <Store className="h-6 w-6 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h1 className="font-semibold text-lg">{branch.name}</h1>
+              <h1 className="font-semibold text-lg">
+                {t.customerAuth.qr.branchTitle.replace("{branch}", branch.name)}
+              </h1>
               <p className="text-sm text-muted-foreground">
                 {t.customerAuth.qr.branchSubtitle.replace("{code}", branch.code)}
               </p>

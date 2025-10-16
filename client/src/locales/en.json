@@ -445,6 +445,8 @@
       "missing": "No QR code or branch code provided.",
       "invalid": "Invalid QR code. Please scan a valid QR code from one of our branch locations.",
       "verifying": "Verifying QR code...",
+      "errorTitle": "QR Code Error",
+      "branchTitle": "Welcome to {branch}",
       "branchSubtitle": "Ready to serve you • Code: {code}"
     },
     "login": {

@@ -445,6 +445,8 @@
             "missing": "لم يتم توفير رمز QR أو رمز الفرع.",
             "invalid": "رمز QR غير صالح. يرجى مسح رمز صالح من أحد فروعنا.",
             "verifying": "جارٍ التحقق من رمز QR...",
+            "errorTitle": "خطأ في رمز QR",
+            "branchTitle": "مرحبًا بك في {branch}",
             "branchSubtitle": "جاهزون لخدمتك • الرمز: {code}"
         },
         "login": {
