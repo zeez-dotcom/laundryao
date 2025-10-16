@@ -16,6 +16,7 @@ import {
 import type { IStorage } from "../storage";
 import { db } from "../db";
 import { haversineDistance } from "../utils/geolocation";
+import { createAnalyticsEvent, type EventBus } from "../services/event-bus";
 
 type DeliveryBroadcastPayload = {
   orderId: string;
@@ -78,6 +79,7 @@ interface DeliveryRoutesDeps {
   requireAuth: RequestHandler;
   requireAdminOrSuperAdmin: RequestHandler;
   broadcastDeliveryUpdate: (payload: DeliveryBroadcastPayload) => Promise<void>;
+  eventBus: EventBus;
 }
 
 function isValidStatus(value: string): value is DeliveryStatus {
@@ -101,6 +103,7 @@ export function registerDeliveryRoutes({
   requireAuth,
   requireAdminOrSuperAdmin,
   broadcastDeliveryUpdate,
+  eventBus,
 }: DeliveryRoutesDeps): void {
   app.post("/api/delivery-orders", async (req, res) => {
     const sessionCustomerId = (req.session as { customerId?: string } | undefined)?.customerId;
@@ -158,16 +161,46 @@ export function registerDeliveryRoutes({
         isDeliveryRequest: true,
       });
 
-      if (payload.deliveryAddressId) {
-        await storage.createDeliveryOrder({
+      const deliveryRecord = payload.deliveryAddressId
+        ? await storage.createDeliveryOrder({
           orderId: newOrder.id,
           deliveryMode: "driver_pickup",
           deliveryAddressId: payload.deliveryAddressId,
           deliveryInstructions: payload.deliveryInstructions || "",
           deliveryStatus: "pending",
           deliveryFee: deliveryFee.toFixed(2),
-        });
-      }
+        })
+        : null;
+
+      const totalValue = Number.parseFloat(String(newOrder.total ?? total));
+      await eventBus.publish(
+        createAnalyticsEvent({
+          source: "api.delivery-orders",
+          category: "order.lifecycle",
+          name: "created",
+          payload: {
+            orderId: newOrder.id,
+            branchId: branch.id,
+            customerId: sessionCustomerId,
+            status: newOrder.status ?? "received",
+            previousStatus: null,
+            deliveryStatus: deliveryRecord?.deliveryStatus ?? (payload.deliveryAddressId ? "pending" : null),
+            deliveryId: deliveryRecord?.id ?? null,
+            total: Number.isFinite(totalValue) ? totalValue : undefined,
+            promisedReadyDate:
+              typeof (newOrder as any).promisedReadyDate === "string"
+                ? (newOrder as any).promisedReadyDate
+                : promisedReadyDate,
+          },
+          actor: {
+            actorId: sessionCustomerId,
+            actorType: "customer",
+          },
+          context: {
+            tenantId: branch.id,
+          },
+        }),
+      );
 
       res.status(201).json({
         orderId: newOrder.id,
@@ -208,7 +241,37 @@ export function registerDeliveryRoutes({
         req.params.id,
         resolveActorName(user),
       );
+      if (!updated) {
+        return res.status(404).json({ message: "Order not found" });
+      }
       res.json(updated);
+
+      const acceptedTotal = Number.parseFloat(String((updated as any).total ?? order.total ?? 0));
+      await eventBus.publish(
+        createAnalyticsEvent({
+          source: "api.delivery-order-requests",
+          category: "order.lifecycle",
+          name: "request_accepted",
+          payload: {
+            orderId: updated.id,
+            branchId: updated.branchId ?? order.branchId ?? null,
+            customerId: updated.customerId ?? order.customerId ?? null,
+            status: updated.status ?? order.status ?? "accepted",
+            previousStatus: order.status ?? null,
+            deliveryStatus: "accepted",
+            deliveryId: null,
+            total: Number.isFinite(acceptedTotal) ? acceptedTotal : undefined,
+          },
+          actor: {
+            actorId: user.id,
+            actorType: "user",
+            actorName: resolveActorName(user),
+          },
+          context: {
+            tenantId: order.branchId ?? undefined,
+          },
+        }),
+      );
     } catch (error) {
       logger.error({ err: error }, "Failed to accept delivery order request");
       res.status(500).json({ message: "Failed to accept delivery order request" });
@@ -400,6 +463,33 @@ export function registerDeliveryRoutes({
         deliveryStatus: updated.deliveryStatus,
         driverId: updated.driverId || null,
       });
+
+      const monetaryTotal = Number.parseFloat(String((updated.order as any).total ?? 0));
+      await eventBus.publish(
+        createAnalyticsEvent({
+          source: "api.delivery-orders.status",
+          category: "order.lifecycle",
+          name: "delivery_status_changed",
+          payload: {
+            orderId: updated.orderId,
+            branchId: updated.order.branchId ?? null,
+            customerId: updated.order.customerId ?? null,
+            status,
+            previousStatus: currentStatus,
+            deliveryStatus: updated.deliveryStatus,
+            deliveryId: updated.id ?? null,
+            total: Number.isFinite(monetaryTotal) ? monetaryTotal : undefined,
+          },
+          actor: {
+            actorId: user.id,
+            actorType: "user",
+            actorName: resolveActorName(user),
+          },
+          context: {
+            tenantId: updated.order.branchId ?? undefined,
+          },
+        }),
+      );
     } catch (error) {
       logger.error({ err: error }, "Failed to update delivery status");
       res.status(500).json({ message: "Failed to update delivery status" });
