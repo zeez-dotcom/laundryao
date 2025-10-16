@@ -365,6 +365,110 @@
     "scheduling": "شیڈول کیا جا رہا ہے...",
     "createAnotherOrder": "ایک اور آرڈر بنائیں",
     "returnToBranchInfo": "برانچ کی معلومات پر واپس جائیں",
+    "customerAuth": {
+        "qr": {
+            "missing": "کوئی کیو آر کوڈ یا برانچ کوڈ فراہم نہیں کیا گیا۔",
+            "invalid": "غلط کیو آر کوڈ۔ براہ کرم ہماری کسی برانچ سے درست کیو آر کوڈ اسکین کریں۔",
+            "verifying": "کیو آر کوڈ کی تصدیق ہو رہی ہے...",
+            "branchSubtitle": "ہم آپ کی خدمت میں حاضر ہیں • کوڈ: {code}"
+        },
+        "login": {
+            "title": "خوش آمدید",
+            "subtitle": "اپنے اکاؤنٹ میں سائن ان کریں تاکہ آرڈر جاری رکھ سکیں",
+            "phoneLabel": "موبائل نمبر",
+            "phonePlaceholder": "اپنا موبائل نمبر درج کریں",
+            "pinLabel": "پن",
+            "pinPlaceholder": "اپنا 4 ہندسوں کا پن درج کریں",
+            "rememberMe": "مجھے یاد رکھیں",
+            "forgotPin": "پن بھول گئے؟",
+            "button": "سائن ان",
+            "buttonLoading": "سائن ان ہو رہا ہے...",
+            "ctaPrefix": "اکاؤنٹ نہیں ہے؟",
+            "ctaAction": "اکاؤنٹ بنائیں",
+            "toast": {
+                "successTitle": "خوش آمدید!",
+                "successDescription": "ہیلو {name}! آپ لاگ ان ہو گئے ہیں۔"
+            },
+            "errors": {
+                "generic": "لاگ اِن ناکام۔ براہ کرم دوبارہ کوشش کریں۔",
+                "invalidCredentials": "غلط فون نمبر یا پن",
+                "phoneRequired": "براہ کرم پہلے اپنا فون نمبر درج کریں"
+            }
+        },
+        "registration": {
+            "title": "اکاؤنٹ بنائیں",
+            "subtitle": "مرحلہ {step} از {total} - ہمارے ساتھ شامل ہوں اور آرڈر شروع کریں!",
+            "phonePlaceholder": "مثلاً، +96512345678 یا 12345678",
+            "nameLabel": "مکمل نام",
+            "namePlaceholder": "اپنا مکمل نام درج کریں",
+            "pinPlaceholder": "4-8 ہندسے",
+            "confirmPinLabel": "پن کی تصدیق کریں",
+            "confirmPinPlaceholder": "پن دوبارہ درج کریں",
+            "cityLabel": "شہر/علاقہ",
+            "addressLabel": "پتہ کا لیبل",
+            "addressLabelPlaceholder": "مثلاً گھر، دفتر وغیرہ",
+            "addressFieldLabel": "مکمل پتہ",
+            "addressPlaceholder": "گلی، عمارت، اپارٹمنٹ کی تفصیل",
+            "termsLabel": "میں شرائط و ضوابط سے اتفاق کرتا ہوں",
+            "termsHelper": "اکاؤنٹ بناتے وقت آپ ہماری پرائیویسی پالیسی اور شرائط خدمت سے اتفاق کرتے ہیں۔",
+            "defaultAddressLabel": "گھر",
+            "submit": "اکاؤنٹ بنائیں",
+            "ctaPrefix": "پہلے سے اکاؤنٹ ہے؟",
+            "ctaAction": "سائن ان کریں",
+            "toast": {
+                "successTitle": "رجسٹریشن کامیاب",
+                "successDescription": "خوش آمدید {name}! آپ رجسٹر ہو کر لاگ ان ہو گئے ہیں۔",
+                "errorTitle": "رجسٹریشن ناکام",
+                "errorDescription": "رجسٹر نہیں ہو سکا۔ براہ کرم دوبارہ کوشش کریں۔"
+            }
+        },
+        "reset": {
+            "titleRequest": "پاس ورڈ ری سیٹ",
+            "titleOtp": "او ٹی پی درج کریں",
+            "subtitleRequest": "ری سیٹ کوڈ حاصل کرنے کے لیے اپنا موبائل نمبر درج کریں",
+            "subtitleOtp": "6 عددی کوڈ درج کریں جو {phone} پر بھیجا گیا ہے",
+            "phonePlaceholder": "اپنا موبائل نمبر درج کریں",
+            "codeLabel": "6 عددی کوڈ",
+            "codePlaceholder": "000000",
+            "newPinLabel": "نیا پن",
+            "newPinPlaceholder": "نیا پن",
+            "confirmPinLabel": "پن کی تصدیق کریں",
+            "confirmPinPlaceholder": "تصدیق",
+            "buttons": {
+                "send": "ری سیٹ کوڈ بھیجیں",
+                "sendLoading": "بھیجا جا رہا ہے...",
+                "backToLogin": "لاگ ان پر واپس جائیں",
+                "back": "واپس",
+                "submit": "پن ری سیٹ کریں",
+                "submitLoading": "اپ ڈیٹ ہو رہا ہے..."
+            },
+            "toast": {
+                "otpSentTitle": "او ٹی پی بھیج دیا گیا",
+                "otpSentDescription": "6 عددی کوڈ آپ کے موبائل نمبر پر بھیج دیا گیا ہے۔",
+                "otpErrorTitle": "او ٹی پی بھیجنے میں ناکامی",
+                "otpErrorDescription": "او ٹی پی بھیجنے میں ناکام۔ براہ کرم دوبارہ کوشش کریں۔",
+                "successTitle": "پاس ورڈ ری سیٹ کامیاب",
+                "successDescription": "آپ کا پاس ورڈ کامیابی سے اپ ڈیٹ ہو گیا ہے۔",
+                "errorTitle": "پاس ورڈ ری سیٹ ناکام",
+                "errorDescription": "پاس ورڈ ری سیٹ نہیں ہو سکا۔ براہ کرم دوبارہ کوشش کریں۔"
+            }
+        },
+        "validation": {
+            "branchCodeRequired": "برانچ کوڈ درکار ہے",
+            "phoneMin": "فون نمبر کم از کم 8 ہندسے ہونا چاہئے",
+            "phoneFormat": "غلط فون نمبر فارمیٹ",
+            "passwordMin": "پن کم از کم 4 ہندسوں کا ہونا چاہئے",
+            "passwordMax": "پن زیادہ سے زیادہ 8 ہندسوں کا ہونا چاہئے",
+            "nameMin": "نام کم از کم 2 حروف کا ہونا چاہئے",
+            "cityRequired": "براہ کرم کوئی شہر منتخب کریں",
+            "addressMin": "پتہ کم از کم 5 حروف کا ہونا چاہئے",
+            "addressLabelRequired": "پتہ کا لیبل درکار ہے",
+            "termsRequired": "آپ کو شرائط و ضوابط سے اتفاق کرنا ہوگا",
+            "passwordsMismatch": "پن مطابقت نہیں رکھتے",
+            "otpLength": "او ٹی پی 6 ہندسے ہونا چاہئے",
+            "otpNumeric": "او ٹی پی عددی ہونا چاہئے"
+        }
+    },
     "delivery": {
         "disabledMessage": "ڈلیوری فی الحال دستیاب نہیں"
     },
