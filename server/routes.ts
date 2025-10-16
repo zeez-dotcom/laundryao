@@ -81,6 +81,10 @@ import { CustomerInsightsService } from "./services/customer-insights";
 import { OrderSuggestionsService } from "./services/order-suggestions";
 import { OrderAnomaliesService } from "./services/order-anomalies";
 import { DeliveryOptimizationService } from "./services/delivery-optimization";
+import { ForecastingService } from "./services/forecasting";
+import { AlertingEngine } from "./services/alerts";
+import { registerAnalyticsWorkspaceRoutes } from "./routes/analytics";
+import { registerAlertRoutes } from "./routes/alerts";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
@@ -465,6 +469,17 @@ export async function registerRoutes(
 
   const orderSuggestionsService = new OrderSuggestionsService();
   const orderAnomaliesService = new OrderAnomaliesService();
+  const forecastingService = new ForecastingService();
+  const alertingEngine = new AlertingEngine({
+    notificationService,
+    forecastingService,
+  });
+
+  setInterval(() => {
+    alertingEngine.runDueRules().catch((error) => {
+      logger.error({ err: error }, "scheduled alert evaluation failed");
+    });
+  }, 60_000);
 
   const runMiddleware = (req: any, middleware: RequestHandler) =>
     new Promise<void>((resolve, reject) => {
@@ -1515,6 +1530,9 @@ export async function registerRoutes(
     suggestionsService: orderSuggestionsService,
     anomaliesService: orderAnomaliesService,
   });
+
+  registerAnalyticsWorkspaceRoutes(app, forecastingService);
+  registerAlertRoutes(app, alertingEngine);
 
   // Public branch info
   app.get("/api/branches/:code", async (req, res) => {
