@@ -382,6 +382,8 @@ export class ForecastingService {
   async evaluateAccuracy(options: AccuracyRequest): Promise<ForecastAccuracy> {
     const compareDays = options.compareDays ?? 14;
     const endDate = this.clock();
+    const comparisonEnd = new Date(endDate);
+    comparisonEnd.setDate(comparisonEnd.getDate() + compareDays);
     const startDate = new Date(endDate);
     startDate.setDate(endDate.getDate() - compareDays);
     const cohort = options.cohort ?? null;
@@ -390,7 +392,7 @@ export class ForecastingService {
       branchId: options.branchId ?? null,
       cohort,
       startDate,
-      endDate,
+      endDate: comparisonEnd,
     });
 
     const forecasts = await this.repository.listForecasts({
@@ -398,7 +400,7 @@ export class ForecastingService {
       branchId: options.branchId ?? null,
       cohort,
       startDate: startDate.toISOString().slice(0, 10),
-      endDate: endDate.toISOString().slice(0, 10),
+      endDate: comparisonEnd.toISOString().slice(0, 10),
     });
 
     const actualLookup = new Map(actuals.map((row) => [row.date, options.metric === "orders" ? row.orders : options.metric === "revenue" ? row.revenue : toAverageOrderValue(row.orders, row.revenue)]));

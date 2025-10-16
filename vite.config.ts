@@ -21,6 +21,10 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
+      "leaflet/dist/leaflet.css": path.resolve(
+        import.meta.dirname,
+        "node_modules/leaflet/dist/leaflet.css",
+      ),
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
@@ -42,5 +46,19 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./client/test/setup.ts"],
+    alias: {
+      "react-leaflet": path.resolve(
+        import.meta.dirname,
+        "client/test/mocks/react-leaflet.ts",
+      ),
+      leaflet: path.resolve(
+        import.meta.dirname,
+        "client/test/mocks/leaflet.ts",
+      ),
+      "leaflet/dist/leaflet.css": path.resolve(
+        import.meta.dirname,
+        "client/test/mocks/leaflet.css",
+      ),
+    },
   },
 });

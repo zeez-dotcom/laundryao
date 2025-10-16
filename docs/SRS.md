@@ -81,29 +81,36 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 - WebSocket broadcasts for delivery status and driver location.
 - Validated state transitions to prevent invalid jumps.
 
-### 3.6 Reporting and Analytics
+### 3.6 Workflow Automation & Integrations
+- Workflow builder at `/automation/workflows` provides drag-and-drop graph editing backed by the workflow engine.
+- `/api/workflows` exposes CRUD, validation, catalog discovery, simulation (`POST /:id/simulate`), and manual trigger execution under RBAC (`admin` or `super_admin` for mutations).
+- Persisted state includes tables `workflow_definitions`, `workflow_nodes`, `workflow_edges`, `workflow_executions`, and `workflow_execution_events`.
+- Default triggers: `orders.created`, `customers.segmented`; default actions: notification dispatch, webhook invocation, CRM field updates.
+- Integrations catalog at `/automation/integrations` lists OAuth connectors (accounting, marketing automation, messaging) with webhook registries.
+
+### 3.7 Reporting and Analytics
 - Sales summaries, top products/services, clothing-item analytics, expenses reports, branch performance.
 
-### 3.7 Notifications
+### 3.8 Notifications
 - Email via SMTP (Nodemailer) with `SMTP_*` env; SMS via Twilio when enabled and configured with `SMS_PROVIDER=twilio`, `SMS_ACCOUNT_SID`, `SMS_AUTH_TOKEN`, and `SMS_FROM_NUMBER`.
 - Customer insights provide templated outreach; admins can queue bulk SMS/email actions through `/api/customer-insights/*` routes with per-customer cooldowns and audit logging.
 
-### 3.8 Branch Customization and Ads
+### 3.9 Branch Customization and Ads
 - Branch-specific customer dashboard settings and ad management with impressions/clicks.
 
-### 3.9 Engagement Automation
+### 3.10 Engagement Automation
 - `/api/reports/customer-insights` exposes churn tiers, preferred services, and recommended outreach actions.
 - `GET/PUT /api/customer-insights/:id/actions` returns or overrides the stored action plan (next contact, channel, notes).
 - `POST /api/customer-insights/actions/bulk-send` queues SMS/email notifications, enforces rate limits (default 24h), and records outcomes for each customer.
 - Admin UI supports filtering insights by churn tier, reviewing suggested actions, and confirming bulk outreach with template placeholders (e.g., `{name}`).
 - Command center dossier (`GET /api/customers/:id/command-center`) aggregates profile, order history, balances, package usage, AI-generated summaries, outreach timeline, and exposes inline actions that call existing REST endpoints (payments, customer-insights). Audit entries can be pushed via `POST /api/customers/:id/command-center/audit`.
 
-### 3.10 Smart Order Composer
+### 3.11 Smart Order Composer
 - `/api/orders/smart` aggregates customer purchase history, seasonal branch trends, package balances, and anomaly detection (price spikes, duplicate orders) into a single response.
 - Detected anomalies emit audit events through the analytics event bus, ensuring the order log captures investigation trails.
 - The create-order workspace includes a Smart Composer sidebar that surfaces suggestions, package impact, and alerts with apply actions.
 
-### 3.11 Catalog Experimentation
+### 3.12 Catalog Experimentation
 - `/api/catalog/experiments` manages draft → forecast → publish lifecycle for sandbox price/service experiments.
 - Forecasts estimate revenue lift, demand multipliers, confidence, and risk level; publishing is blocked for high-risk or un-forecasted experiments.
 - Admin UI captures experiment hypotheses and exposes forecast/publish controls with confidence and guardrail status.

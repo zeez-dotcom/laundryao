@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
-import App from "./App";
 import { ThemeProvider, useTheme } from "@/theme";
 // Mock TranslationProvider to avoid async locale loading/spinner
 vi.mock("@/context/TranslationContext", async () => {
@@ -37,6 +36,27 @@ vi.mock("@/context/AuthContext", async () => {
     }),
   };
 });
+
+vi.mock(
+  "react-leaflet",
+  () => {
+    const MockContainer = ({ children }: { children: React.ReactNode }) => (
+      <div data-testid="mock-map">{children}</div>
+    );
+    const MockComponent = ({ children }: { children?: React.ReactNode }) => (
+      <>{children}</>
+    );
+    return {
+      MapContainer: MockContainer,
+      TileLayer: MockComponent,
+      CircleMarker: MockComponent,
+      Popup: MockComponent,
+    };
+  },
+  { virtual: true },
+);
+
+import App from "./App";
 
 // Helper to mock prefers-color-scheme
 function mockPrefersDark(matches: boolean) {

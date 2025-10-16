@@ -27,6 +27,8 @@ import CommandPalette from "@/components/navigation/CommandPalette";
 import { TourProvider } from "@/components/onboarding/TourProvider";
 import CreateOrderPage from "@/pages/orders/CreateOrder";
 import CatalogExperimentsPage from "@/pages/catalog/Experiments";
+import WorkflowBuilderPage from "@/pages/automation/WorkflowBuilder";
+import IntegrationsCatalogPage from "@/pages/automation/IntegrationsCatalog";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuthContext();
@@ -52,6 +54,8 @@ function Router() {
       {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
       {isAuthenticated && <Route path="/orders/create" component={CreateOrderPage} />}
       {isAuthenticated && <Route path="/catalog/experiments" component={CatalogExperimentsPage} />}
+      {isAuthenticated && <Route path="/automation/workflows" component={WorkflowBuilderPage} />}
+      {isAuthenticated && <Route path="/automation/integrations" component={IntegrationsCatalogPage} />}
       {isAuthenticated && (
         <Route path="/customers/:id/command-center" component={CommandCenterPage} />
       )}
