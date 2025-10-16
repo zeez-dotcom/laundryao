@@ -12,6 +12,14 @@ import {
   type MetricProvider,
 } from "./services/alerts";
 import { computeCohortKey } from "./services/alerts";
+import {
+  ForecastingService,
+  type ForecastingRepository,
+  type ForecastRecord,
+  type ForecastMetric,
+  type HistoricalMetricRow,
+  type CohortFilter as ForecastCohort,
+} from "./services/forecasting";
 import { NotificationService } from "./services/notification";
 
 class InMemoryAlertingRepository implements AlertingRepository {
@@ -25,7 +33,7 @@ class InMemoryAlertingRepository implements AlertingRepository {
 
   async createRule(rule: Omit<AlertRule, "id" | "createdAt" | "updatedAt" | "lastTriggeredAt" | "nextRunAt">): Promise<AlertRule> {
     const now = new Date();
-    const nextRunAt = new Date(now.getTime() - 60_000).toISOString();
+    const nextRunAt = new Date(0).toISOString();
     const record: AlertRule = {
       ...rule,
       id: `rule-${this.rules.length + 1}`,
@@ -99,6 +107,38 @@ class StubSlackClient {
   public messages: Array<{ url: string; message: string }> = [];
   async sendMessage(webhookUrl: string, message: string): Promise<void> {
     this.messages.push({ url: webhookUrl, message });
+  }
+}
+
+class HistoricalOnlyForecastingRepository implements ForecastingRepository {
+  constructor(private readonly rows: HistoricalMetricRow[]) {}
+
+  ensureSchema(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  async loadHistoricalMetrics(
+    _metric: ForecastMetric,
+    options: { branchId?: string | null; cohort?: ForecastCohort | null; startDate: Date; endDate: Date },
+  ): Promise<HistoricalMetricRow[]> {
+    const start = options.startDate.toISOString().slice(0, 10);
+    const end = options.endDate.toISOString().slice(0, 10);
+    return this.rows.filter((row) => row.date >= start && row.date <= end).map((row) => ({ ...row }));
+  }
+
+  replaceForecasts(_records: ForecastRecord[]): Promise<void> {
+    return Promise.resolve();
+  }
+
+  listForecasts(): Promise<ForecastRecord[]> {
+    return Promise.resolve([]);
+  }
+
+  async listActuals(
+    metric: ForecastMetric,
+    options: { branchId?: string | null; cohort?: ForecastCohort | null; startDate: Date; endDate: Date },
+  ): Promise<HistoricalMetricRow[]> {
+    return this.loadHistoricalMetrics(metric, options);
   }
 }
 
@@ -205,4 +245,49 @@ test("quiet hours skip subscriber notifications", async () => {
   const skipped = repository.deliveries.filter((delivery) => delivery.status === "skipped");
   assert.equal(skipped.length, 1);
   assert.equal(notification.emails.length, 0);
+});
+
+test("alerting engine uses actual metrics for non-forecast rules", async () => {
+  process.env.ENABLE_EMAIL_NOTIFICATIONS = "true";
+  const repository = new InMemoryAlertingRepository();
+  const notification = new StubNotificationService();
+  const slack = new StubSlackClient();
+
+  const historical: HistoricalMetricRow[] = [
+    { date: "2024-04-28", orders: 150, revenue: 4800 },
+    { date: "2024-04-29", orders: 160, revenue: 5200 },
+  ];
+
+  const forecastingService = new ForecastingService({
+    repository: new HistoricalOnlyForecastingRepository(historical),
+    clock: () => new Date("2024-04-30T12:00:00Z"),
+  });
+
+  const engine = new AlertingEngine({
+    repository,
+    notificationService: notification,
+    slackClient: slack,
+    forecastingService,
+    clock: () => new Date("2024-04-30T12:00:00Z"),
+  });
+
+  await engine.configureRule({
+    name: "Revenue threshold",
+    metric: "revenue",
+    comparison: "above",
+    threshold: 5000,
+    branchId: null,
+    cohort: null,
+    cohortKey: computeCohortKey(null),
+    schedule: { frequency: "daily", hour: 12, minute: 0 } satisfies AlertSchedule,
+    channels: [{ type: "email", targets: ["alerts@example.com"] }],
+    subscribers: [],
+    isActive: true,
+    createdBy: "system",
+  });
+
+  await engine.runDueRules();
+
+  assert.equal(notification.emails.length, 1);
+  assert.ok(repository.deliveries.some((delivery) => delivery.status === "sent"));
 });
