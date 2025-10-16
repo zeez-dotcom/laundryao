@@ -98,6 +98,16 @@ See docs/ARCHITECTURE.md for component and data-flow details.
 - Admin UI supports filtering insights by churn tier, reviewing suggested actions, and confirming bulk outreach with template placeholders (e.g., `{name}`).
 - Command center dossier (`GET /api/customers/:id/command-center`) aggregates profile, order history, balances, package usage, AI-generated summaries, outreach timeline, and exposes inline actions that call existing REST endpoints (payments, customer-insights). Audit entries can be pushed via `POST /api/customers/:id/command-center/audit`.
 
+### 3.10 Smart Order Composer
+- `/api/orders/smart` aggregates customer purchase history, seasonal branch trends, package balances, and anomaly detection (price spikes, duplicate orders) into a single response.
+- Detected anomalies emit audit events through the analytics event bus, ensuring the order log captures investigation trails.
+- The create-order workspace includes a Smart Composer sidebar that surfaces suggestions, package impact, and alerts with apply actions.
+
+### 3.11 Catalog Experimentation
+- `/api/catalog/experiments` manages draft → forecast → publish lifecycle for sandbox price/service experiments.
+- Forecasts estimate revenue lift, demand multipliers, confidence, and risk level; publishing is blocked for high-risk or un-forecasted experiments.
+- Admin UI captures experiment hypotheses and exposes forecast/publish controls with confidence and guardrail status.
+
 ## 4. Functional Requirements
 
 Authentication
@@ -108,6 +118,7 @@ Authentication
 Catalog
 - FR-201: Admins manage categories, clothing items, services, and item-service prices per branch.
 - FR-202: Export/import catalog via Excel templates; parse and validate rows.
+- FR-203: Support sandbox experiments on catalog pricing/services with forecasting and publish safeguards.
 
 Customers and Packages
 - FR-301: Admins manage customers, balances, and addresses; customers view/update their own data.
@@ -117,6 +128,7 @@ Orders and Payments
 - FR-401: Create/modify orders; compute totals with applied credits and tax; print and email receipts.
 - FR-402: Update order status; maintain order logs and print counts.
 - FR-403: Record payments with method and audit trail; update customer balances.
+- FR-404: Smart order composer endpoint must return ranked suggestions, package impact, and anomaly alerts while emitting anomaly audit events.
 
 Delivery
 - FR-501: Accept delivery requests, assign drivers, enforce status transition rules.

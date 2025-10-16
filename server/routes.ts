@@ -69,6 +69,7 @@ import logger from "./logger";
 import { NotificationService } from "./services/notification";
 import { registerHealthRoutes } from "./routes/health";
 import { registerCatalogRoutes } from "./routes/catalog";
+import { registerSmartOrderRoutes } from "./routes/orders.smart";
 import { registerDeliveryRoutes } from "./routes/delivery";
 import { registerCustomerCommandCenterRoutes } from "./routes/customers/command-center";
 import bcrypt from "bcryptjs";
@@ -77,6 +78,8 @@ import { passwordSchema } from "@shared/schemas";
 import path from "path";
 import fs from "fs";
 import { CustomerInsightsService } from "./services/customer-insights";
+import { OrderSuggestionsService } from "./services/order-suggestions";
+import { OrderAnomaliesService } from "./services/order-anomalies";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 
 // Helper: resolve UUID by numeric publicId for routes that accept :id
@@ -458,6 +461,9 @@ export async function registerRoutes(
   const sessionMiddleware = getAdminSession();
   const passportInitialize = passport.initialize();
   const passportSession = passport.session();
+
+  const orderSuggestionsService = new OrderSuggestionsService();
+  const orderAnomaliesService = new OrderAnomaliesService();
 
   const runMiddleware = (req: any, middleware: RequestHandler) =>
     new Promise<void>((resolve, reject) => {
@@ -1454,6 +1460,16 @@ export async function registerRoutes(
     requireAuth,
     requireAdminOrSuperAdmin,
     upload,
+  });
+
+  registerSmartOrderRoutes({
+    app,
+    requireAuth,
+    storage,
+    logger,
+    eventBus,
+    suggestionsService: orderSuggestionsService,
+    anomaliesService: orderAnomaliesService,
   });
 
   // Public branch info

@@ -24,6 +24,8 @@ import CommandCenterPage from "@/pages/customers/CommandCenter";
 import { CommandPaletteProvider } from "@/hooks/useCommandPalette";
 import CommandPalette from "@/components/navigation/CommandPalette";
 import { TourProvider } from "@/components/onboarding/TourProvider";
+import CreateOrderPage from "@/pages/orders/CreateOrder";
+import CatalogExperimentsPage from "@/pages/catalog/Experiments";
 
 function Router() {
   const { isAuthenticated, isLoading } = useAuthContext();
@@ -47,6 +49,8 @@ function Router() {
       {isAuthenticated && <Route path="/" component={POS} />}
       {isAuthenticated && <Route path="/admin" component={AdminDashboard} />}
       {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
+      {isAuthenticated && <Route path="/orders/create" component={CreateOrderPage} />}
+      {isAuthenticated && <Route path="/catalog/experiments" component={CatalogExperimentsPage} />}
       {isAuthenticated && (
         <Route path="/customers/:id/command-center" component={CommandCenterPage} />
       )}
