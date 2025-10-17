@@ -43,6 +43,8 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   const paginationRef = useRef<HTMLDivElement>(null);
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  const [rowHeight, setRowHeight] = useState<number>(0);
+  const measurementRef = useRef<HTMLDivElement>(null);
 
   // Helper function to check if imageUrl is valid
   const isValidImageUrl = useCallback((imageUrl: string | null | undefined): boolean => {
@@ -193,8 +195,28 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   }, [gridSize.width]);
 
   const columnWidth = columnCount ? gridSize.width / columnCount : 0;
-  const rowHeight = 200; // approximate card height with padding
   const rowCount = Math.ceil(items.length / columnCount);
+  const measurementItem = items[0];
+
+  useEffect(() => {
+    const node = measurementRef.current;
+    if (!node) return;
+
+    const updateHeight = () => {
+      const height = node.getBoundingClientRect().height;
+      if (height > 0) {
+        setRowHeight((prev) => (Math.abs(prev - height) > 1 ? height : prev));
+      }
+    };
+
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(node);
+    updateHeight();
+
+    return () => observer.disconnect();
+  }, [columnWidth, measurementItem?.id, measurementItem?.description, measurementItem?.name]);
+
+  const effectiveRowHeight = rowHeight > 0 ? rowHeight : 200;
 
   if (categoriesLoading) {
     return <LoadingScreen message={t.loadingCategories} />;
@@ -298,62 +320,31 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       {/* Clothing Items Grid */}
       <div className="flex-1 p-4 overflow-hidden min-w-0">
         <div className="flex h-full flex-col">
-          <div className="flex-1 min-h-0 h-full" ref={gridViewportRef}>
+          <div className="flex-1 min-h-0 h-full relative" ref={gridViewportRef}>
             {items.length === 0 || gridSize.width === 0 ? (
               <EmptyState
                 icon={<Package className="h-12 w-12 text-gray-400" />}
                 title={t.noProductsFound || "No items found"}
               />
             ) : (
-              <Grid
-                columnCount={columnCount}
-                columnWidth={columnWidth}
-                height={gridSize.height}
-                rowCount={rowCount}
-                rowHeight={rowHeight}
-                width={gridSize.width}
-                className="custom-scrollbar"
-              >
-                {({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
-                  const index = rowIndex * columnCount + columnIndex;
-                  const item = items[index];
-                  if (!item) return null;
-                  return (
-                    <div style={style} className="p-2">
-                      <Card
-                        key={item.id}
-                        className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
-                        onClick={() => onAddToCart(item)}
-                        data-testid={`card-clothing-item-${item.id}`}
-                      >
-                        <div
-                          className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => onAddToCart(item)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              onAddToCart(item);
-                            }
-                          }}
-                        >
-                          <img
-                            src={getImageSrc(item)}
-                            alt={item.name}
-                            loading="lazy"
-                            className="w-full h-full object-cover"
-                            onError={() => handleImageError(item.id)}
-                            data-testid={`img-clothing-item-${item.id}`}
-                          />
-                        </div>
+              <>
+                {measurementItem && columnWidth > 0 && (
+                  <div
+                    ref={measurementRef}
+                    className="absolute left-0 top-0 pointer-events-none opacity-0"
+                    style={{ width: columnWidth }}
+                    aria-hidden
+                  >
+                    <div className="p-2">
+                      <Card className="h-full">
+                        <div className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center" />
                         <CardContent className="p-3">
-                          <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
-                          {typeof (item as any).publicId === 'number' && (
-                            <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
+                          <h3 className="font-medium text-gray-900 mb-1">{measurementItem.name}</h3>
+                          {typeof (measurementItem as any).publicId === 'number' && (
+                            <div className="text-xs text-gray-500 mb-1">Item ID #{(measurementItem as any).publicId}</div>
                           )}
-                          {item.description && (
-                            <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
+                          {measurementItem.description && (
+                            <p className="text-sm text-gray-600 mb-2">{measurementItem.description}</p>
                           )}
                           <div className="flex justify-center items-center">
                             <span className="text-sm text-pos-primary font-medium">
@@ -363,9 +354,70 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                         </CardContent>
                       </Card>
                     </div>
-                  );
-                }}
-              </Grid>
+                  </div>
+                )}
+                <Grid
+                  columnCount={columnCount}
+                  columnWidth={columnWidth}
+                  height={gridSize.height}
+                  rowCount={rowCount}
+                  rowHeight={effectiveRowHeight}
+                  width={gridSize.width}
+                  className="custom-scrollbar"
+                >
+                  {({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
+                    const index = rowIndex * columnCount + columnIndex;
+                    const item = items[index];
+                    if (!item) return null;
+                    return (
+                      <div style={style} className="p-2">
+                        <Card
+                          key={item.id}
+                          className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
+                          onClick={() => onAddToCart(item)}
+                          data-testid={`card-clothing-item-${item.id}`}
+                        >
+                          <div
+                            className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => onAddToCart(item)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                onAddToCart(item);
+                              }
+                            }}
+                          >
+                            <img
+                              src={getImageSrc(item)}
+                              alt={item.name}
+                              loading="lazy"
+                              className="w-full h-full object-cover"
+                              onError={() => handleImageError(item.id)}
+                              data-testid={`img-clothing-item-${item.id}`}
+                            />
+                          </div>
+                          <CardContent className="p-3">
+                            <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
+                            {typeof (item as any).publicId === 'number' && (
+                              <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
+                            )}
+                            {item.description && (
+                              <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
+                            )}
+                            <div className="flex justify-center items-center">
+                              <span className="text-sm text-pos-primary font-medium">
+                                {t.selectService || "Select Service"}
+                              </span>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    );
+                  }}
+                </Grid>
+              </>
             )}
           </div>
           {/* Pagination */}
