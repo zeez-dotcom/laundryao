@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useId } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Minus, Plus, Trash2, X, User, CreditCard, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -104,6 +104,8 @@ export function LaundryCartSidebar({
   const isMobile = useIsMobile();
   const { formatCurrency } = useCurrency();
   const taxRate = getTaxRate();
+  const readyByLabelId = useId();
+  const paymentMethodLabelId = useId();
 
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [readyBy, setReadyBy] = useState("tomorrow");
@@ -387,11 +389,17 @@ export function LaundryCartSidebar({
 
           {/* Ready By Selection */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Ready By:</label>
+            <p
+              id={readyByLabelId}
+              className="text-sm font-medium text-gray-700"
+            >
+              Ready By:
+            </p>
             <RadioGroup
               value={readyBy}
               onValueChange={setReadyBy}
               className="flex gap-4"
+              aria-labelledby={readyByLabelId}
             >
               <div className="flex items-center space-x-2">
                 <RadioGroupItem value="today" id="ready-today" />
@@ -413,8 +421,17 @@ export function LaundryCartSidebar({
 
           {/* Payment Method Selection */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Payment Method:</label>
-            <div className="grid grid-cols-3 gap-2">
+            <p
+              id={paymentMethodLabelId}
+              className="text-sm font-medium text-gray-700"
+            >
+              Payment Method:
+            </p>
+            <div
+              className="grid grid-cols-3 gap-2"
+              role="group"
+              aria-labelledby={paymentMethodLabelId}
+            >
               <Button
                 variant={paymentMethod === "cash" ? "default" : "outline"}
                 className={`justify-center space-x-1 ${
