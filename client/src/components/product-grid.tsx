@@ -39,7 +39,6 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   const isMobile = useIsMobile();
   const { t } = useTranslation();
   const { isSuperAdmin, branch } = useAuthContext();
-  const containerRef = useRef<HTMLDivElement>(null);
   const gridViewportRef = useRef<HTMLDivElement>(null);
   const paginationRef = useRef<HTMLDivElement>(null);
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
@@ -80,24 +79,24 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   }, []);
 
   useEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
+    const viewportElement = gridViewportRef.current;
+    if (!viewportElement) return;
 
-    const updateGridSize = (contentRect: DOMRectReadOnly) => {
-      const paginationHeight = paginationRef.current?.offsetHeight ?? 0;
-      const availableHeight = Math.max(0, contentRect.height - paginationHeight);
-      const width = gridViewportRef.current?.clientWidth ?? contentRect.width;
-      setGridSize({ width, height: availableHeight });
+    const updateGridSize = () => {
+      setGridSize({
+        width: viewportElement.clientWidth,
+        height: viewportElement.clientHeight,
+      });
     };
 
     const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
+      const entry = entries.find((e) => e.target === viewportElement);
       if (!entry) return;
-      updateGridSize(entry.contentRect);
+      updateGridSize();
     });
 
-    observer.observe(element);
-    updateGridSize(element.getBoundingClientRect());
+    observer.observe(viewportElement);
+    updateGridSize();
 
     return () => observer.disconnect();
   }, []);
@@ -297,9 +296,9 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       </div>
 
       {/* Clothing Items Grid */}
-      <div className="flex-1 p-4 overflow-hidden min-w-0" ref={containerRef}>
+      <div className="flex-1 p-4 overflow-hidden min-w-0">
         <div className="flex h-full flex-col">
-          <div className="flex-1 min-h-0" ref={gridViewportRef}>
+          <div className="flex-1 min-h-0 h-full" ref={gridViewportRef}>
             {items.length === 0 || gridSize.width === 0 ? (
               <EmptyState
                 icon={<Package className="h-12 w-12 text-gray-400" />}
