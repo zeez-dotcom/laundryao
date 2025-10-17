@@ -175,10 +175,23 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       const prodJson = await prodRes.json();
       const rawItems = Array.isArray(prodJson) ? prodJson : prodJson.items ?? [];
       // Normalize products to behave like clothing items when possible.
-      // If a product is linked to a clothing item, use its clothingItemId as the item id for downstream flows (service selection).
-      const items = rawItems.map((p: any) =>
-        p?.clothingItemId ? { ...p, id: p.clothingItemId } : p,
-      );
+      // Preserve the original product identifier alongside any linked clothing item id so downstream flows
+      // can choose the correct services API.
+      const items = rawItems.map((p: any) => {
+        if (!p) return p;
+        const productId = p.productId ?? p.id ?? p.publicId ?? null;
+        const baseItem = {
+          ...p,
+          ...(productId ? { productId } : {}),
+        };
+        if (p?.clothingItemId) {
+          return {
+            ...baseItem,
+            id: p.clothingItemId,
+          };
+        }
+        return baseItem;
+      });
       const total = totalHeader ? Number(totalHeader) : items.length;
       return { items, total };
     },
