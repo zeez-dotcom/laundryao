@@ -51,6 +51,23 @@ export function ServiceSelectionModal({
   const { formatCurrency } = useCurrency();
   const { t } = useTranslation();
 
+  const normalizedClothingItem = clothingItem as (ClothingItem & {
+    productId?: string;
+    clothingItemId?: string | null;
+  }) | null;
+  const linkedClothingItemId = normalizedClothingItem?.clothingItemId ?? null;
+  const productIdentifier = normalizedClothingItem?.productId ?? null;
+  const clothingItemIdForServices = linkedClothingItemId ?? normalizedClothingItem?.id ?? null;
+  const productIdForServices = productIdentifier ?? normalizedClothingItem?.id ?? null;
+  const shouldUseProductServices =
+    !!normalizedClothingItem && !linkedClothingItemId && !!productIdentifier;
+  const serviceEndpointBase = shouldUseProductServices
+    ? "/api/products"
+    : "/api/clothing-items";
+  const serviceTargetId = shouldUseProductServices
+    ? productIdForServices
+    : clothingItemIdForServices;
+
   const { data: fetchedCategories = [], isLoading: categoriesLoading } = useQuery<ServiceCategory[]>({
     queryKey: ["/api/categories", "service"],
     queryFn: async () => {
@@ -72,27 +89,31 @@ export function ServiceSelectionModal({
     refetch: refetchServices
   } = useQuery<(LaundryService & { itemPrice: string })[]>({
     queryKey: [
-      "/api/clothing-items",
-      clothingItem?.id,
+      serviceEndpointBase,
+      serviceTargetId,
       "services",
       selectedCategory,
       branchCode,
       overrideBranchCode,
     ],
     queryFn: async () => {
-      if (!clothingItem) return [];
+      if (!normalizedClothingItem || !serviceTargetId) return [];
       const params = new URLSearchParams();
       if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
-      const effectiveBranchCode = (overrideBranchCode || branchCode);
+      const effectiveBranchCode = overrideBranchCode || branchCode;
       if (effectiveBranchCode) params.append("branchCode", effectiveBranchCode);
-      const res = await apiRequest("GET", `/api/clothing-items/${clothingItem.id}/services?${params}`);
+      const queryString = params.toString();
+      const url = `${serviceEndpointBase}/${serviceTargetId}/services${
+        queryString ? `?${queryString}` : ""
+      }`;
+      const res = await apiRequest("GET", url);
       const rawServices = await res.json();
       return rawServices.filter((service: any) => {
         const price = parseFloat(service.itemPrice || service.price || "0");
         return price > 0;
       });
     },
-    enabled: isOpen && !!clothingItem,
+    enabled: isOpen && !!normalizedClothingItem && !!serviceTargetId,
     retry: 2,
   });
 
