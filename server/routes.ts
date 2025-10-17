@@ -657,11 +657,25 @@ export async function registerRoutes(
 
   httpServer.on("upgrade", async (req, socket, head) => {
     const { pathname } = new URL(req.url || "", "http://localhost");
-    if (pathname === "/ws/delivery-orders") {
+
+    const isDeliveryOrders = pathname === "/ws/delivery-orders";
+    const isDriverLocation = pathname === "/ws/driver-location";
+
+    if (!isDeliveryOrders && !isDriverLocation) {
+      if (process.env.NODE_ENV !== "development") {
+        socket.destroy();
+      }
+      return;
+    }
+
+    if (isDeliveryOrders) {
       deliveryOrderWss.handleUpgrade(req, socket, head, (ws) => {
         deliveryOrderWss.emit("connection", ws, req);
       });
-    } else if (pathname === "/ws/driver-location") {
+      return;
+    }
+
+    if (isDriverLocation) {
       try {
         await runMiddleware(req, sessionMiddleware);
         await runMiddleware(req, passportInitialize);
@@ -686,8 +700,6 @@ export async function registerRoutes(
       driverLocationWss.handleUpgrade(req, socket, head, (ws) => {
         driverLocationWss.emit("connection", ws, req);
       });
-    } else {
-      socket.destroy();
     }
   });
 
