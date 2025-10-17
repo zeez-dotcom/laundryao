@@ -39,7 +39,9 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   const isMobile = useIsMobile();
   const { t } = useTranslation();
   const { isSuperAdmin, branch } = useAuthContext();
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const gridViewportRef = useRef<HTMLDivElement>(null);
+  const paginationRef = useRef<HTMLDivElement>(null);
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
 
@@ -71,21 +73,25 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   }, []);
 
   useEffect(() => {
-    const observer = new ResizeObserver(() => {
-      if (gridContainerRef.current) {
-        setGridSize({
-          width: gridContainerRef.current.clientWidth,
-          height: gridContainerRef.current.clientHeight,
-        });
-      }
+    const element = containerRef.current;
+    if (!element) return;
+
+    const updateGridSize = (contentRect: DOMRectReadOnly) => {
+      const paginationHeight = paginationRef.current?.offsetHeight ?? 0;
+      const availableHeight = Math.max(0, contentRect.height - paginationHeight);
+      const width = gridViewportRef.current?.clientWidth ?? contentRect.width;
+      setGridSize({ width, height: availableHeight });
+    };
+
+    const observer = new ResizeObserver((entries) => {
+      const [entry] = entries;
+      if (!entry) return;
+      updateGridSize(entry.contentRect);
     });
-    if (gridContainerRef.current) {
-      observer.observe(gridContainerRef.current);
-      setGridSize({
-        width: gridContainerRef.current.clientWidth,
-        height: gridContainerRef.current.clientHeight,
-      });
-    }
+
+    observer.observe(element);
+    updateGridSize(element.getBoundingClientRect());
+
     return () => observer.disconnect();
   }, []);
 
@@ -284,101 +290,105 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       </div>
 
       {/* Clothing Items Grid */}
-      <div className="flex-1 p-4 overflow-hidden min-w-0" ref={gridContainerRef}>
-        {items.length === 0 || gridSize.width === 0 ? (
-          <EmptyState
-            icon={<Package className="h-12 w-12 text-gray-400" />}
-            title={t.noProductsFound || "No items found"}
-          />
-        ) : (
-          <Grid
-            columnCount={columnCount}
-            columnWidth={columnWidth}
-            height={gridSize.height}
-            rowCount={rowCount}
-            rowHeight={rowHeight}
-            width={gridSize.width}
-            className="custom-scrollbar"
-          >
-            {({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
-              const index = rowIndex * columnCount + columnIndex;
-              const item = items[index];
-              if (!item) return null;
-              return (
-                <div style={style} className="p-2">
-                  <Card
-                    key={item.id}
-                    className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
-                    onClick={() => onAddToCart(item)}
-                    data-testid={`card-clothing-item-${item.id}`}
-                  >
-                    <div
-                      className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onAddToCart(item)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onAddToCart(item);
-                        }
-                      }}
-                    >
-                      <img
-                        src={getImageSrc(item)}
-                        alt={item.name}
-                        loading="lazy"
-                        className="w-full h-full object-cover"
-                        onError={() => handleImageError(item.id)}
-                        data-testid={`img-clothing-item-${item.id}`}
-                      />
+      <div className="flex-1 p-4 overflow-hidden min-w-0" ref={containerRef}>
+        <div className="flex h-full flex-col">
+          <div className="flex-1 min-h-0" ref={gridViewportRef}>
+            {items.length === 0 || gridSize.width === 0 ? (
+              <EmptyState
+                icon={<Package className="h-12 w-12 text-gray-400" />}
+                title={t.noProductsFound || "No items found"}
+              />
+            ) : (
+              <Grid
+                columnCount={columnCount}
+                columnWidth={columnWidth}
+                height={gridSize.height}
+                rowCount={rowCount}
+                rowHeight={rowHeight}
+                width={gridSize.width}
+                className="custom-scrollbar"
+              >
+                {({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
+                  const index = rowIndex * columnCount + columnIndex;
+                  const item = items[index];
+                  if (!item) return null;
+                  return (
+                    <div style={style} className="p-2">
+                      <Card
+                        key={item.id}
+                        className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
+                        onClick={() => onAddToCart(item)}
+                        data-testid={`card-clothing-item-${item.id}`}
+                      >
+                        <div
+                          className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => onAddToCart(item)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              onAddToCart(item);
+                            }
+                          }}
+                        >
+                          <img
+                            src={getImageSrc(item)}
+                            alt={item.name}
+                            loading="lazy"
+                            className="w-full h-full object-cover"
+                            onError={() => handleImageError(item.id)}
+                            data-testid={`img-clothing-item-${item.id}`}
+                          />
+                        </div>
+                        <CardContent className="p-3">
+                          <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
+                          {typeof (item as any).publicId === 'number' && (
+                            <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
+                          )}
+                          {item.description && (
+                            <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
+                          )}
+                          <div className="flex justify-center items-center">
+                            <span className="text-sm text-pos-primary font-medium">
+                              {t.selectService || "Select Service"}
+                            </span>
+                          </div>
+                        </CardContent>
+                      </Card>
                     </div>
-                    <CardContent className="p-3">
-                      <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>
-                      {typeof (item as any).publicId === 'number' && (
-                        <div className="text-xs text-gray-500 mb-1">Item ID #{(item as any).publicId}</div>
-                      )}
-                      {item.description && (
-                        <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
-                      )}
-                      <div className="flex justify-center items-center">
-                        <span className="text-sm text-pos-primary font-medium">
-                          {t.selectService || "Select Service"}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-              );
-            }}
-          </Grid>
-        )}
-        {/* Pagination */}
-        <div className="mt-4 flex items-center justify-between">
-          <div className="text-sm text-gray-600">
-            {items.length > 0 && (
-              <span>
-                Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
-              </span>
+                  );
+                }}
+              </Grid>
             )}
           </div>
-          <div className="space-x-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              Prev
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => (p * pageSize < total ? p + 1 : p))}
-              disabled={page * pageSize >= total}
-            >
-              Next
-            </Button>
+          {/* Pagination */}
+          <div ref={paginationRef} className="mt-4 flex items-center justify-between">
+            <div className="text-sm text-gray-600">
+              {items.length > 0 && (
+                <span>
+                  Showing {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
+                </span>
+              )}
+            </div>
+            <div className="space-x-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => (p * pageSize < total ? p + 1 : p))}
+                disabled={page * pageSize >= total}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </div>
       </div>
