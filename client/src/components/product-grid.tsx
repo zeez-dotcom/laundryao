@@ -4,6 +4,7 @@ import { Search, ShoppingCart, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import SmartImage from "@/components/common/SmartImage";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useTranslation } from "@/lib/i18n";
 import { useAuthContext } from "@/context/AuthContext";
@@ -54,15 +55,36 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
     return imageUrl.trim().length > 0;
   }, []);
 
+  // Convert Google Drive viewer links to direct image links to avoid CORB
+  const normalizeImageUrl = (url: string): string => {
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes("drive.google.com")) {
+        // Patterns:
+        // - https://drive.google.com/file/d/{id}/view?... -> https://drive.google.com/uc?export=view&id={id}
+        // - https://drive.google.com/open?id={id} -> uc?export=view&id={id}
+        const parts = u.pathname.split("/");
+        const idFromPathIndex = parts.findIndex((p) => p === "d");
+        if (idFromPathIndex !== -1 && parts[idFromPathIndex + 1]) {
+          const id = parts[idFromPathIndex + 1];
+          return `https://drive.google.com/uc?export=view&id=${id}`;
+        }
+        const idParam = u.searchParams.get("id");
+        if (idParam) {
+          return `https://drive.google.com/uc?export=view&id=${idParam}`;
+        }
+      }
+    } catch {}
+    return url;
+  };
+
   // Helper function to get image source with fallback
   const getImageSrc = useCallback((item: ClothingItem): string => {
     if (isValidImageUrl(item.imageUrl) && !failedImages.has(item.id)) {
-      const url = item.imageUrl!;
-      // Check if it's an external URL (starts with http:// or https://)
+      const url = normalizeImageUrl(item.imageUrl!);
       if (url.startsWith('http://') || url.startsWith('https://')) {
-        return url; // Return external URLs as-is
+        return `/api/image-proxy?url=${encodeURIComponent(url)}`;
       }
-      // For relative paths, ensure they start with /
       return url.startsWith('/') ? url : `/${url}`;
     }
     return '/uploads/placeholder-clothing.png';
@@ -229,7 +251,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
     return () => observer.disconnect();
   }, [columnWidth, measurementItem?.id, measurementItem?.description, measurementItem?.name]);
 
-  const effectiveRowHeight = rowHeight > 0 ? rowHeight : 200;
+  const effectiveRowHeight = rowHeight > 0 ? rowHeight : 320;
 
   if (categoriesLoading) {
     return <LoadingScreen message={t.loadingCategories} />;
@@ -265,12 +287,14 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div className="relative flex-1 max-w-md flex items-center gap-2">
+            <label htmlFor="search-products" className="sr-only">{t.searchProducts || "Search items"}</label>
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
             <Input
               type="text"
               placeholder={t.searchProducts || "Search items..."}
               id="search-products"
               name="search"
+              aria-label={t.searchProducts || "Search items"}
               className="pl-10 py-3 text-base"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -336,7 +360,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
           <div className="flex-1 min-h-0 h-full relative" ref={gridViewportRef}>
             {items.length === 0 || gridSize.width === 0 ? (
               <EmptyState
-                icon={<Package className="h-12 w-12 text-gray-400" />}
+                icon={<Package className="h-24 w-24 text-gray-400" />}
                 title={t.noProductsFound || "No items found"}
               />
             ) : (
@@ -391,7 +415,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                           data-testid={`card-clothing-item-${item.id}`}
                         >
                           <div
-                            className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
+                            className="w-full h-48 md:h-56 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
                             role="button"
                             tabIndex={0}
                             onClick={() => onAddToCart(item)}
@@ -402,14 +426,13 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                               }
                             }}
                           >
-                            <img
-                              src={getImageSrc(item)}
-                              alt={item.name}
-                              loading="lazy"
-                              className="w-full h-full object-cover"
-                              onError={() => handleImageError(item.id)}
-                              data-testid={`img-clothing-item-${item.id}`}
-                            />
+                      <SmartImage
+                        src={getImageSrc(item)}
+                        alt={item.name}
+                        loading="lazy"
+                        className="w-full h-full object-cover"
+                        data-testid={`img-clothing-item-${item.id}`}
+                      />
                           </div>
                           <CardContent className="p-3">
                             <h3 className="font-medium text-gray-900 mb-1" data-testid={`text-item-name-${item.id}`}>{item.name}</h3>

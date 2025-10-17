@@ -249,6 +249,7 @@ export function ServiceSelectionModal({
                         placeholder="Enter branch code (e.g., ABC123)"
                         value={overrideBranchCode}
                         onChange={(e) => setOverrideBranchCode(e.target.value)}
+                        aria-label="Branch code"
                       />
                       <Button size="sm" onClick={() => refetchServices()}>
                         Load

@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, postOrder } from "@/lib/queryClient";
 import { getTaxRate } from "@/lib/tax";
 import { LanguageSelector } from "@/components/language-selector";
+import BranchSelector from "@/components/BranchSelector";
 import { useCurrency } from "@/lib/currency";
 import { SystemSettings } from "@/components/system-settings";
 import { ClothingItem, LaundryService, Customer } from "@shared/schema";
@@ -49,6 +50,8 @@ export default function POS() {
   const [isServiceModalOpen, setIsServiceModalOpen] = useState(false);
   const [printInfo, setPrintInfo] = useState<{ printNumber: number; printedAt: string } | null>(null);
   const [showChatbot, setShowChatbot] = useState(false);
+  const [branchOverrideCode, setBranchOverrideCode] = useState("");
+  const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
   
   const isMobile = useIsMobile();
   const { toast } = useToast();
@@ -78,6 +81,23 @@ export default function POS() {
   } = useLaundryCart();
 
   const cartSummary = getCartSummary();
+
+  // Basic API connectivity indicator (avoids silent CORB misroutes)
+  useEffect(() => {
+    let aborted = false;
+    (async () => {
+      try {
+        const res = await fetch("/health", { credentials: "include", headers: { Accept: "application/json" } });
+        const ok = res.ok && (res.headers.get("content-type") || "").includes("application/json");
+        if (!aborted) setApiHealthy(ok);
+      } catch {
+        if (!aborted) setApiHealthy(false);
+      }
+    })();
+    return () => { aborted = true; };
+  }, []);
+
+  const effectiveBranchCode = branchOverrideCode || branch?.code;
 
   // Small viewport fallback: open the POS workspace in a larger popup once per session
   useEffect(() => {
@@ -415,11 +435,32 @@ export default function POS() {
             content: (
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
                 <div className="flex-1 min-w-0">
+                  {/* Branch + API status helpers */}
+                  <div className="mb-4 flex flex-col gap-3">
+                    <div className="flex items-center gap-3">
+                      <BranchSelector
+                        value={effectiveBranchCode}
+                        onChange={(code) => setBranchOverrideCode(code)}
+                      />
+                      {effectiveBranchCode ? (
+                        <span className="text-xs text-muted-foreground">Using: {effectiveBranchCode}</span>
+                      ) : (
+                        <span className="text-xs text-destructive">No branch set</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={`inline-flex items-center gap-1 ${apiHealthy ? 'text-green-600' : apiHealthy === false ? 'text-red-600' : 'text-muted-foreground'}`}>
+                        <span className={`inline-block h-2 w-2 rounded-full ${apiHealthy ? 'bg-green-600' : apiHealthy === false ? 'bg-red-600' : 'bg-gray-400'}`}></span>
+                        {apiHealthy === null ? 'Checking API…' : apiHealthy ? 'API Connected' : 'API Error'}
+                      </span>
+                    </div>
+                  </div>
+
                   <ProductGrid
                     onAddToCart={handleSelectClothingItem}
                     cartItemCount={cartSummary.itemCount}
                     onToggleCart={toggleCart}
-                    branchCode={branch?.code}
+                    branchCode={effectiveBranchCode}
                   />
                 </div>
                 <div className="lg:w-[26rem]">
@@ -910,7 +951,7 @@ export default function POS() {
         }}
         clothingItem={selectedClothingItem}
         onAddToCart={handleAddToCart}
-        branchCode={branch?.code}
+        branchCode={effectiveBranchCode}
       />
 
       <ReceiptModal

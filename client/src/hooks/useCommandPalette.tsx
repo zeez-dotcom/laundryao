@@ -72,14 +72,15 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
+      const raw = (event as KeyboardEvent).key as string | undefined;
+      const key = typeof raw === "string" ? raw.toLowerCase() : "";
       if ((event.metaKey || event.ctrlKey) && !event.shiftKey && key === "k") {
         event.preventDefault();
         toggle();
       } else if ((event.metaKey || event.ctrlKey) && event.shiftKey && (key === "p" || key === " ")) {
         event.preventDefault();
         toggle();
-      } else if (event.key === "Escape") {
+      } else if (key === "escape") {
         setIsOpen(false);
       }
     };

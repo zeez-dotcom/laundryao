@@ -17,6 +17,7 @@ import { PackageUsageModal } from "./PackageUsageModal";
 import { CouponInput } from "./CouponInput";
 import { EnhancedPackageDisplay } from "./EnhancedPackageDisplay";
 import { format } from "date-fns";
+import SmartImage from "@/components/common/SmartImage";
 
 type AppliedCoupon = {
   id: string;
@@ -229,13 +230,11 @@ export function LaundryCartSidebar({
               <Card key={item.id} className="bg-gray-50">
                 <CardContent className="p-3">
                   <div className="flex items-start space-x-3">
-                    {item.clothingItem.imageUrl && (
-                      <img
-                        src={item.clothingItem.imageUrl}
-                        alt={item.clothingItem.name}
-                        className="w-12 h-12 rounded object-cover flex-shrink-0"
-                      />
-                    )}
+                    <SmartImage
+                      src={item.clothingItem.imageUrl || ''}
+                      alt={item.clothingItem.name}
+                      className="w-12 h-12 rounded object-cover flex-shrink-0"
+                    />
                     <div className="flex-1 min-w-0">
                       <h4 className="font-medium text-gray-900 truncate">
                         {item.clothingItem.name}

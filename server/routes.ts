@@ -2043,6 +2043,49 @@ export async function registerRoutes(
     }
   });
 
+  // Lightweight image proxy to avoid CORB/CORS for allowed hosts
+  app.get("/api/image-proxy", async (req, res) => {
+    try {
+      const rawUrl = (req.query.url as string) || "";
+      if (!rawUrl) return res.status(400).json({ message: "Missing url" });
+      let target: URL;
+      try {
+        target = new URL(rawUrl);
+      } catch {
+        return res.status(400).json({ message: "Invalid url" });
+      }
+      const allowedHosts = [
+        "drive.google.com",
+        "lh3.googleusercontent.com",
+        "googleusercontent.com",
+        "i.imgur.com",
+      ];
+      const okHost = allowedHosts.some(
+        (h) => target.hostname === h || target.hostname.endsWith(`.${h}`),
+      );
+      if (!okHost) {
+        return res.status(400).json({ message: "Host not allowed" });
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const upstream = await fetch(target.toString(), {
+        headers: { Accept: "image/*" },
+        signal: ctrl.signal,
+      } as any);
+      clearTimeout(timer);
+      if (!upstream.ok) {
+        return res.status(upstream.status).end();
+      }
+      const ct = upstream.headers.get("content-type") || "image/jpeg";
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      res.setHeader("Content-Type", ct);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.send(buf);
+    } catch (err: any) {
+      res.status(500).json({ message: "Failed to proxy image" });
+    }
+  });
+
   // Branch management routes (Super Admin only)
   app.get("/api/branches", requireSuperAdmin, async (_req, res) => {
     try {
