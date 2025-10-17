@@ -45,15 +45,40 @@ const AlertTitle = React.forwardRef<
 AlertTitle.displayName = "AlertTitle"
 
 const AlertDescription = React.forwardRef<
-  HTMLParagraphElement,
-  React.HTMLAttributes<HTMLParagraphElement>
->(({ className, ...props }, ref) => (
-  <div
-    ref={ref}
-    className={cn("text-sm [&_p]:leading-relaxed", className)}
-    {...props}
-  />
-))
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & { copyable?: boolean }
+>(({ className, children, copyable, ...props }, ref) => {
+  const localRef = React.useRef<HTMLDivElement | null>(null)
+  const contentRef = (node: HTMLDivElement) => {
+    localRef.current = node
+    if (typeof ref === 'function') ref(node as any)
+    else if (ref) (ref as any).current = node
+  }
+  const isCopyable = copyable || (props as any)["data-copyable"] !== undefined
+  const onCopy = async () => {
+    const text = localRef.current?.innerText || ""
+    try { await navigator.clipboard.writeText(text) } catch {}
+  }
+  return (
+    <div
+      ref={contentRef}
+      className={cn("text-sm [&_p]:leading-relaxed select-text relative pr-10", className)}
+      {...props}
+    >
+      {children}
+      {isCopyable && (
+        <button
+          type="button"
+          onClick={onCopy}
+          className="absolute top-0 right-0 text-xs text-muted-foreground hover:text-foreground underline"
+          aria-label="Copy error"
+        >
+          Copy
+        </button>
+      )}
+    </div>
+  )
+})
 AlertDescription.displayName = "AlertDescription"
 
 export { Alert, AlertTitle, AlertDescription }

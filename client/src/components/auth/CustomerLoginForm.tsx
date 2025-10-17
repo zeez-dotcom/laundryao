@@ -114,7 +114,7 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
           {loginError && (
             <Alert variant="destructive" className="mb-4">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{loginError}</AlertDescription>
+              <AlertDescription data-copyable>{loginError}</AlertDescription>
             </Alert>
           )}
 

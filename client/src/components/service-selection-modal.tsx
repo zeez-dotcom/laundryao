@@ -42,6 +42,7 @@ export function ServiceSelectionModal({
   onAddToCart,
   branchCode,
 }: ServiceSelectionModalProps) {
+  const [overrideBranchCode, setOverrideBranchCode] = useState<string>("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(
@@ -76,12 +77,14 @@ export function ServiceSelectionModal({
       "services",
       selectedCategory,
       branchCode,
+      overrideBranchCode,
     ],
     queryFn: async () => {
       if (!clothingItem) return [];
       const params = new URLSearchParams();
       if (selectedCategory !== "all") params.append("categoryId", selectedCategory);
-      if (branchCode) params.append("branchCode", branchCode);
+      const effectiveBranchCode = (overrideBranchCode || branchCode);
+      if (effectiveBranchCode) params.append("branchCode", effectiveBranchCode);
       const res = await apiRequest("GET", `/api/clothing-items/${clothingItem.id}/services?${params}`);
       const rawServices = await res.json();
       return rawServices.filter((service: any) => {
@@ -149,6 +152,8 @@ export function ServiceSelectionModal({
           </DialogDescription>
         </DialogHeader>
 
+        
+
         {/* Service Categories */}
         <div className="flex space-x-1 mb-4 overflow-x-auto">
           {categoriesLoading ? (
@@ -201,16 +206,34 @@ export function ServiceSelectionModal({
             <div className="col-span-full">
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription className="flex items-center justify-between">
-                  <span>Failed to load services. Please try again.</span>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => refetchServices()}
-                    className="ml-2"
-                  >
-                    Retry
-                  </Button>
+                <AlertDescription data-copyable>
+                  <div className="flex items-center justify-between mb-2">
+                    <span>Failed to load services. Please try again.</span>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => refetchServices()}
+                      className="ml-2"
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {(servicesError as any)?.message}
+                  </div>
+                  {/* If branch is missing, allow manual override */}
+                  {(((servicesError as any)?.message || "").includes('branchId is required')) && (
+                    <div className="mt-3 flex items-center gap-2">
+                      <Input
+                        placeholder="Enter branch code (e.g., ABC123)"
+                        value={overrideBranchCode}
+                        onChange={(e) => setOverrideBranchCode(e.target.value)}
+                      />
+                      <Button size="sm" onClick={() => refetchServices()}>
+                        Load
+                      </Button>
+                    </div>
+                  )}
                 </AlertDescription>
               </Alert>
             </div>

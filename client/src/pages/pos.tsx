@@ -212,6 +212,7 @@ export default function POS() {
   });
 
   const handleSelectClothingItem = (clothingItem: ClothingItem) => {
+    // Open service modal regardless; server will resolve branch via auth or branchCode
     setSelectedClothingItem(clothingItem);
     setIsServiceModalOpen(true);
   };

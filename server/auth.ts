@@ -168,7 +168,8 @@ export async function setupAuth(app: Express, options: SetupAuthOptions = {}) {
         return done(null, user);
       } catch (error) {
         logger.error({ err: error }, "Login error");
-        return done(error as any);
+        // Avoid leaking internal errors to clients; return a generic failure
+        return done(null, false, { message: "Login failed. Please try again." });
       }
     })
   );

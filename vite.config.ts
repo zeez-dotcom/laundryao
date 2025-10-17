@@ -32,6 +32,20 @@ export default defineConfig({
   },
   server: {
     port: parseInt(process.env.PORT ?? process.env.VITE_PORT ?? "5000", 10),
+    // If someone runs Vite standalone (e.g., on 5173), proxy API calls to the Express server
+    proxy: {
+      "/api": {
+        target: process.env.VITE_API_URL || "http://localhost:5000",
+        changeOrigin: true,
+        secure: false,
+      },
+      // Optional: static uploads
+      "/uploads": {
+        target: process.env.VITE_API_URL || "http://localhost:5000",
+        changeOrigin: true,
+        secure: false,
+      },
+    },
     fs: {
       strict: true,
       deny: [],

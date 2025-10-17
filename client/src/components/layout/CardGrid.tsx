@@ -183,7 +183,7 @@ function CardGridItem({ card }: { card: CardGridCard }) {
                     ) : null}
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="pt-2 min-h-[60vh] md:min-h-[70vh]">{section.content}</AccordionContent>
+                <AccordionContent className="pt-2 max-h-[calc(100vh-220px)] overflow-auto">{section.content}</AccordionContent>
               </AccordionItem>
             ))}
           </Accordion>

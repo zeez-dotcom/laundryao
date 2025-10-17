@@ -2091,13 +2091,19 @@ export class DatabaseStorage {
   }
 
   private async computePermissions(role: string, userId: string): Promise<string[]> {
-    const [rolePerms, userPerms] = await Promise.all([
-      this.getRolePermissions(role),
-      this.getUserPermissions(userId),
-    ]);
-    const combined = new Set<string>(rolePerms);
-    for (const slug of userPerms) combined.add(slug);
-    return Array.from(combined).sort();
+    try {
+      const [rolePerms, userPerms] = await Promise.all([
+        this.getRolePermissions(role),
+        this.getUserPermissions(userId),
+      ]);
+      const combined = new Set<string>(rolePerms);
+      for (const slug of userPerms) combined.add(slug);
+      return Array.from(combined).sort();
+    } catch (err) {
+      // If permission tables are missing or not yet migrated, don't block login.
+      console.warn("Permissions lookup failed; defaulting to empty permissions:", (err as any)?.message || err);
+      return [];
+    }
   }
 
   private async withTenant<T>(branchId: string | undefined, fn: (tx: any) => Promise<T>): Promise<T> {

@@ -159,7 +159,12 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       }
       const totalHeader = prodRes.headers.get("X-Total-Count");
       const prodJson = await prodRes.json();
-      const items = Array.isArray(prodJson) ? prodJson : prodJson.items ?? [];
+      const rawItems = Array.isArray(prodJson) ? prodJson : prodJson.items ?? [];
+      // Normalize products to behave like clothing items when possible.
+      // If a product is linked to a clothing item, use its clothingItemId as the item id for downstream flows (service selection).
+      const items = rawItems.map((p: any) =>
+        p?.clothingItemId ? { ...p, id: p.clothingItemId } : p,
+      );
       const total = totalHeader ? Number(totalHeader) : items.length;
       return { items, total };
     },
@@ -208,7 +213,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-pos-background pb-16 sm:pb-0 min-h-[60vh] md:min-h-[70vh] min-w-0">
+    <div className="flex-1 flex flex-col overflow-hidden bg-pos-background pb-16 sm:pb-0 h-full min-w-0">
       {/* Search and Categories */}
       <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
