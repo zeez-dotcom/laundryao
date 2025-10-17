@@ -403,12 +403,21 @@ function WorkflowBuilderCanvas() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Workflow name</label>
-              <Input value={workflowName} onChange={(event) => setWorkflowName(event.target.value)} />
+              <label className="text-sm font-medium" htmlFor="workflow-name">
+                Workflow name
+              </label>
+              <Input
+                id="workflow-name"
+                value={workflowName}
+                onChange={(event) => setWorkflowName(event.target.value)}
+              />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Description</label>
+              <label className="text-sm font-medium" htmlFor="workflow-description">
+                Description
+              </label>
               <Textarea
+                id="workflow-description"
                 value={workflowDescription}
                 onChange={(event) => setWorkflowDescription(event.target.value)}
                 rows={3}
@@ -446,8 +455,11 @@ function WorkflowBuilderCanvas() {
             ) : null}
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Simulation trigger</label>
+              <label className="text-sm font-medium" htmlFor="simulation-trigger">
+                Simulation trigger
+              </label>
               <select
+                id="simulation-trigger"
                 className="w-full rounded border bg-background p-2 text-sm"
                 value={simulationTrigger}
                 onChange={(event) => setSimulationTrigger(event.target.value)}
@@ -473,8 +485,11 @@ function WorkflowBuilderCanvas() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Workflow identifier</label>
+              <label className="text-sm font-medium" htmlFor="workflow-identifier">
+                Workflow identifier
+              </label>
               <Input
+                id="workflow-identifier"
                 value={workflowId ?? ""}
                 placeholder="Automatically set after saving"
                 onChange={(event) => setWorkflowId(event.target.value || null)}
@@ -494,15 +509,31 @@ function WorkflowBuilderCanvas() {
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Node label</label>
+                <label
+                  className="text-sm font-medium"
+                  htmlFor={`selected-node-${selectedNode.id}-label`}
+                >
+                  Node label
+                </label>
                 <Input
+                  id={`selected-node-${selectedNode.id}-label`}
                   value={selectedNode.data.label}
                   onChange={(event) => applyNodeConfig(selectedNode.id, { label: event.target.value })}
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Node type</label>
-                <Input value={selectedNode.data.type} readOnly disabled />
+                <label
+                  className="text-sm font-medium"
+                  htmlFor={`selected-node-${selectedNode.id}-type`}
+                >
+                  Node type
+                </label>
+                <Input
+                  id={`selected-node-${selectedNode.id}-type`}
+                  value={selectedNode.data.type}
+                  readOnly
+                  disabled
+                />
               </div>
             </div>
             <Tabs defaultValue="visual">
