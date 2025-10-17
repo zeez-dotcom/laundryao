@@ -72,19 +72,25 @@ export function CustomerChatbot({ branchCode, open, onClose }: CustomerChatbotPr
       }
       if (data.order) {
         try {
-          const orderRes = await fetch("/delivery/orders", {
+          const orderRes = await fetch("/api/delivery-orders", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            credentials: "include",
             body: JSON.stringify({ ...data.order, branchCode }),
           });
-          const orderData = await orderRes.json();
+          const isJson = orderRes.headers.get("content-type")?.includes("application/json");
+          const orderData = isJson ? await orderRes.json() : null;
           if (orderRes.ok) {
             toast({
               title: t.customerChatbot.orderPlaced,
-              description: orderData.orderNumber ? `#${orderData.orderNumber}` : undefined,
+              description: orderData?.orderNumber ? `#${orderData.orderNumber}` : undefined,
             });
           } else {
-            toast({ title: t.customerChatbot.orderFailed, description: orderData.message, variant: "destructive" });
+            toast({
+              title: t.customerChatbot.orderFailed,
+              description: orderData?.message ?? orderRes.statusText,
+              variant: "destructive",
+            });
           }
         } catch (err: any) {
           toast({ title: t.customerChatbot.orderFailed, description: String(err), variant: "destructive" });
