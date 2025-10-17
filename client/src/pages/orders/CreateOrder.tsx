@@ -46,16 +46,22 @@ export default function CreateOrderPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground">Customer ID</label>
+              <label className="text-sm font-medium text-foreground" htmlFor="customer-id">
+                Customer ID
+              </label>
               <Input
+                id="customer-id"
                 value={customerId}
                 onChange={(event) => setCustomerId(event.target.value)}
                 placeholder="Search by customer ID or phone"
               />
             </div>
             <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground">Special instructions</label>
+              <label className="text-sm font-medium text-foreground" htmlFor="special-instructions">
+                Special instructions
+              </label>
               <Textarea
+                id="special-instructions"
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
                 placeholder="Add customer notes, delivery preferences, or finishing requests"
