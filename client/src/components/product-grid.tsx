@@ -69,7 +69,14 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
 
   // Handle image load error
   const handleImageError = useCallback((itemId: string) => {
-    setFailedImages(prev => new Set(prev).add(itemId));
+    setFailedImages(prev => {
+      if (prev.has(itemId)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(itemId);
+      return next;
+    });
   }, []);
 
   useEffect(() => {
