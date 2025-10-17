@@ -849,8 +849,14 @@ function CustomerOrderingContent() {
                 
                 <div className="space-y-3">
                   <div>
-                    <label className="text-sm font-medium">{t.customerOrdering?.addressLabel || 'Address Label'}</label>
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="address-label"
+                    >
+                      {t.customerOrdering?.addressLabel || 'Address Label'}
+                    </label>
                     <Input
+                      id="address-label"
                       placeholder={t.customerOrdering?.addressLabelPlaceholder || 'e.g., Home, Office, etc.'}
                       value={orderState.newAddress?.label || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -862,7 +868,13 @@ function CustomerOrderingContent() {
                   </div>
                   
                   <div>
-                    <label className="text-sm font-medium">{t.customerOrdering?.governorate || 'Governorate'}</label>
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="governorate"
+                      id="governorate-label"
+                    >
+                      {t.customerOrdering?.governorate || 'Governorate'}
+                    </label>
                     <Select
                       value={orderState.newAddress?.governorateId || ''}
                       onValueChange={(value) => setOrderState(prev => ({
@@ -870,7 +882,11 @@ function CustomerOrderingContent() {
                         newAddress: { ...prev.newAddress!, governorateId: value, cityId: '' }
                       }))}
                     >
-                      <SelectTrigger data-testid="select-governorate">
+                      <SelectTrigger
+                        id="governorate"
+                        aria-labelledby="governorate-label"
+                        data-testid="select-governorate"
+                      >
                         <SelectValue placeholder={t.customerOrdering?.selectGovernorate || 'Select governorate'} />
                       </SelectTrigger>
                       <SelectContent>
@@ -885,7 +901,13 @@ function CustomerOrderingContent() {
                   
                   {orderState.newAddress?.governorateId && (
                     <div>
-                      <label className="text-sm font-medium">{t.customerOrdering?.area || 'Area'}</label>
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="area"
+                        id="area-label"
+                      >
+                        {t.customerOrdering?.area || 'Area'}
+                      </label>
                       <Select
                         value={orderState.newAddress?.cityId || ''}
                         onValueChange={(value) => setOrderState(prev => ({
@@ -893,7 +915,11 @@ function CustomerOrderingContent() {
                           newAddress: { ...prev.newAddress!, cityId: value }
                         }))}
                       >
-                        <SelectTrigger data-testid="select-area">
+                        <SelectTrigger
+                          id="area"
+                          aria-labelledby="area-label"
+                          data-testid="select-area"
+                        >
                           <SelectValue placeholder={t.customerOrdering?.selectArea || 'Select area'} />
                         </SelectTrigger>
                         <SelectContent>
@@ -908,8 +934,14 @@ function CustomerOrderingContent() {
                   )}
                   
                   <div>
-                    <label className="text-sm font-medium">{t.customerOrdering?.streetAddress || 'Street Address'}</label>
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="street-address"
+                    >
+                      {t.customerOrdering?.streetAddress || 'Street Address'}
+                    </label>
                     <Input
+                      id="street-address"
                       placeholder={t.customerOrdering?.streetPlaceholder || 'Enter your street address'}
                       value={orderState.newAddress?.street || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -922,6 +954,7 @@ function CustomerOrderingContent() {
                   
                   <div className="grid grid-cols-2 gap-2">
                     <Input
+                      id="block"
                       placeholder={t.customerOrdering?.blockPlaceholder || 'Block (optional)'}
                       value={orderState.newAddress?.block || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -931,6 +964,7 @@ function CustomerOrderingContent() {
                       data-testid="input-block"
                     />
                     <Input
+                      id="building"
                       placeholder={t.customerOrdering?.buildingPlaceholder || 'Building (optional)'}
                       value={orderState.newAddress?.building || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -943,6 +977,7 @@ function CustomerOrderingContent() {
                   
                   <div className="grid grid-cols-2 gap-2">
                     <Input
+                      id="floor"
                       placeholder={t.customerOrdering?.floorPlaceholder || 'Floor (optional)'}
                       value={orderState.newAddress?.floor || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -952,6 +987,7 @@ function CustomerOrderingContent() {
                       data-testid="input-floor"
                     />
                     <Input
+                      id="apartment"
                       placeholder={t.customerOrdering?.apartmentPlaceholder || 'Apartment (optional)'}
                       value={orderState.newAddress?.apartment || ''}
                       onChange={(e) => setOrderState(prev => ({
@@ -963,8 +999,14 @@ function CustomerOrderingContent() {
                   </div>
                   
                   <div>
-                    <label className="text-sm font-medium">{t.customerOrdering?.additionalInfo || 'Additional Info (Optional)'}</label>
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="additional-info"
+                    >
+                      {t.customerOrdering?.additionalInfo || 'Additional Info (Optional)'}
+                    </label>
                     <Textarea
+                      id="additional-info"
                       placeholder={t.customerOrdering?.additionalInfoPlaceholder || 'Any special delivery instructions...'}
                       value={orderState.newAddress?.additionalInfo || ''}
                       onChange={(e) => setOrderState(prev => ({
