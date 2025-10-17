@@ -27,6 +27,7 @@ import { SystemSettings } from "@/components/system-settings";
 import { ClothingItem, LaundryService, Customer } from "@shared/schema";
 import { ShoppingCart, Package, BarChart3, Settings, Users, Truck, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslationContext } from "@/context/TranslationContext";
 import { buildReceiptData } from "@/lib/receipt";
@@ -281,29 +282,14 @@ export default function POS() {
       return;
     }
 
-    // Map package usage for quick lookup
-    const usageMap = new Map<string, number>();
-    packageUsage?.items.forEach((u) => {
-      const key = `${u.serviceId}:${u.clothingItemId}`;
-      usageMap.set(key, (usageMap.get(key) || 0) + u.quantity);
-    });
-
-    let creditedAmount = 0;
+    // Build order line items without attempting to apply credits client-side.
     const orderItems = cartSummary.items.map(item => {
       const price = parseFloat(item.service.itemPrice ?? item.service.price);
-      const key = `${item.service.id}:${item.clothingItem.id}`;
-      const availableCredits = usageMap.get(key) || 0;
-      const creditQty = Math.min(availableCredits, item.quantity);
-      if (creditQty > 0) {
-        creditedAmount += creditQty * price;
-        usageMap.set(key, availableCredits - creditQty);
-      }
-      const chargedTotal = price * (item.quantity - creditQty);
       return {
         id: item.id,
         serviceId: item.service.id,
         clothingItemId: item.clothingItem.id,
-        // Keep legacy 'name' for compatibility, but provide structured bilingual fields
+        // Keep legacy 'name' and add bilingual fields for receipts
         name: item.clothingItem.name,
         clothingItem: {
           name: item.clothingItem.name,
@@ -315,14 +301,22 @@ export default function POS() {
         },
         quantity: item.quantity,
         price,
-        total: chargedTotal,
+        total: price * item.quantity,
       };
     });
 
+    // Recompute cart totals using the same utility as the cart, including coupons and package usage
+    const adjusted = getCartSummary(
+      packageUsage?.items && packageUsage.items.length > 0
+        ? { items: packageUsage.items }
+        : undefined,
+    );
     const taxRate = getTaxRate();
-    const newSubtotal = cartSummary.subtotal - creditedAmount;
-    const newTax = Math.max(cartSummary.tax - creditedAmount * taxRate, 0);
-    const finalTotal = Math.max(cartSummary.total - creditedAmount - creditedAmount * taxRate - redeemedPoints * 0.1, 0);
+    const redeemedAmount = redeemedPoints * 0.1;
+    const subtotalVal = adjusted.subtotal;
+    const taxVal = adjusted.tax;
+    const grossTotal = adjusted.total; // before loyalty redemption
+    const finalTotal = Math.max(grossTotal - redeemedAmount, 0);
     const pointsEarned = Math.floor(finalTotal);
 
     const orderData = {
@@ -331,9 +325,10 @@ export default function POS() {
       branchCode: branch.code,
       customerName: customer?.name || "Walk-in",
       customerPhone: customer?.phoneNumber || "",
-      subtotal: newSubtotal.toFixed(2),
-      tax: newTax.toFixed(2),
-      total: finalTotal.toFixed(2),
+      // Persist order totals without loyalty redemption; server will recompute and validate
+      subtotal: subtotalVal.toFixed(2),
+      tax: taxVal.toFixed(2),
+      total: grossTotal.toFixed(2),
       paymentMethod,
       status: "start_processing",
       estimatedPickup: new Date(
@@ -350,9 +345,9 @@ export default function POS() {
 
     const transaction = paymentMethod === "pay_later" ? undefined : {
       items: orderItems,
-      subtotal: newSubtotal.toFixed(2),
-      tax: newTax.toFixed(2),
-      total: finalTotal.toFixed(2),
+      subtotal: subtotalVal.toFixed(2),
+      tax: taxVal.toFixed(2),
+      total: finalTotal.toFixed(2), // loyalty redemption applied to payment amount
       paymentMethod,
       sellerName: username,
       customerId: customer?.id || undefined,
@@ -432,38 +427,49 @@ export default function POS() {
               String(cartSummary.itemCount),
             ),
             defaultOpen: true,
+            fullHeight: true,
             content: (
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-                <div className="flex-1 min-w-0">
-                  {/* Branch + API status helpers */}
-                  <div className="mb-4 flex flex-col gap-3">
-                    <div className="flex items-center gap-3">
-                      <BranchSelector
-                        value={effectiveBranchCode}
-                        onChange={(code) => setBranchOverrideCode(code)}
-                      />
-                      {effectiveBranchCode ? (
-                        <span className="text-xs text-muted-foreground">Using: {effectiveBranchCode}</span>
-                      ) : (
-                        <span className="text-xs text-destructive">No branch set</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className={`inline-flex items-center gap-1 ${apiHealthy ? 'text-green-600' : apiHealthy === false ? 'text-red-600' : 'text-muted-foreground'}`}>
-                        <span className={`inline-block h-2 w-2 rounded-full ${apiHealthy ? 'bg-green-600' : apiHealthy === false ? 'bg-red-600' : 'bg-gray-400'}`}></span>
-                        {apiHealthy === null ? 'Checking API…' : apiHealthy ? 'API Connected' : 'API Error'}
-                      </span>
-                    </div>
-                  </div>
+              <div className="flex lg:h-[calc(100vh-16rem)] flex-col gap-6 lg:flex-row lg:items-stretch">
+                {/* Left: Catalog */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <Card className="h-full overflow-hidden">
+                    <CardContent className="p-3 sm:p-4 h-full flex flex-col gap-3">
+                      {/* Workspace toolbar */}
+                      <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--surface-muted)] p-2 sm:p-3 border">
+                        <div className="flex items-center gap-3">
+                          <BranchSelector
+                            value={effectiveBranchCode}
+                            onChange={(code) => setBranchOverrideCode(code)}
+                          />
+                          {effectiveBranchCode ? (
+                            <span className="hidden sm:inline text-xs text-muted-foreground">{t.using || 'Using'}: {effectiveBranchCode}</span>
+                          ) : (
+                            <span className="text-xs text-destructive">{t.noBranchSet || 'No branch set'}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border ${apiHealthy ? 'text-green-700 border-green-300 bg-green-50' : apiHealthy === false ? 'text-red-700 border-red-300 bg-red-50' : 'text-gray-600 border-gray-300 bg-gray-50'}`}>
+                            <span className={`inline-block h-2 w-2 rounded-full ${apiHealthy ? 'bg-green-600' : apiHealthy === false ? 'bg-red-600' : 'bg-gray-400'}`}></span>
+                            {apiHealthy === null ? (t.checkingApi || 'Checking API…') : apiHealthy ? (t.apiConnected || 'API Connected') : (t.apiError || 'API Error')}
+                          </span>
+                        </div>
+                      </div>
 
-                  <ProductGrid
-                    onAddToCart={handleSelectClothingItem}
-                    cartItemCount={cartSummary.itemCount}
-                    onToggleCart={toggleCart}
-                    branchCode={effectiveBranchCode}
-                  />
+                      {/* Catalog grid */}
+                      <div className="flex-1 min-h-0">
+                        <ProductGrid
+                          onAddToCart={handleSelectClothingItem}
+                          cartItemCount={cartSummary.itemCount}
+                          onToggleCart={toggleCart}
+                          branchCode={effectiveBranchCode}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-                <div className="lg:w-[26rem]">
+
+                {/* Right: Cart */}
+                <div className="lg:w-[28rem]">
                   <LaundryCartSidebar
                     cartSummary={cartSummary}
                     getCartSummary={getCartSummary}

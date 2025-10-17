@@ -103,18 +103,51 @@ export function ServiceSelectionModal({
       const effectiveBranchCode = overrideBranchCode || branchCode;
       if (effectiveBranchCode) params.append("branchCode", effectiveBranchCode);
       const queryString = params.toString();
-      const url = `${serviceEndpointBase}/${serviceTargetId}/services${
-        queryString ? `?${queryString}` : ""
-      }`;
-      const res = await apiRequest("GET", url);
-      const rawServices = await res.json();
-      return rawServices.filter((service: any) => {
+
+      const tryFetch = async (base: string, id: string, usePublicBranchCode: boolean) => {
+        const url = `${base}/${id}/services${queryString ? `?${queryString}` : ""}`;
+        const res = await apiRequest("GET", url);
+        const raw = await res.json();
+        return Array.isArray(raw) ? raw : [];
+      };
+
+      let rawServices: any[] = [];
+
+      // Build ordered attempts
+      const attempts: Array<{ base: string; id: string; public: boolean }> = [];
+      const clothingId = clothingItemIdForServices ? String(clothingItemIdForServices) : null;
+      const productId = productIdForServices ? String(productIdForServices) : null;
+
+      // 1) If branchCode is available and we have a clothingId, try public clothing-items first
+      if ((overrideBranchCode || branchCode) && clothingId) {
+        attempts.push({ base: "/api/clothing-items", id: clothingId, public: true });
+      }
+      // 2) If this originated from a product, try product endpoint
+      if (shouldUseProductServices && productId) {
+        attempts.push({ base: "/api/products", id: productId, public: false });
+      }
+      // 3) Fallback to authed clothing-items
+      if (clothingId) {
+        attempts.push({ base: "/api/clothing-items", id: clothingId, public: false });
+      }
+
+      for (const attempt of attempts) {
+        try {
+          const data = await tryFetch(attempt.base, attempt.id, attempt.public);
+          if (Array.isArray(data) && data.length > 0) {
+            rawServices = data;
+            break;
+          }
+        } catch {}
+      }
+
+      return (rawServices || []).filter((service: any) => {
         const price = parseFloat(service.itemPrice || service.price || "0");
         return price > 0;
       });
     },
     enabled: isOpen && !!normalizedClothingItem && !!serviceTargetId,
-    retry: 2,
+    retry: 1,
   });
 
   const getQuantity = (serviceId: string) => quantities[serviceId] || 1;

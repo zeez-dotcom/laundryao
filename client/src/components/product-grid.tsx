@@ -383,11 +383,15 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                           {measurementItem.description && (
                             <p className="text-sm text-gray-600 mb-2">{measurementItem.description}</p>
                           )}
-                          <div className="flex justify-center items-center">
-                            <span className="text-sm text-pos-primary font-medium">
-                              {t.selectService || "Select Service"}
-                            </span>
-                          </div>
+                        <div className="mt-2 flex justify-center">
+                          <Button
+                            size="sm"
+                            className="bg-pos-primary hover:bg-blue-700 text-white"
+                            onClick={(e) => { e.stopPropagation(); onAddToCart(item); }}
+                          >
+                            {t.selectService || "Select Service"}
+                          </Button>
+                        </div>
                         </CardContent>
                       </Card>
                     </div>
@@ -442,10 +446,14 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                             {item.description && (
                               <p className="text-sm text-gray-600 mb-2" data-testid={`text-item-description-${item.id}`}>{item.description}</p>
                             )}
-                            <div className="flex justify-center items-center">
-                              <span className="text-sm text-pos-primary font-medium">
+                            <div className="mt-2 flex justify-center">
+                              <Button
+                                size="sm"
+                                className="bg-pos-primary hover:bg-blue-700 text-white"
+                                onClick={(e) => { e.stopPropagation(); onAddToCart(item); }}
+                              >
                                 {t.selectService || "Select Service"}
-                              </span>
+                              </Button>
                             </div>
                           </CardContent>
                         </Card>

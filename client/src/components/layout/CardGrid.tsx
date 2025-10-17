@@ -18,6 +18,8 @@ export type CardAccordionSection = {
   summary?: string;
   content: ReactNode;
   defaultOpen?: boolean;
+  // When true, do not constrain content height; useful for full-screen workspaces (e.g., Sales)
+  fullHeight?: boolean;
 };
 
 export type CardGridCard = {
@@ -183,7 +185,14 @@ function CardGridItem({ card }: { card: CardGridCard }) {
                     ) : null}
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="pt-2 max-h-[calc(100vh-220px)] overflow-auto">{section.content}</AccordionContent>
+                <AccordionContent
+                  className={cn(
+                    "pt-2",
+                    section.fullHeight ? undefined : "max-h-[calc(100vh-220px)] overflow-auto",
+                  )}
+                >
+                  {section.content}
+                </AccordionContent>
               </AccordionItem>
             ))}
           </Accordion>

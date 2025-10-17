@@ -32,6 +32,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useTranslation } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthContext } from "@/context/AuthContext";
+import { Separator } from "@/components/ui/separator";
 
 interface ClothingItemPayload {
   name: string;
@@ -94,6 +95,33 @@ export function ClothingItemsSection() {
     },
   });
 
+  const [imageInputMode, setImageInputMode] = useState<"upload" | "link">("link");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  const handleImageUpload = async () => {
+    try {
+      if (!imageFile) return;
+      const branchId = branch?.id;
+      if (!branchId) {
+        toast({ title: "Select a branch first", variant: "destructive" });
+        return;
+      }
+      const form = new FormData();
+      form.append("image", imageFile);
+      const res = await fetch(`/api/branches/${branchId}/ads/upload-image`, {
+        method: "POST",
+        body: form,
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Failed to upload image");
+      clothingForm.setValue("imageUrl", data.imageUrl);
+      toast({ title: "Image uploaded" });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   const priceForm = useForm<{
     clothingItemId: string;
     serviceId: string;
@@ -101,6 +129,53 @@ export function ClothingItemsSection() {
   }>({
     resolver: zodResolver(insertItemServicePriceSchema),
     defaultValues: { clothingItemId: "", serviceId: "", price: "" },
+  });
+
+  // When editing an item, fetch its mapped services with prices
+  const { data: itemServices = [], refetch: refetchItemServices } = useQuery<
+    (LaundryService & { itemPrice?: string })[]
+  >({
+    queryKey: [
+      "/api/clothing-items",
+      editingClothing?.id ?? "no-item",
+      "services",
+      needsBranchParam ? branchIdParam ?? "missing-branch" : "implicit-branch",
+    ],
+    enabled: Boolean(editingClothing?.id) && (!needsBranchParam || Boolean(branchIdParam)),
+    queryFn: async () => {
+      if (!editingClothing?.id) return [];
+      const url = needsBranchParam && branchIdParam
+        ? `/api/clothing-items/${editingClothing.id}/services?branchId=${encodeURIComponent(branchIdParam)}`
+        : `/api/clothing-items/${editingClothing.id}/services`;
+      const response = await apiRequest("GET", url);
+      return response.json();
+    },
+  });
+
+  const updatePriceMutation = useMutation({
+    mutationFn: async (data: { clothingItemId: string; serviceId: string; price: string }) => {
+      const payload = needsBranchParam && branchIdParam ? { ...data, branchId: branchIdParam } : data;
+      const response = await apiRequest("PUT", "/api/item-service-prices", payload);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/item-service-prices"] });
+      refetchItemServices();
+      toast({ title: "Price updated" });
+    },
+  });
+
+  const deletePriceMutation = useMutation({
+    mutationFn: async (data: { clothingItemId: string; serviceId: string }) => {
+      const payload = needsBranchParam && branchIdParam ? { ...data, branchId: branchIdParam } : data;
+      const response = await apiRequest("DELETE", "/api/item-service-prices", payload);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/item-service-prices"] });
+      refetchItemServices();
+      toast({ title: "Mapping removed" });
+    },
   });
 
   const createClothingMutation = useMutation({
@@ -354,10 +429,26 @@ export function ClothingItemsSection() {
                   name="imageUrl"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Image URL (Optional)</FormLabel>
-                      <FormControl>
-                        <Input placeholder="https://..." {...field} />
-                      </FormControl>
+                      <FormLabel>Image</FormLabel>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs">
+                          <Button type="button" variant={imageInputMode === 'link' ? 'default' : 'outline'} size="sm" onClick={() => setImageInputMode('link')}>Paste Link</Button>
+                          <Button type="button" variant={imageInputMode === 'upload' ? 'default' : 'outline'} size="sm" onClick={() => setImageInputMode('upload')}>Upload</Button>
+                        </div>
+                        {imageInputMode === 'link' ? (
+                          <FormControl>
+                            <Input placeholder="https://..." {...field} />
+                          </FormControl>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files?.[0] || null)} />
+                            <Button type="button" onClick={handleImageUpload}>Upload</Button>
+                          </div>
+                        )}
+                        {field.value && (
+                          <div className="text-xs text-muted-foreground break-all">{field.value}</div>
+                        )}
+                      </div>
                     </FormItem>
                   )}
                 />
@@ -442,6 +533,34 @@ export function ClothingItemsSection() {
                     />
                     <FormField
                       control={clothingForm.control}
+                      name="imageUrl"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Image</FormLabel>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-xs">
+                              <Button type="button" variant={imageInputMode === 'link' ? 'default' : 'outline'} size="sm" onClick={() => setImageInputMode('link')}>Paste Link</Button>
+                              <Button type="button" variant={imageInputMode === 'upload' ? 'default' : 'outline'} size="sm" onClick={() => setImageInputMode('upload')}>Upload</Button>
+                            </div>
+                            {imageInputMode === 'link' ? (
+                              <FormControl>
+                                <Input placeholder="https://..." {...field} />
+                              </FormControl>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files?.[0] || null)} />
+                                <Button type="button" onClick={handleImageUpload}>Upload</Button>
+                              </div>
+                            )}
+                            {field.value && (
+                              <div className="text-xs text-muted-foreground break-all">{field.value}</div>
+                            )}
+                          </div>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={clothingForm.control}
                       name="categoryId"
                       render={({ field }) => (
                         <FormItem>
@@ -481,7 +600,88 @@ export function ClothingItemsSection() {
                         </FormItem>
                       )}
                     />
-                    <div className="flex justify-end space-x-2">
+                    <Separator className="my-3" />
+                    <div>
+                      <div className="text-sm font-medium mb-2">Services & Prices</div>
+                      {itemServices.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No services mapped for this item. Add one below.</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {itemServices.map((svc) => (
+                            <div key={svc.id} className="flex items-center gap-2">
+                              <span className="flex-1 text-sm">{svc.name}</span>
+                              <Input
+                                defaultValue={svc.itemPrice || (svc as any).price || ""}
+                                onBlur={(e) => {
+                                  const val = e.currentTarget.value;
+                                  if (!val) return;
+                                  updatePriceMutation.mutate({ clothingItemId: editingClothing!.id, serviceId: svc.id, price: val });
+                                }}
+                                className="w-28 h-8"
+                                type="number"
+                                step="0.01"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-pos-error"
+                                onClick={() => deletePriceMutation.mutate({ clothingItemId: editingClothing!.id, serviceId: svc.id })}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-3">
+                        <Form {...priceForm}>
+                          <form onSubmit={priceForm.handleSubmit(handlePriceSubmit)} className="flex items-end gap-2">
+                            <div className="flex-1">
+                              <FormField
+                                control={priceForm.control}
+                                name="serviceId"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Add Service</FormLabel>
+                                    <Select onValueChange={field.onChange} value={field.value}>
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select service" />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        {services.map((svc) => (
+                                          <SelectItem key={svc.id} value={svc.id}>
+                                            {svc.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                            <div>
+                              <FormField
+                                control={priceForm.control}
+                                name="price"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Price</FormLabel>
+                                    <FormControl>
+                                      <Input type="number" step="0.01" {...field} />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                            <input type="hidden" value={editingClothing!.id} {...priceForm.register("clothingItemId")} />
+                            <Button type="submit" className="bg-pos-secondary hover:bg-green-600 h-9">Add</Button>
+                          </form>
+                        </Form>
+                      </div>
+                    </div>
+                    <div className="flex justify-end space-x-2 mt-4">
                       <Button
                         type="button"
                         variant="secondary"
