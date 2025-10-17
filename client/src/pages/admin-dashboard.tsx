@@ -566,10 +566,33 @@ export default function AdminDashboard() {
     return null;
   }
 
+  // If the current viewport is too small, open the dashboard in a larger popup once per session
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const alreadyOpened = sessionStorage.getItem("adminDashboardPopupOpened");
+    const tooNarrow = window.innerWidth < 1200;
+    const tooShort = window.innerHeight < 700;
+    if (!alreadyOpened && (tooNarrow || tooShort)) {
+      const w = Math.max(1200, window.innerWidth);
+      const h = Math.max(800, window.innerHeight);
+      const left = Math.max(0, Math.floor((screen.width - w) / 2));
+      const top = Math.max(0, Math.floor((screen.height - h) / 2));
+      const popup = window.open(
+        "/admin?popup=1",
+        "admin-dashboard",
+        `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
+      );
+      if (popup) {
+        try { popup.focus(); } catch {}
+        sessionStorage.setItem("adminDashboardPopupOpened", "1");
+      }
+    }
+  }, []);
+
   return (
-    <div className="min-h-screen bg-[var(--surface-muted)] text-foreground">
+    <div className="full-bleed flex min-h-screen flex-col bg-[var(--surface-muted)] text-foreground">
       <header className="border-b bg-[var(--surface-elevated)] shadow-sm">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+        <div className="mx-auto flex w-full max-w-none flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex items-center gap-4">
             <img src={logoUrl} alt="Laundry Logo" className="h-10 w-10 rounded-full object-cover" />
             <div>
@@ -601,7 +624,7 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-7xl flex-col gap-[var(--space-xl)] px-6 py-8">
+      <main className="mx-auto flex w-full max-w-none flex-1 flex-col gap-[var(--space-xl)] px-6 py-8">
         <section className="rounded-xl border bg-card p-6 shadow-sm">
           <h2 className="text-[var(--text-lg)] font-semibold">Today&apos;s focus</h2>
           <p className="mt-2 text-[var(--text-sm)] text-muted-foreground">

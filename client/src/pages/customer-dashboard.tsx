@@ -308,9 +308,9 @@ function DashboardContent() {
   }, [adsContent, branch?.id, featureMessage, heroContent, metrics, packages.length]);
 
   return (
-    <div className="min-h-screen bg-[var(--background)] text-foreground">
+    <div className="full-bleed min-h-screen bg-[var(--background)] text-foreground">
       <header className="border-b bg-[var(--surface-elevated)]">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-5">
+        <div className="flex w-full flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div>
             <h1 className="text-[var(--text-xl)] font-semibold">Customer engagement</h1>
             <p className="text-[var(--text-sm)] text-muted-foreground">
@@ -322,7 +322,7 @@ function DashboardContent() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-6xl flex-col gap-[var(--space-xl)] px-6 py-8">
+      <main className="flex w-full max-w-none flex-col gap-[var(--space-xl)] px-6 py-8">
         <CardGrid cards={cards} columns={{ base: 1, md: 2 }} />
       </main>
     </div>

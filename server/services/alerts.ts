@@ -150,7 +150,7 @@ class PostgresAlertingRepository implements AlertingRepository {
     if (this.ensured) return;
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS analytics_alert_rules (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id UUID PRIMARY KEY,
         name TEXT NOT NULL,
         metric TEXT NOT NULL,
         comparison TEXT NOT NULL,
@@ -166,13 +166,22 @@ class PostgresAlertingRepository implements AlertingRepository {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         last_triggered_at TIMESTAMPTZ,
-        next_run_at TIMESTAMPTZ,
-        UNIQUE(metric, cohort_key, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'), name)
+        next_run_at TIMESTAMPTZ
+      )
+    `);
+    // Ensure a deterministic uniqueness guarantee without using expressions in a table constraint
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS analytics_alert_rules_unique_idx
+      ON analytics_alert_rules (
+        metric,
+        cohort_key,
+        COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        name
       )
     `);
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS analytics_alert_deliveries (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        id UUID PRIMARY KEY,
         rule_id UUID REFERENCES analytics_alert_rules(id) ON DELETE CASCADE,
         channel TEXT NOT NULL,
         recipient TEXT NOT NULL,

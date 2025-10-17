@@ -111,11 +111,23 @@ function gridClass(count: number, prefix?: string) {
   return prefix ? `${prefix}:${baseClass}` : baseClass;
 }
 
-function buildGridClass(columns: CardGridProps["columns"] | undefined) {
-  const base = columns?.base ?? 1;
-  const md = columns?.md ?? (base > 1 ? base : 2);
-  const lg = columns?.lg ?? Math.max(md, 3);
-  return cn("grid w-full", gridClass(base), md > 1 ? gridClass(md, "md") : undefined, lg > 1 ? gridClass(lg, "xl") : undefined);
+function buildGridClass(columns: CardGridProps["columns"] | undefined, itemCount: number) {
+  // Desired target columns by breakpoint
+  const desiredBase = columns?.base ?? 1;
+  const desiredMd = columns?.md ?? (desiredBase > 1 ? desiredBase : 2);
+  const desiredLg = columns?.lg ?? Math.max(desiredMd, 3);
+
+  // Cap columns by the actual number of items to avoid empty gutters
+  const base = Math.min(itemCount, Math.max(1, desiredBase));
+  const md = Math.min(itemCount, Math.max(1, desiredMd));
+  const lg = Math.min(itemCount, Math.max(1, desiredLg));
+
+  return cn(
+    "grid w-full",
+    gridClass(base),
+    md > 1 ? gridClass(md, "md") : undefined,
+    lg > 1 ? gridClass(lg, "xl") : undefined,
+  );
 }
 
 function CardGridItem({ card }: { card: CardGridCard }) {
@@ -171,7 +183,7 @@ function CardGridItem({ card }: { card: CardGridCard }) {
                     ) : null}
                   </div>
                 </AccordionTrigger>
-                <AccordionContent className="pt-2">{section.content}</AccordionContent>
+                <AccordionContent className="pt-2 min-h-[60vh] md:min-h-[70vh]">{section.content}</AccordionContent>
               </AccordionItem>
             ))}
           </Accordion>
@@ -213,7 +225,7 @@ function CardGridItem({ card }: { card: CardGridCard }) {
 }
 
 export function CardGrid({ cards, className, columns }: CardGridProps) {
-  const gridClassName = useMemo(() => buildGridClass(columns), [columns]);
+  const gridClassName = useMemo(() => buildGridClass(columns, cards.length), [columns, cards.length]);
 
   return (
     <div

@@ -33,7 +33,7 @@ export default function CreateOrderPage() {
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[1fr_340px]">
+    <div className="full-bleed grid w-full gap-6 px-4 py-6 lg:grid-cols-[1fr_340px] max-w-none">
       <div className="space-y-4">
         <Card>
           <CardHeader>

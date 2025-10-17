@@ -81,15 +81,29 @@ if (app.get('env') !== 'development') {
     next();
   });
 } else {
-  // In development, relax headers to allow Vite HMR and local tooling
-  app.use((_, res, next) => {
+  // In development, relax headers to allow Vite HMR, Apollo Sandbox, Google Fonts, etc.
+  app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    // Allow websockets and local https connections for HMR and APIs
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss: https:;"
-    );
+    // Build a development CSP that permits commonly-used dev resources
+    const cspParts = [
+      "default-src 'self'",
+      // Allow inline/eval for React Refresh + Vite and external scripts over https
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
+      // Allow external styles (e.g., Google Fonts CSS)
+      "style-src 'self' 'unsafe-inline' https:",
+      // Allow images from self, data URLs, and https
+      "img-src 'self' data: https:",
+      // Allow fonts from https (e.g., fonts.gstatic.com) in addition to self/data
+      "font-src 'self' data: https:",
+      // Allow XHR/fetch/websocket to same origin and http(s)
+      "connect-src 'self' http: https: ws: wss:",
+      // Allow Apollo Sandbox to embed in an iframe in dev
+      "frame-src 'self' https://sandbox.embed.apollographql.com",
+      // Allow external manifests (Apollo landing page)
+      "manifest-src 'self' https:",
+    ];
+    res.setHeader('Content-Security-Policy', cspParts.join('; '));
     next();
   });
 }

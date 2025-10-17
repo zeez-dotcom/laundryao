@@ -360,8 +360,8 @@ export default function AnalyticsWorkspacePage() {
   };
 
   return (
-    <div className="flex-1 overflow-auto bg-muted/30">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-6">
+    <div className="full-bleed flex-1 overflow-auto bg-muted/30">
+      <div className="flex w-full flex-col gap-6 p-6 max-w-none">
         <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">Analytics workspace</h1>

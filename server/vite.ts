@@ -20,13 +20,10 @@ export function log(message: string, source = "express") {
 }
 
 export async function setupVite(app: Express, server: Server) {
-  const hmrPort = parseInt(
-    process.env.PORT ?? process.env.VITE_PORT ?? "5000",
-    10,
-  );
   const serverOptions = {
     middlewareMode: true,
-    hmr: { server, clientPort: hmrPort },
+    // Let Vite infer HMR client URL from the current origin to avoid port mismatches
+    hmr: { server },
     allowedHosts: true as const,
   };
 

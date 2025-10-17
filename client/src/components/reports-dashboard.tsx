@@ -254,8 +254,8 @@ export function ReportsDashboard() {
   };
 
   return (
-    <div className="flex-1 p-6 bg-pos-background">
-      <div className="max-w-7xl mx-auto">
+    <div className="full-bleed flex-1 p-6 bg-pos-background">
+      <div className="w-full max-w-none">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-3">
             <BarChart3 className="h-8 w-8 text-pos-primary" />

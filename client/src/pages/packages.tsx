@@ -98,9 +98,9 @@ export default function PackagesPage() {
   );
 
   return (
-    <div className="min-h-screen bg-[var(--background)] text-foreground">
+    <div className="full-bleed min-h-screen bg-[var(--background)] text-foreground">
       <header className="border-b bg-[var(--surface-elevated)]">
-        <div className="mx-auto flex max-w-5xl flex-col gap-2 px-6 py-6">
+        <div className="flex w-full flex-col gap-2 px-6 py-6 max-w-none">
           <h1 className="text-[var(--text-xl)] font-semibold">Packages & campaigns</h1>
           <p className="text-[var(--text-sm)] text-muted-foreground">
             Pair <GlossaryTooltip term="Progressive disclosure" className="ml-1" /> with the
@@ -109,7 +109,7 @@ export default function PackagesPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="w-full max-w-none px-6 py-8">
         <CardGrid cards={cards} columns={{ base: 1 }} />
       </main>
     </div>

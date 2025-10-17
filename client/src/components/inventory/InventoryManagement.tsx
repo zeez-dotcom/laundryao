@@ -82,7 +82,7 @@ export function InventoryManagement() {
 
   return (
     <div className="flex-1 p-6 bg-pos-background overflow-y-auto">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full max-w-none">
         <input
           type="file"
           accept=".xlsx"

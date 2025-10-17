@@ -135,7 +135,7 @@ export function ServiceSelectionModal({
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
       <DialogContent className="w-[calc(100%-1rem)] max-w-2xl max-h-[calc(100vh-4rem)] overflow-y-auto custom-scrollbar sm:w-full">
         <DialogHeader>
           <DialogTitle className="flex items-center space-x-2">
@@ -280,6 +280,8 @@ export function ServiceSelectionModal({
                         <Input
                           type="number"
                           min="1"
+                          id={`quantity-${service.id}`}
+                          name={`quantity-${service.id}`}
                           value={getQuantity(service.id)}
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) =>

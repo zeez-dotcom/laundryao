@@ -208,7 +208,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-pos-background pb-16 sm:pb-0">
+    <div className="flex-1 flex flex-col overflow-hidden bg-pos-background pb-16 sm:pb-0 min-h-[60vh] md:min-h-[70vh] min-w-0">
       {/* Search and Categories */}
       <div className="bg-pos-surface shadow-sm border-b border-gray-200 p-4">
         <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
@@ -217,6 +217,8 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
             <Input
               type="text"
               placeholder={t.searchProducts || "Search items..."}
+              id="search-products"
+              name="search"
               className="pl-10 py-3 text-base"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -227,6 +229,8 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
             )}
             <select
               className="border rounded px-2 py-2 text-sm text-gray-700"
+              id="items-per-page"
+              name="itemsPerPage"
               value={pageSize}
               onChange={(e) => { setPage(1); setPageSize(parseInt(e.target.value, 10)); }}
               aria-label="Items per page"
@@ -275,7 +279,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
       </div>
 
       {/* Clothing Items Grid */}
-      <div className="flex-1 p-4 overflow-hidden" ref={gridContainerRef}>
+      <div className="flex-1 p-4 overflow-hidden min-w-0" ref={gridContainerRef}>
         {items.length === 0 || gridSize.width === 0 ? (
           <EmptyState
             icon={<Package className="h-12 w-12 text-gray-400" />}
@@ -303,7 +307,18 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                     onClick={() => onAddToCart(item)}
                     data-testid={`card-clothing-item-${item.id}`}
                   >
-                    <div className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center">
+                    <div
+                      className="w-full h-24 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onAddToCart(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onAddToCart(item);
+                        }
+                      }}
+                    >
                       <img
                         src={getImageSrc(item)}
                         alt={item.name}

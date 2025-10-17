@@ -7,12 +7,10 @@ export default defineConfig({
   plugins: [
     react(),
     runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
+    // Only enable Replit Cartographer if explicitly requested
+    ...(process.env.ENABLE_REPLIT_CARTOGRAPHER === 'true'
       ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
+          await import("@replit/vite-plugin-cartographer").then((m) => m.cartographer()),
         ]
       : []),
   ],
@@ -34,9 +32,6 @@ export default defineConfig({
   },
   server: {
     port: parseInt(process.env.PORT ?? process.env.VITE_PORT ?? "5000", 10),
-    hmr: {
-      clientPort: parseInt(process.env.PORT ?? process.env.VITE_PORT ?? "5000", 10),
-    },
     fs: {
       strict: true,
       deny: [],

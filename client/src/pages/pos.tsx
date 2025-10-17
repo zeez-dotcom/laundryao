@@ -78,6 +78,29 @@ export default function POS() {
   } = useLaundryCart();
 
   const cartSummary = getCartSummary();
+
+  // Small viewport fallback: open the POS workspace in a larger popup once per session
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const alreadyOpened = sessionStorage.getItem("posPopupOpened");
+    const tooNarrow = window.innerWidth < 1200;
+    const tooShort = window.innerHeight < 700;
+    if (!alreadyOpened && (tooNarrow || tooShort)) {
+      const w = Math.max(1200, window.innerWidth);
+      const h = Math.max(800, window.innerHeight);
+      const left = Math.max(0, Math.floor((screen.width - w) / 2));
+      const top = Math.max(0, Math.floor((screen.height - h) / 2));
+      const popup = window.open(
+        "/",
+        "pos-workspace",
+        `popup=yes,width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes,status=yes`
+      );
+      if (popup) {
+        try { popup.focus(); } catch {}
+        sessionStorage.setItem("posPopupOpened", "1");
+      }
+    }
+  }, []);
   const { registerTour, startTour, isTourDismissed, registerGlossaryEntries } = useTour();
 
   useEffect(() => {
@@ -390,7 +413,7 @@ export default function POS() {
             defaultOpen: true,
             content: (
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <ProductGrid
                     onAddToCart={handleSelectClothingItem}
                     cartItemCount={cartSummary.itemCount}
@@ -852,7 +875,7 @@ export default function POS() {
   ];
 
   return (
-    <div className="flex h-screen flex-col bg-[var(--pos-background)]">
+    <div className="full-bleed flex h-screen flex-col bg-[var(--pos-background)]">
       <POSHeader cartItemCount={cartSummary.itemCount} onToggleCart={toggleCart} />
 
       <div className="hidden border-b bg-[var(--surface-elevated)] px-6 py-3 text-[var(--text-sm)] text-muted-foreground lg:flex lg:items-center lg:justify-between">
@@ -869,8 +892,8 @@ export default function POS() {
       <div className="flex flex-1 overflow-hidden">
         <POSSidebar activeView={activeView} onViewChange={setActiveView} />
 
-        <main className="flex-1 overflow-y-auto bg-[var(--surface-muted)]">
-          <div className="px-4 py-6 lg:px-8">
+        <main className="flex-1 overflow-y-auto bg-[var(--surface-muted)] flex flex-col min-h-0 min-w-0">
+          <div className="px-4 py-6 lg:px-8 flex-1 min-h-0 min-w-0">
             <CardGrid cards={currentCards} columns={{ base: 1 }} className="pb-24" />
           </div>
         </main>
