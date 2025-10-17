@@ -1,4 +1,5 @@
 import { Minus, Plus, Trash2, X } from "lucide-react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { CartSummary } from "@shared/schema";
@@ -30,6 +31,7 @@ export function CartSidebar({
 }: CartSidebarProps) {
   const isMobile = useIsMobile();
   const taxRate = getTaxRate();
+  const paymentMethodLabelId = useId();
 
   return (
     <div className={`
@@ -134,8 +136,17 @@ export function CartSidebar({
 
           {/* Payment Method Selection */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700">Payment Method:</label>
-            <div className="grid grid-cols-2 gap-2">
+            <p
+              id={paymentMethodLabelId}
+              className="text-sm font-medium text-gray-700"
+            >
+              Payment Method:
+            </p>
+            <div
+              className="grid grid-cols-2 gap-2"
+              role="group"
+              aria-labelledby={paymentMethodLabelId}
+            >
               <Button
                 variant={paymentMethod === "cash" ? "default" : "outline"}
                 className={`justify-center space-x-2 ${
