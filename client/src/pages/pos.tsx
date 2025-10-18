@@ -218,9 +218,8 @@ export default function POS() {
       setIsReceiptModalOpen(true);
       clearCart();
       setSelectedCustomer(null);
+      // Keep invalidations minimal to reduce UI thrash after checkout
       queryClient.invalidateQueries({ queryKey: ["/api/clothing-items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/laundry-services"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
     },
     onError: (error: any) => {
@@ -233,7 +232,9 @@ export default function POS() {
   });
 
   const handleSelectClothingItem = (clothingItem: ClothingItem) => {
-    // Open service modal regardless; server will resolve branch via auth or branchCode
+    // Ensure receipt modal or any other focus-trapping modal is closed
+    if (isReceiptModalOpen) setIsReceiptModalOpen(false);
+    // Open service modal immediately; server will resolve branch via auth or branchCode
     setSelectedClothingItem(clothingItem);
     setIsServiceModalOpen(true);
   };

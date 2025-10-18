@@ -11,6 +11,7 @@ import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { OrderLogsTable } from "./order-logs-table";
 import { useCurrency } from "@/lib/currency";
+import { useAuthContext } from "@/context/AuthContext";
 
 type RevenueSummary = {
   totalOrders: number;
@@ -37,6 +38,18 @@ type PaymentAggregate = {
   revenue: number;
 };
 
+type PayLaterReceipts = {
+  totalReceipts: number;
+  totalAmount: number;
+  daily: { date: string; receipts: number; amount: number }[];
+};
+
+const EMPTY_RECEIPTS: PayLaterReceipts = {
+  totalReceipts: 0,
+  totalAmount: 0,
+  daily: [],
+};
+
 const EMPTY_SUMMARY: RevenueSummary = {
   totalOrders: 0,
   totalRevenue: 0,
@@ -50,6 +63,7 @@ export function ReportsDashboard() {
     to: new Date(),
   });
   const { formatCurrency } = useCurrency();
+  const { branch, isSuperAdmin } = useAuthContext();
 
   const [range, setRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
 
@@ -60,6 +74,7 @@ export function ReportsDashboard() {
     const params = new URLSearchParams();
     if (startIso) params.set("start", startIso);
     if (endIso) params.set("end", endIso);
+    if (branch?.id) params.set("branchId", branch.id);
     return params;
   };
 
@@ -187,6 +202,30 @@ export function ReportsDashboard() {
     keepPreviousData: true,
   });
 
+  // Pay-later receipts attributed to payment (receipt) date
+  const { data: receiptsData } = useQuery<PayLaterReceipts>({
+    queryKey: ["/api/reports/pay-later-receipts", startIso, endIso, branch?.id],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const url = `/api/reports/pay-later-receipts?${params.toString()}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return EMPTY_RECEIPTS;
+      const json = await res.json();
+      return {
+        totalReceipts: Number(json.totalReceipts ?? 0),
+        totalAmount: Number(json.totalAmount ?? 0),
+        daily: Array.isArray(json.daily)
+          ? json.daily.map((row: any) => ({
+              date: String(row.date ?? ''),
+              receipts: Number(row.receipts ?? 0),
+              amount: Number(row.amount ?? 0),
+            }))
+          : [],
+      } as PayLaterReceipts;
+    },
+    keepPreviousData: true,
+  });
+
   const services = serviceResponse?.services ?? [];
   const clothing = clothingResponse?.items ?? [];
   const paymentMethods = paymentResponse?.methods ?? [];
@@ -250,6 +289,29 @@ export function ReportsDashboard() {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Failed to export report", error);
+    }
+  };
+
+  const exportReceipts = () => {
+    try {
+      const rows: string[][] = [
+        ["Date", "Receipts", "Amount"],
+        ...((receiptsData?.daily ?? []).map((r) => [
+          r.date,
+          String(r.receipts),
+          String(r.amount),
+        ])),
+      ];
+      const csvContent = rows.map((row) => row.join(",")).join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `pay-later-receipts-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export receipts", error);
     }
   };
 
@@ -317,7 +379,7 @@ export function ReportsDashboard() {
         </div>
 
         <Tabs defaultValue="services" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-1">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-1">
             <TabsTrigger value="services" className="text-xs sm:text-sm">
               <span className="hidden sm:inline">Services</span>
               <span className="sm:hidden">Svc</span>
@@ -345,6 +407,10 @@ export function ReportsDashboard() {
             <TabsTrigger value="orderLogs" className="text-xs sm:text-sm">
               <span className="hidden sm:inline">Order Logs</span>
               <span className="sm:hidden">Logs</span>
+            </TabsTrigger>
+            <TabsTrigger value="receipts" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Pay-Later Receipts</span>
+              <span className="sm:hidden">Receipts</span>
             </TabsTrigger>
           </TabsList>
 
@@ -548,6 +614,46 @@ export function ReportsDashboard() {
               </CardContent>
             </Card>
           </TabsContent>
+        
+        {/* Pay-Later Receipts tab content */}
+        <TabsContent value="receipts" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle>Pay-Later Receipts by Payment Date{branch?.name ? ` — ${branch.name}` : ''}</CardTitle>
+              <Button onClick={() => { exportReceipts(); }} variant="outline" size="sm">
+                <Download className="h-4 w-4 mr-2" />
+                Export
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {(!receiptsData || receiptsData.daily.length === 0) ? (
+                <div className="text-sm text-gray-500">No receipts recorded for the selected period.</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-3 border rounded">
+                      <div className="text-xs text-muted-foreground">Total Receipts</div>
+                      <div className="text-xl font-semibold">{receiptsData.totalReceipts}</div>
+                    </div>
+                    <div className="p-3 border rounded">
+                      <div className="text-xs text-muted-foreground">Total Amount</div>
+                      <div className="text-xl font-semibold">{formatCurrency(receiptsData.totalAmount)}</div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {receiptsData.daily.map((row) => (
+                      <div key={row.date} className="flex items-center justify-between p-3 border rounded">
+                        <span className="font-medium">{format(new Date(row.date), 'MMM dd, yyyy')}</span>
+                        <span className="text-sm text-muted-foreground mr-3">{row.receipts} receipts</span>
+                        <span className="font-bold">{formatCurrency(row.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
         </Tabs>
       </div>
     </div>

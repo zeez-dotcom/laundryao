@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, ShoppingCart, Package } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ interface ClothingItemGridProps {
 }
 
 export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCode }: ClothingItemGridProps) {
+  const queryClient = useQueryClient();
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebounce(searchQuery);
@@ -89,6 +90,35 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
     }
     return '/uploads/placeholder-clothing.png';
   }, [isValidImageUrl, failedImages]);
+
+  // Prefetch services for faster modal open
+  const prefetchServices = useCallback((item: ClothingItem) => {
+    try {
+      const productId = (item as any).productId as string | undefined;
+      const clothingId = (item as any).clothingItemId || item.id;
+      const cat = "all";
+      const params = new URLSearchParams();
+      if (branchCode) params.append("branchCode", branchCode);
+      const queryString = params.toString();
+
+      const prefetch = async (base: string, id: string) => {
+        const key = [base, id, "services", cat, branchCode, ""] as const;
+        await queryClient.prefetchQuery({
+          queryKey: key,
+          queryFn: async () => {
+            const res = await fetch(`${base}/${id}/services${queryString ? `?${queryString}` : ""}`, { credentials: "include" });
+            if (!res.ok) return [];
+            const raw = await res.json();
+            return Array.isArray(raw) ? raw : [];
+          },
+          staleTime: 60_000,
+        });
+      };
+
+      if (branchCode && clothingId) prefetch("/api/clothing-items", String(clothingId));
+      if (productId) prefetch("/api/products", String(productId));
+    } catch {}
+  }, [branchCode, queryClient]);
 
   // Handle image load error
   const handleImageError = useCallback((itemId: string) => {
@@ -411,7 +441,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                     const item = items[index];
                     if (!item) return null;
                     return (
-                      <div style={style} className="p-2">
+                      <div style={style} className="p-2" onMouseEnter={() => prefetchServices(item)}>
                         <Card
                           key={item.id}
                           className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"

@@ -181,6 +181,22 @@ function buildOrderDateFilter(alias: string, filter: ReportDateRangeFilter): str
   return `WHERE ${clauses.join(" AND ")}`;
 }
 
+function buildPaymentDateFilter(alias: string, filter: ReportDateRangeFilter): string {
+  const clauses: string[] = [];
+  if (filter.branchId) {
+    assertUuid(filter.branchId);
+    // payments table has branch_id; when missing fall back to orders join in the query
+    clauses.push(`${alias}.branch_id = '${filter.branchId.replace(/'/g, "''")}'`);
+  }
+  if (filter.start) {
+    clauses.push(`${alias}.created_at >= '${filter.start.toISOString()}'`);
+  }
+  if (filter.end) {
+    clauses.push(`${alias}.created_at <= '${filter.end.toISOString()}'`);
+  }
+  return clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+}
+
 const DRIVER_LOCATION_RETENTION_MINUTES = 60 * 24; // keep one day of history
 const AVERAGE_DRIVER_SPEED_KMH = 35;
 
@@ -4917,6 +4933,48 @@ export class DatabaseStorage {
     const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
     return { totalOrders, totalRevenue, averageOrderValue, daily };
+  }
+
+  async getPayLaterReceiptsByDateRange(filter: ReportDateRangeFilter = {}): Promise<{
+    totalReceipts: number;
+    totalAmount: number;
+    daily: { date: string; receipts: number; amount: number }[];
+  }> {
+    // We attribute pay-later cash-in by the payment (receipt) date
+    const paymentsWhere = buildPaymentDateFilter("p", filter);
+    const extraBranchJoin = filter.branchId
+      ? `AND (p.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}' OR o.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}')`
+      : "";
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH base AS (
+        SELECT
+          p.id,
+          p.amount::numeric AS amount,
+          p.payment_method,
+          p.created_at::date AS payment_date,
+          o.id AS order_id,
+          o.created_at::date AS order_date,
+          o.order_number
+        FROM payments p
+        LEFT JOIN orders o ON o.id = p.order_id
+        ${paymentsWhere}
+        ${extraBranchJoin}
+      )
+      SELECT payment_date, COUNT(*) AS receipts, SUM(amount) AS amount
+      FROM base
+      GROUP BY payment_date
+      ORDER BY payment_date;
+    `));
+
+    const daily = rows.map((row: any) => ({
+      date: row.payment_date instanceof Date ? row.payment_date.toISOString().split("T")[0] : row.payment_date,
+      receipts: Number(row.receipts ?? 0),
+      amount: Number(row.amount ?? 0),
+    }));
+
+    const totalReceipts = daily.reduce((acc, r) => acc + r.receipts, 0);
+    const totalAmount = daily.reduce((acc, r) => acc + r.amount, 0);
+    return { totalReceipts, totalAmount, daily };
   }
 
   async getPaymentMethodBreakdown(filter: ReportDateRangeFilter = {}): Promise<{

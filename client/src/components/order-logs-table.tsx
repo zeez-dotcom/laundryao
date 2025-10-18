@@ -87,16 +87,24 @@ function getActorName(actor?: string | null) {
 }
 
 export function OrderLogsTable() {
-  const { data: logs = [] } = useQuery<OrderLog[]>({
+  const { data: logs = [] } = useQuery<any>({
     queryKey: ["/api/order-logs"],
     queryFn: async () => {
       const res = await fetch("/api/order-logs");
-      return res.json();
+      const json = await res.json().catch(() => []);
+      if (Array.isArray(json)) return json;
+      if (json && Array.isArray(json.data)) return json.data;
+      return [];
     },
   });
 
   const sortedLogs = useMemo(() => {
-    return logs
+    const items: OrderLog[] = Array.isArray(logs)
+      ? logs
+      : Array.isArray((logs as any)?.data)
+      ? (logs as any).data
+      : [];
+    return items
       .map((log) => ({
         ...log,
         events: [...(log.events ?? [])].sort(

@@ -113,3 +113,49 @@
 
 - Next scheduled compliance checkpoint: 2026-01-01.
 - Ensure latest warehouse snapshots are archived to cold storage.
+
+---
+**Generated:** 2025-10-18T22:24:28.258Z
+**Quarter window:** 2025-10-01 → 2026-01-01
+
+## Control Summary
+
+| Control | Evidence |
+| --- | --- |
+| Access reviews | 0 audit events logged since quarter start |
+| Workflow governance | 0 active workflows reviewed |
+| Data quality monitoring | 6 automated runs (last at 2025-10-18T22:24:25.825Z) |
+| Operational throughput | 3 orders processed |
+
+## Recovery Verification
+
+- Validated backup restoration path via `scripts/drill/restore-test.ts`.
+- Confirmed RPO/RTO targets remain ≤ 1 hour for primary datastore.
+
+## Upcoming
+
+- Next scheduled compliance checkpoint: 2026-01-01.
+- Ensure latest warehouse snapshots are archived to cold storage.
+
+---
+**Generated:** 2025-10-18T22:33:27.416Z
+**Quarter window:** 2025-10-01 → 2026-01-01
+
+## Control Summary
+
+| Control | Evidence |
+| --- | --- |
+| Access reviews | 0 audit events logged since quarter start |
+| Workflow governance | 0 active workflows reviewed |
+| Data quality monitoring | 7 automated runs (last at 2025-10-18T22:33:25.713Z) |
+| Operational throughput | 4 orders processed |
+
+## Recovery Verification
+
+- Validated backup restoration path via `scripts/drill/restore-test.ts`.
+- Confirmed RPO/RTO targets remain ≤ 1 hour for primary datastore.
+
+## Upcoming
+
+- Next scheduled compliance checkpoint: 2026-01-01.
+- Ensure latest warehouse snapshots are archived to cold storage.
