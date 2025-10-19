@@ -4411,6 +4411,20 @@ export async function registerRoutes(
     }
   });
 
+  // Pay-later orders summarized by order created date (revenue = sum of payments)
+  app.get("/api/reports/pay-later-orders-by-date", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const filter: any = {};
+      if (req.query.start) filter.start = new Date(req.query.start as string);
+      if (req.query.end) filter.end = new Date(req.query.end as string);
+      if (req.query.branchId) filter.branchId = req.query.branchId as string;
+      const summary = await storage.getPayLaterOrderDateSummaryByRange(filter);
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay-later order-date summary" });
+    }
+  });
+
   async function getReportSummary(user: UserWithBranch) {
     const branchId = user.branchId || undefined;
     const [transactions, orders, customersResult, payments, laundryServices] =

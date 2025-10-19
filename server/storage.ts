@@ -4939,6 +4939,18 @@ export class DatabaseStorage {
     totalReceipts: number;
     totalAmount: number;
     daily: { date: string; receipts: number; amount: number }[];
+    details: {
+      orderId: string | null;
+      orderNumber: string | null;
+      customerName: string | null;
+      orderDate: string | null;
+      paymentDate: string;
+      paymentAmount: number;
+      orderTotal: number | null;
+      totalPaid: number | null;
+      remaining: number | null;
+      status: 'unpaid' | 'partial' | 'paid';
+    }[];
   }> {
     // We attribute pay-later cash-in by the payment (receipt) date
     const paymentsWhere = buildPaymentDateFilter("p", filter);
@@ -4959,6 +4971,7 @@ export class DatabaseStorage {
         LEFT JOIN orders o ON o.id = p.order_id
         ${paymentsWhere}
         ${extraBranchJoin}
+        WHERE o.id IS NOT NULL AND o.payment_method = 'pay_later'
       )
       SELECT payment_date, COUNT(*) AS receipts, SUM(amount) AS amount
       FROM base
@@ -4974,7 +4987,107 @@ export class DatabaseStorage {
 
     const totalReceipts = daily.reduce((acc, r) => acc + r.receipts, 0);
     const totalAmount = daily.reduce((acc, r) => acc + r.amount, 0);
-    return { totalReceipts, totalAmount, daily };
+
+    // Detailed rows: each payment with its order context and payoff state
+    const { rows: detailRows } = await db.execute<any>(sql.raw(`
+      WITH payments_in_range AS (
+        SELECT p.*, o.order_number, o.created_at AS order_date, o.total::numeric AS order_total, c.name AS customer_name
+        FROM payments p
+        LEFT JOIN orders o ON o.id = p.order_id
+        LEFT JOIN customers c ON c.id = p.customer_id
+        ${paymentsWhere}
+        ${extraBranchJoin}
+        WHERE o.id IS NOT NULL AND o.payment_method = 'pay_later'
+      ),
+      total_paid_per_order AS (
+        SELECT p.order_id, SUM(p.amount)::numeric AS total_paid
+        FROM payments p
+        WHERE p.order_id IS NOT NULL
+        GROUP BY p.order_id
+      )
+      SELECT
+        pr.order_id,
+        pr.order_number,
+        pr.customer_name,
+        pr.order_date,
+        pr.created_at AS payment_date,
+        pr.amount::numeric AS payment_amount,
+        pr.order_total,
+        t.total_paid,
+        (pr.order_total - COALESCE(t.total_paid, 0))::numeric AS remaining
+      FROM payments_in_range pr
+      LEFT JOIN total_paid_per_order t ON t.order_id = pr.order_id
+      ORDER BY pr.created_at DESC;
+    `));
+
+    const details = detailRows.map((r: any) => {
+      const orderTotal = r.order_total != null ? Number(r.order_total) : null;
+      const totalPaid = r.total_paid != null ? Number(r.total_paid) : null;
+      const remaining = r.remaining != null ? Number(r.remaining) : null;
+      let status: 'unpaid' | 'partial' | 'paid' = 'unpaid';
+      if (orderTotal != null && totalPaid != null) {
+        if (totalPaid <= 0) status = 'unpaid';
+        else if (orderTotal - totalPaid <= 0.0001) status = 'paid';
+        else status = 'partial';
+      }
+      return {
+        orderId: r.order_id ?? null,
+        orderNumber: r.order_number ?? null,
+        customerName: r.customer_name ?? null,
+        orderDate: r.order_date ? new Date(r.order_date).toISOString() : null,
+        paymentDate: new Date(r.payment_date).toISOString(),
+        paymentAmount: Number(r.payment_amount ?? 0),
+        orderTotal,
+        totalPaid,
+        remaining,
+        status,
+      };
+    });
+
+    return { totalReceipts, totalAmount, daily, details };
+  }
+
+  async getPayLaterOrderDateSummaryByRange(filter: ReportDateRangeFilter = {}): Promise<{
+    daily: { date: string; orders: number; revenue: number }[];
+  }> {
+    const whereClause = buildOrderDateFilter("o", filter);
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      base_orders AS (
+        SELECT
+          o.id,
+          o.created_at::date AS order_date,
+          o.created_at,
+          o.payment_method,
+          o.total::numeric AS order_total
+        FROM orders o
+        ${whereClause}
+      ),
+      resolved AS (
+        SELECT
+          o.id,
+          o.order_date,
+          COALESCE(p.amount, 0)::numeric AS revenue
+        FROM base_orders o
+        LEFT JOIN pay_later p ON p.order_id = o.id
+        WHERE o.payment_method = 'pay_later'
+      )
+      SELECT
+        order_date,
+        COUNT(*) AS orders,
+        SUM(revenue) AS revenue
+      FROM resolved
+      GROUP BY order_date
+      ORDER BY order_date;
+    `));
+
+    const daily = rows.map((row: any) => ({
+      date: row.order_date instanceof Date ? row.order_date.toISOString().split("T")[0] : row.order_date,
+      orders: Number(row.orders ?? 0),
+      revenue: Number(row.revenue ?? 0),
+    }));
+
+    return { daily };
   }
 
   async getPaymentMethodBreakdown(filter: ReportDateRangeFilter = {}): Promise<{

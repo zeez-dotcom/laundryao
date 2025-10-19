@@ -12,6 +12,8 @@ import type { DateRange } from "react-day-picker";
 import { OrderLogsTable } from "./order-logs-table";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
+import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiSelectItem, SelectTrigger as UiSelectTrigger, SelectValue as UiSelectValue } from "@/components/ui/select";
+import { apiRequest } from "@/lib/queryClient";
 
 type RevenueSummary = {
   totalOrders: number;
@@ -42,12 +44,25 @@ type PayLaterReceipts = {
   totalReceipts: number;
   totalAmount: number;
   daily: { date: string; receipts: number; amount: number }[];
+  details: {
+    orderId: string | null;
+    orderNumber: string | null;
+    customerName: string | null;
+    orderDate: string | null;
+    paymentDate: string;
+    paymentAmount: number;
+    orderTotal: number | null;
+    totalPaid: number | null;
+    remaining: number | null;
+    status: 'unpaid' | 'partial' | 'paid';
+  }[];
 };
 
 const EMPTY_RECEIPTS: PayLaterReceipts = {
   totalReceipts: 0,
   totalAmount: 0,
   daily: [],
+  details: [],
 };
 
 const EMPTY_SUMMARY: RevenueSummary = {
@@ -64,6 +79,7 @@ export function ReportsDashboard() {
   });
   const { formatCurrency } = useCurrency();
   const { branch, isSuperAdmin } = useAuthContext();
+  const [reportsBranchId, setReportsBranchId] = useState<string | undefined>(undefined);
 
   const [range, setRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
 
@@ -74,7 +90,8 @@ export function ReportsDashboard() {
     const params = new URLSearchParams();
     if (startIso) params.set("start", startIso);
     if (endIso) params.set("end", endIso);
-    if (branch?.id) params.set("branchId", branch.id);
+    const effectiveBranchId = reportsBranchId || branch?.id;
+    if (effectiveBranchId) params.set("branchId", effectiveBranchId);
     return params;
   };
 
@@ -204,7 +221,7 @@ export function ReportsDashboard() {
 
   // Pay-later receipts attributed to payment (receipt) date
   const { data: receiptsData } = useQuery<PayLaterReceipts>({
-    queryKey: ["/api/reports/pay-later-receipts", startIso, endIso, branch?.id],
+    queryKey: ["/api/reports/pay-later-receipts", startIso, endIso, reportsBranchId || branch?.id],
     queryFn: async () => {
       const params = buildRangeParams();
       const url = `/api/reports/pay-later-receipts?${params.toString()}`;
@@ -221,10 +238,64 @@ export function ReportsDashboard() {
               amount: Number(row.amount ?? 0),
             }))
           : [],
+        details: Array.isArray(json.details)
+          ? json.details.map((d: any) => ({
+              orderId: d.orderId ?? null,
+              orderNumber: d.orderNumber ?? null,
+              customerName: d.customerName ?? null,
+              orderDate: d.orderDate ?? null,
+              paymentDate: d.paymentDate ?? '',
+              paymentAmount: Number(d.paymentAmount ?? 0),
+              orderTotal: d.orderTotal != null ? Number(d.orderTotal) : null,
+              totalPaid: d.totalPaid != null ? Number(d.totalPaid) : null,
+              remaining: d.remaining != null ? Number(d.remaining) : null,
+              status: (d.status as any) ?? 'unpaid',
+            }))
+          : [],
       } as PayLaterReceipts;
     },
     keepPreviousData: true,
   });
+
+  // Pay-later orders summarized by order-date (for comparison) 
+  const { data: payLaterOrderDate } = useQuery<{ daily: { date: string; orders: number; revenue: number }[] }>({
+    queryKey: ["/api/reports/pay-later-orders-by-date", startIso, endIso, reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const res = await fetch(`/api/reports/pay-later-orders-by-date?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) return { daily: [] };
+      const json = await res.json();
+      return { daily: Array.isArray(json.daily) ? json.daily : [] };
+    },
+    keepPreviousData: true,
+  });
+
+  const [receiptsView, setReceiptsView] = useState<'payment' | 'order'>('payment');
+  const [showOutstandingOnly, setShowOutstandingOnly] = useState(false);
+
+  // Super admin branch selector
+  type Branch = { id: string; name: string };
+  const { data: branches = [] } = useQuery<Branch[]>({
+    queryKey: ["/api/branches", "reports"],
+    enabled: isSuperAdmin,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/branches");
+      return res.json();
+    },
+  });
+
+  // Build combined overlay chart data for money values
+  const overlay = (() => {
+    const pay = receiptsData?.daily ?? [];
+    const ord = payLaterOrderDate?.daily ?? [];
+    const mapPay = new Map(pay.map((r) => [r.date, r.amount]));
+    const mapOrd = new Map(ord.map((r) => [r.date, r.revenue]));
+    const allDates = Array.from(new Set<string>([...mapPay.keys(), ...mapOrd.keys()])).sort();
+    const pointsPay = allDates.map((d) => ({ date: d, value: mapPay.get(d) ?? 0 }));
+    const pointsOrd = allDates.map((d) => ({ date: d, value: mapOrd.get(d) ?? 0 }));
+    const maxVal = Math.max(1, ...pointsPay.map(p => p.value), ...pointsOrd.map(p => p.value));
+    return { dates: allDates, pointsPay, pointsOrd, maxVal };
+  })();
 
   const services = serviceResponse?.services ?? [];
   const clothing = clothingResponse?.items ?? [];
@@ -301,6 +372,19 @@ export function ReportsDashboard() {
           String(r.receipts),
           String(r.amount),
         ])),
+        [],
+        ["Order #", "Customer", "Order Date", "Payment Date", "Paid Amount", "Order Total", "Total Paid", "Remaining", "Status"],
+        ...((receiptsData?.details ?? []).map((d) => [
+          d.orderNumber ?? (d.orderId ? d.orderId.slice(-6) : ''),
+          d.customerName ?? '',
+          d.orderDate ? format(new Date(d.orderDate), 'yyyy-MM-dd HH:mm') : '',
+          d.paymentDate ? format(new Date(d.paymentDate), 'yyyy-MM-dd HH:mm') : '',
+          String(d.paymentAmount),
+          d.orderTotal != null ? String(d.orderTotal) : '',
+          d.totalPaid != null ? String(d.totalPaid) : '',
+          d.remaining != null ? String(d.remaining) : '',
+          d.status,
+        ])),
       ];
       const csvContent = rows.map((row) => row.join(",")).join("\n");
       const blob = new Blob([csvContent], { type: "text/csv" });
@@ -329,6 +413,18 @@ export function ReportsDashboard() {
               date={dateRange}
               onDateChange={setDateRange}
             />
+            {isSuperAdmin && (
+              <UiSelect value={reportsBranchId || branch?.id || undefined} onValueChange={(v) => setReportsBranchId(v)}>
+                <UiSelectTrigger className="w-[200px]">
+                  <UiSelectValue placeholder="All branches" />
+                </UiSelectTrigger>
+                <UiSelectContent>
+                  {(branches as Branch[]).map((b) => (
+                    <UiSelectItem key={b.id} value={b.id}>{b.name}</UiSelectItem>
+                  ))}
+                </UiSelectContent>
+              </UiSelect>
+            )}
             <Button onClick={() => { void exportReport(); }} variant="outline">
               <Download className="h-4 w-4 mr-2" />
               Export CSV
@@ -611,10 +707,10 @@ export function ReportsDashboard() {
               </CardHeader>
               <CardContent>
                 <OrderLogsTable />
-              </CardContent>
-            </Card>
-          </TabsContent>
-        
+          </CardContent>
+          </Card>
+        </TabsContent>
+
         {/* Pay-Later Receipts tab content */}
         <TabsContent value="receipts" className="space-y-4">
           <Card>
@@ -630,6 +726,16 @@ export function ReportsDashboard() {
                 <div className="text-sm text-gray-500">No receipts recorded for the selected period.</div>
               ) : (
                 <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-2 border rounded p-1">
+                      <Button size="sm" variant={receiptsView === 'payment' ? 'default' : 'ghost'} onClick={() => setReceiptsView('payment')}>By Payment Date</Button>
+                      <Button size="sm" variant={receiptsView === 'order' ? 'default' : 'ghost'} onClick={() => setReceiptsView('order')}>By Order Date</Button>
+                    </div>
+                    <div className="ml-auto flex items-center gap-2">
+                      <label className="text-xs text-muted-foreground">Show outstanding only</label>
+                      <input type="checkbox" checked={showOutstandingOnly} onChange={(e) => setShowOutstandingOnly(e.target.checked)} />
+                    </div>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="p-3 border rounded">
                       <div className="text-xs text-muted-foreground">Total Receipts</div>
@@ -640,14 +746,98 @@ export function ReportsDashboard() {
                       <div className="text-xl font-semibold">{formatCurrency(receiptsData.totalAmount)}</div>
                     </div>
                   </div>
+                  {/* Overlay chart */}
+                  <div className="p-3 border rounded">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-sm text-muted-foreground">Overlay: Receipts (Payment Date) vs Pay-Later (Order Date)</div>
+                      <div className="flex items-center gap-3 text-xs">
+                        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-4 bg-blue-600" /> Receipts</span>
+                        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-4 bg-emerald-600" /> Orders</span>
+                      </div>
+                    </div>
+                    <svg viewBox="0 0 600 160" className="w-full h-40">
+                      <rect x="0" y="0" width="600" height="160" fill="transparent" />
+                      {overlay.dates.length > 1 && (
+                        <>
+                          {/* Receipts line */}
+                          <polyline
+                            fill="none"
+                            stroke="#2563eb"
+                            strokeWidth="2"
+                            points={overlay.pointsPay.map((p, i) => {
+                              const x = (i / (overlay.pointsPay.length - 1)) * 580 + 10;
+                              const y = 150 - (p.value / overlay.maxVal) * 140;
+                              return `${x},${y}`;
+                            }).join(' ')}
+                          />
+                          {/* Orders line */}
+                          <polyline
+                            fill="none"
+                            stroke="#059669"
+                            strokeWidth="2"
+                            points={overlay.pointsOrd.map((p, i) => {
+                              const x = (i / (overlay.pointsOrd.length - 1)) * 580 + 10;
+                              const y = 150 - (p.value / overlay.maxVal) * 140;
+                              return `${x},${y}`;
+                            }).join(' ')}
+                          />
+                        </>
+                      )}
+                    </svg>
+                  </div>
+
                   <div className="space-y-2">
-                    {receiptsData.daily.map((row) => (
+                    {(receiptsView === 'payment' ? receiptsData.daily : (payLaterOrderDate?.daily ?? [])).map((row: any) => (
                       <div key={row.date} className="flex items-center justify-between p-3 border rounded">
                         <span className="font-medium">{format(new Date(row.date), 'MMM dd, yyyy')}</span>
-                        <span className="text-sm text-muted-foreground mr-3">{row.receipts} receipts</span>
-                        <span className="font-bold">{formatCurrency(row.amount)}</span>
+                        {receiptsView === 'payment' ? (
+                          <>
+                            <span className="text-sm text-muted-foreground mr-3">{row.receipts} receipts</span>
+                            <span className="font-bold">{formatCurrency(row.amount)}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-sm text-muted-foreground mr-3">{row.orders} orders</span>
+                            <span className="font-bold">{formatCurrency(row.revenue)}</span>
+                          </>
+                        )}
                       </div>
                     ))}
+                  </div>
+                  <div className="mt-4">
+                    <div className="text-sm font-medium mb-2">Receipt Details</div>
+                    <div className="overflow-x-auto border rounded">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-[var(--surface-muted)]">
+                          <tr>
+                            <th className="text-left p-2">Order #</th>
+                            <th className="text-left p-2">Customer</th>
+                            <th className="text-left p-2">Order Date</th>
+                            <th className="text-left p-2">Payment Date</th>
+                            <th className="text-right p-2">Paid Amount</th>
+                            <th className="text-right p-2">Order Total</th>
+                            <th className="text-right p-2">Total Paid</th>
+                            <th className="text-right p-2">Remaining</th>
+                            <th className="text-left p-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {((receiptsData.details ?? []).filter((d) => showOutstandingOnly ? (d.status !== 'paid') : true)).map((d, idx) => (
+                            <tr key={d.orderId ?? `${d.paymentDate}-${idx}`} className="border-t">
+                              <td className="p-2">{d.orderNumber ?? (d.orderId ? d.orderId.slice(-6) : '')}</td>
+                              <td className="p-2">{d.customerName ?? ''}</td>
+                              <td className="p-2">{d.orderDate ? format(new Date(d.orderDate), 'MMM dd, yyyy HH:mm') : ''}</td>
+                              <td className="p-2">{format(new Date(d.paymentDate), 'MMM dd, yyyy HH:mm')}</td>
+                              <td className="p-2 text-right">{formatCurrency(d.paymentAmount)}</td>
+                              <td className="p-2 text-right">{d.orderTotal != null ? formatCurrency(d.orderTotal) : '-'}</td>
+                              <td className="p-2 text-right">{d.totalPaid != null ? formatCurrency(d.totalPaid) : '-'}</td>
+                              <td className="p-2 text-right">{d.remaining != null ? formatCurrency(d.remaining) : '-'}</td>
+                              <td className="p-2 capitalize">{d.status}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               )}
