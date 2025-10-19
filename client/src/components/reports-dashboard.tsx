@@ -642,7 +642,7 @@ export function ReportsDashboard() {
                 <div className="font-medium">{exceptions.overpayOverrides?.count ?? 0}</div>
               </div>
               <div>
-                <div className="text-muted-foreground">Stale Pay-Later (>{exceptions.stalePayLater?.thresholdDays} days)</div>
+                <div className="text-muted-foreground">Stale Pay-Later (&gt;{exceptions.stalePayLater?.thresholdDays} days)</div>
                 <div className="font-medium">{exceptions.stalePayLater?.count ?? 0}</div>
               </div>
               <div>
