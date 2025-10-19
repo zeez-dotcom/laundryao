@@ -4950,6 +4950,10 @@ export class DatabaseStorage {
       totalPaid: number | null;
       remaining: number | null;
       status: 'unpaid' | 'partial' | 'paid';
+      orderStatus?: string | null;
+      inShop?: boolean;
+      previousBalance?: number | null;
+      newBalance?: number | null;
     }[];
   }> {
     // We attribute pay-later cash-in by the payment (receipt) date
@@ -4989,9 +4993,11 @@ export class DatabaseStorage {
     const totalAmount = daily.reduce((acc, r) => acc + r.amount, 0);
 
     // Detailed rows: each payment with its order context and payoff state
-    const { rows: detailRows } = await db.execute<any>(sql.raw(`
+    const branchFilterOrders = filter.branchId ? `AND o.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+    const branchFilterPayments = filter.branchId ? `AND p2.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+    const detailSql = `
       WITH payments_in_range AS (
-        SELECT p.*, o.order_number, o.created_at AS order_date, o.total::numeric AS order_total, c.name AS customer_name
+        SELECT p.*, o.order_number, o.created_at AS order_date, o.total::numeric AS order_total, o.status AS order_status, o.actual_pickup, c.name AS customer_name, c.id AS customer_id
         FROM payments p
         LEFT JOIN orders o ON o.id = p.order_id
         LEFT JOIN customers c ON c.id = p.customer_id
@@ -5014,11 +5020,46 @@ export class DatabaseStorage {
         pr.amount::numeric AS payment_amount,
         pr.order_total,
         t.total_paid,
-        (pr.order_total - COALESCE(t.total_paid, 0))::numeric AS remaining
+        (pr.order_total - COALESCE(t.total_paid, 0))::numeric AS remaining,
+        pr.order_status,
+        pr.actual_pickup,
+        (
+          (
+            SELECT COALESCE(SUM(o.total)::numeric, 0)
+            FROM orders o
+            WHERE o.customer_id = pr.customer_id
+              AND o.payment_method = 'pay_later'
+              AND o.created_at <= pr.created_at
+              ${'${'}branchFilterOrders${'}'}
+          ) - (
+            SELECT COALESCE(SUM(p2.amount)::numeric, 0)
+            FROM payments p2
+            WHERE p2.customer_id = pr.customer_id
+              AND p2.created_at < pr.created_at
+              ${'${'}branchFilterPayments${'}'}
+          )
+        ) AS previous_balance,
+        (
+          (
+            SELECT COALESCE(SUM(o.total)::numeric, 0)
+            FROM orders o
+            WHERE o.customer_id = pr.customer_id
+              AND o.payment_method = 'pay_later'
+              AND o.created_at <= pr.created_at
+              ${'${'}branchFilterOrders${'}'}
+          ) - (
+            SELECT COALESCE(SUM(p2.amount)::numeric, 0)
+            FROM payments p2
+            WHERE p2.customer_id = pr.customer_id
+              AND p2.created_at <= pr.created_at
+              ${'${'}branchFilterPayments${'}'}
+          )
+        ) AS new_balance
       FROM payments_in_range pr
       LEFT JOIN total_paid_per_order t ON t.order_id = pr.order_id
       ORDER BY pr.created_at DESC;
-    `));
+    `;
+    const { rows: detailRows } = await db.execute<any>(sql.raw(detailSql));
 
     const details = detailRows.map((r: any) => {
       const orderTotal = r.order_total != null ? Number(r.order_total) : null;
@@ -5030,10 +5071,12 @@ export class DatabaseStorage {
         else if (orderTotal - totalPaid <= 0.0001) status = 'paid';
         else status = 'partial';
       }
+      const inShop = !(r.order_status === 'handed_over' || r.order_status === 'completed' || r.actual_pickup != null);
       return {
         orderId: r.order_id ?? null,
         orderNumber: r.order_number ?? null,
         customerName: r.customer_name ?? null,
+        customerId: r.customer_id ?? null,
         orderDate: r.order_date ? new Date(r.order_date).toISOString() : null,
         paymentDate: new Date(r.payment_date).toISOString(),
         paymentAmount: Number(r.payment_amount ?? 0),
@@ -5041,6 +5084,10 @@ export class DatabaseStorage {
         totalPaid,
         remaining,
         status,
+        orderStatus: r.order_status ?? null,
+        inShop,
+        previousBalance: r.previous_balance != null ? Number(r.previous_balance) : null,
+        newBalance: r.new_balance != null ? Number(r.new_balance) : null,
       };
     });
 
@@ -5261,6 +5308,162 @@ export class DatabaseStorage {
       count: Number(row.count ?? 0),
       revenue: Number(row.revenue ?? 0),
     }));
+  }
+
+  async getPayLaterAgingByCustomer(filter: ReportDateRangeFilter = {}): Promise<{
+    buckets: { b0_30: number; b31_60: number; b61_90: number; b90p: number };
+    customers: {
+      customerId: string;
+      customerName: string | null;
+      balance: number;
+      b0_30: number;
+      b31_60: number;
+      b61_90: number;
+      b90p: number;
+      lastOrderDate: string | null;
+      lastPaymentDate: string | null;
+    }[];
+  }> {
+    const refDate = filter.end ? new Date(filter.end) : new Date();
+    const refIso = refDate.toISOString();
+    const branchFilterOrders = filter.branchId ? `AND o.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+    const branchFilterPayments = filter.branchId ? `AND p.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE}),
+      open_orders AS (
+        SELECT 
+          o.customer_id,
+          c.name AS customer_name,
+          o.id AS order_id,
+          o.created_at,
+          COALESCE(o.total::numeric - COALESCE(p.amount, 0)::numeric, 0)::numeric AS remaining
+        FROM orders o
+        LEFT JOIN pay_later p ON p.order_id = o.id
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.payment_method = 'pay_later'
+          ${branchFilterOrders}
+          AND o.created_at <= '${refIso}'
+      ),
+      open_only AS (
+        SELECT * FROM open_orders WHERE remaining > 0
+      ),
+      buckets AS (
+        SELECT 
+          customer_id,
+          customer_name,
+          remaining,
+          created_at,
+          DATE_PART('day', '${refIso}'::timestamp - created_at)::int AS age_days,
+          CASE WHEN DATE_PART('day', '${refIso}'::timestamp - created_at) <= 30 THEN remaining ELSE 0 END AS b0_30,
+          CASE WHEN DATE_PART('day', '${refIso}'::timestamp - created_at) BETWEEN 31 AND 60 THEN remaining ELSE 0 END AS b31_60,
+          CASE WHEN DATE_PART('day', '${refIso}'::timestamp - created_at) BETWEEN 61 AND 90 THEN remaining ELSE 0 END AS b61_90,
+          CASE WHEN DATE_PART('day', '${refIso}'::timestamp - created_at) > 90 THEN remaining ELSE 0 END AS b90p
+        FROM open_only
+      ),
+      per_customer AS (
+        SELECT 
+          customer_id,
+          MAX(customer_name) AS customer_name,
+          SUM(remaining)::numeric AS balance,
+          SUM(b0_30)::numeric AS b0_30,
+          SUM(b31_60)::numeric AS b31_60,
+          SUM(b61_90)::numeric AS b61_90,
+          SUM(b90p)::numeric AS b90p,
+          MAX(created_at) AS last_order_date,
+          (
+            SELECT MAX(p.created_at) 
+            FROM payments p 
+            WHERE p.customer_id = buckets.customer_id
+              ${branchFilterPayments}
+              AND p.created_at <= '${refIso}'
+          ) AS last_payment_date
+        FROM buckets
+        GROUP BY customer_id
+      )
+      SELECT * FROM per_customer
+      ORDER BY balance DESC;
+    `));
+
+    const customers = rows.map((r: any) => ({
+      customerId: r.customer_id,
+      customerName: r.customer_name ?? null,
+      balance: Number(r.balance ?? 0),
+      b0_30: Number(r.b0_30 ?? 0),
+      b31_60: Number(r.b31_60 ?? 0),
+      b61_90: Number(r.b61_90 ?? 0),
+      b90p: Number(r.b90p ?? 0),
+      lastOrderDate: r.last_order_date ? new Date(r.last_order_date).toISOString() : null,
+      lastPaymentDate: r.last_payment_date ? new Date(r.last_payment_date).toISOString() : null,
+    }));
+
+    const buckets = customers.reduce((acc, c) => {
+      acc.b0_30 += c.b0_30;
+      acc.b31_60 += c.b31_60;
+      acc.b61_90 += c.b61_90;
+      acc.b90p += c.b90p;
+      return acc;
+    }, { b0_30: 0, b31_60: 0, b61_90: 0, b90p: 0 } as { b0_30: number; b31_60: number; b61_90: number; b90p: number });
+
+    return { buckets, customers };
+  }
+
+  async getOpenPayLaterOrders(filter: ReportDateRangeFilter = {}): Promise<{
+    orders: {
+      orderId: string;
+      orderNumber: string;
+      customerName: string | null;
+      createdAt: string;
+      orderTotal: number;
+      totalPaid: number;
+      remaining: number;
+      ageDays: number;
+      status: string;
+      inShop: boolean;
+    }[];
+  }> {
+    const branchFilterOrders = filter.branchId ? `AND o.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+    const { rows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE})
+      SELECT 
+        o.id AS order_id,
+        o.order_number,
+        c.name AS customer_name,
+        o.created_at,
+        o.status,
+        o.actual_pickup,
+        o.total::numeric AS order_total,
+        COALESCE(p.amount, 0)::numeric AS total_paid,
+        (o.total::numeric - COALESCE(p.amount, 0)::numeric)::numeric AS remaining
+      FROM orders o
+      LEFT JOIN pay_later p ON p.order_id = o.id
+      LEFT JOIN customers c ON c.id = o.customer_id
+      WHERE o.payment_method = 'pay_later'
+        ${branchFilterOrders}
+        AND (o.total::numeric - COALESCE(p.amount, 0)::numeric) > 0
+      ORDER BY o.created_at DESC;
+    `));
+
+    const now = Date.now();
+    const orders = rows.map((r: any) => {
+      const createdAt = new Date(r.created_at);
+      const ageDays = Math.max(0, Math.floor((now - createdAt.getTime()) / (24 * 3600 * 1000)));
+      const inShop = !(r.status === 'handed_over' || r.status === 'completed' || r.actual_pickup != null);
+      return {
+        orderId: r.order_id,
+        orderNumber: r.order_number,
+        customerName: r.customer_name ?? null,
+        createdAt: createdAt.toISOString(),
+        orderTotal: Number(r.order_total ?? 0),
+        totalPaid: Number(r.total_paid ?? 0),
+        remaining: Number(r.remaining ?? 0),
+        ageDays,
+        status: r.status,
+        inShop,
+      };
+    });
+
+    return { orders };
   }
 
   async getOrderStats(range: string, branchId?: string): Promise<{ period: string; count: number; revenue: number }[]> {

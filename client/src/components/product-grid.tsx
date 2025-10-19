@@ -445,14 +445,21 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                         <Card
                           key={item.id}
                           className="h-full hover:shadow-material-lg transition-shadow cursor-pointer"
-                          onClick={() => onAddToCart(item)}
+                          onMouseDown={(e) => {
+                            // Use mousedown to feel instantaneous and avoid missed clicks during reflow
+                            e.preventDefault();
+                            onAddToCart(item);
+                          }}
                           data-testid={`card-clothing-item-${item.id}`}
                         >
                           <div
                             className="w-full h-48 md:h-56 bg-gray-100 rounded-t-lg overflow-hidden flex items-center justify-center cursor-pointer"
                             role="button"
                             tabIndex={0}
-                            onClick={() => onAddToCart(item)}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              onAddToCart(item);
+                            }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault();
@@ -480,7 +487,7 @@ export function ProductGrid({ onAddToCart, cartItemCount, onToggleCart, branchCo
                               <Button
                                 size="sm"
                                 className="bg-pos-primary hover:bg-blue-700 text-white"
-                                onClick={(e) => { e.stopPropagation(); onAddToCart(item); }}
+                                onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); onAddToCart(item); }}
                               >
                                 {t.selectService || "Select Service"}
                               </Button>

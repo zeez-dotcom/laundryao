@@ -858,13 +858,12 @@ export async function registerRoutes(
         req.session.passport = { user: user.id };
         req.session.save((saveErr) => {
           if (saveErr) {
-            console.error("Session save error:", saveErr);
+            logger.error({ err: saveErr }, "Session save error");
             return next(saveErr);
           }
-          
-          console.log("Session saved successfully. Session ID:", req.sessionID);
-          console.log("Session data:", req.session);
-          
+
+          logger.debug({ sessionID: req.sessionID }, "Session saved successfully");
+
           // Don't send password hash to client
           const { passwordHash, ...safeUser } = user;
           return res.json({ user: safeUser, message: "Login successful" });
@@ -909,8 +908,7 @@ export async function registerRoutes(
       ...user,
       passwordHash: undefined // Remove password hash for security
     };
-    console.log("Auth API - returning sanitized user object:", JSON.stringify(sanitizedUser, null, 2));
-    console.log("Auth API - user role:", user?.role);
+    logger.debug({ role: user?.role }, "Auth API - returning sanitized user");
     res.json(sanitizedUser);
   });
 
@@ -2054,17 +2052,25 @@ export async function registerRoutes(
       } catch {
         return res.status(400).json({ message: "Invalid url" });
       }
+      // Allowlist may be extended via env: ALLOWED_IMAGE_HOSTS=example.com,cdn.example.com
+      const extra = (process.env.ALLOWED_IMAGE_HOSTS || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       const allowedHosts = [
         "drive.google.com",
         "lh3.googleusercontent.com",
         "googleusercontent.com",
         "i.imgur.com",
+        ...extra,
       ];
       const okHost = allowedHosts.some(
         (h) => target.hostname === h || target.hostname.endsWith(`.${h}`),
       );
       if (!okHost) {
-        return res.status(400).json({ message: "Host not allowed" });
+        // Instead of returning 400 (which floods logs/images), redirect to placeholder
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        return res.redirect(302, "/uploads/placeholder-clothing.png");
       }
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -2599,12 +2605,12 @@ export async function registerRoutes(
     "/api/clothing-items",
     async (req, res, next) => {
       const branchCode = req.query.branchCode as string | undefined;
-      console.log("[clothing-items] branchCode:", branchCode);
+      logger.debug({ branchCode }, "[clothing-items] request");
       if (!branchCode) {
-        console.log("[clothing-items] No branchCode, calling next()");
+        logger.debug("[clothing-items] No branchCode, passing to next");
         return next();
       }
-      console.log("[clothing-items] Processing public request for branchCode:", branchCode);
+      logger.debug({ branchCode }, "[clothing-items] processing public request");
       try {
         const branch = await storage.getBranchByCode(branchCode);
         if (!branch) {
@@ -4422,6 +4428,34 @@ export async function registerRoutes(
       res.json(summary);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch pay-later order-date summary" });
+    }
+  });
+
+  // Pay-later aging by customer
+  app.get("/api/reports/pay-later-aging", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const filter: any = {};
+      if (req.query.start) filter.start = new Date(req.query.start as string);
+      if (req.query.end) filter.end = new Date(req.query.end as string);
+      if (req.query.branchId) filter.branchId = req.query.branchId as string;
+      const aging = await storage.getPayLaterAgingByCustomer(filter);
+      res.json(aging);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch pay-later aging" });
+    }
+  });
+
+  // Pay-later outstanding orders (per order)
+  app.get("/api/reports/pay-later-outstanding-orders", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const filter: any = {};
+      if (req.query.start) filter.start = new Date(req.query.start as string);
+      if (req.query.end) filter.end = new Date(req.query.end as string);
+      if (req.query.branchId) filter.branchId = req.query.branchId as string;
+      const result = await storage.getOpenPayLaterOrders(filter);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch outstanding orders" });
     }
   });
 

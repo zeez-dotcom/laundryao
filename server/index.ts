@@ -13,6 +13,25 @@ import { assertDbConnection } from "./db";
 import { DataQualityService } from "./services/data-quality";
 import { ComplianceScheduler } from "./services/compliance";
 
+// Filter extremely noisy console output that impacts perf in hot paths
+// Only suppress known chatty development logs; route all others unchanged
+const noisyPatterns: RegExp[] = [
+  /Deserializing user with ID:/,
+  /Deserialized user:/,
+  /Auth check - sessionID:/,
+  /Session data:/,
+];
+const origLog = console.log.bind(console);
+console.log = (...args: any[]) => {
+  try {
+    const first = args[0];
+    if (typeof first === 'string' && noisyPatterns.some((re) => re.test(first))) {
+      return; // drop noisy line
+    }
+  } catch {}
+  return origLog(...args);
+};
+
 async function waitForDb(retries = 10): Promise<void> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -130,8 +149,13 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (requestPath.startsWith("/api")) {
+      // Skip extremely chatty endpoints to reduce noise
+      if (requestPath.startsWith("/api/image-proxy")) {
+        return;
+      }
       let logLine = `${req.method} ${requestPath} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      // Only include response body for server errors to aid debugging
+      if (res.statusCode >= 500 && capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
 

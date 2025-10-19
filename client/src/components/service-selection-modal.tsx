@@ -104,41 +104,49 @@ export function ServiceSelectionModal({
       if (effectiveBranchCode) params.append("branchCode", effectiveBranchCode);
       const queryString = params.toString();
 
-      const tryFetch = async (base: string, id: string, usePublicBranchCode: boolean) => {
+      const tryFetch = async (base: string, id: string) => {
         const url = `${base}/${id}/services${queryString ? `?${queryString}` : ""}`;
         const res = await apiRequest("GET", url);
         const raw = await res.json();
         return Array.isArray(raw) ? raw : [];
       };
 
-      let rawServices: any[] = [];
-
-      // Build ordered attempts
-      const attempts: Array<{ base: string; id: string; public: boolean }> = [];
+      // Build attempt candidates
+      const attempts: Array<{ base: string; id: string }> = [];
       const clothingId = clothingItemIdForServices ? String(clothingItemIdForServices) : null;
       const productId = productIdForServices ? String(productIdForServices) : null;
 
-      // 1) If branchCode is available and we have a clothingId, try public clothing-items first
+      // Prefer public clothing-items when branchCode is present, but try all in parallel
       if ((overrideBranchCode || branchCode) && clothingId) {
-        attempts.push({ base: "/api/clothing-items", id: clothingId, public: true });
+        attempts.push({ base: "/api/clothing-items", id: clothingId });
       }
-      // 2) If this originated from a product, try product endpoint
       if (shouldUseProductServices && productId) {
-        attempts.push({ base: "/api/products", id: productId, public: false });
+        attempts.push({ base: "/api/products", id: productId });
       }
-      // 3) Fallback to authed clothing-items
       if (clothingId) {
-        attempts.push({ base: "/api/clothing-items", id: clothingId, public: false });
+        attempts.push({ base: "/api/clothing-items", id: clothingId });
       }
 
-      for (const attempt of attempts) {
-        try {
-          const data = await tryFetch(attempt.base, attempt.id, attempt.public);
-          if (Array.isArray(data) && data.length > 0) {
-            rawServices = data;
-            break;
+      // Fire in parallel; pick the first non-empty successful result
+      const wrapped = attempts.map(({ base, id }) =>
+        (async () => {
+          const data = await tryFetch(base, id);
+          if (Array.isArray(data) && data.length > 0) return data;
+          throw new Error("empty");
+        })()
+      );
+      let rawServices: any[] = [];
+      try {
+        rawServices = await Promise.any(wrapped);
+      } catch {
+        // All attempts failed or returned empty; fetch one representative (to surface 4xx errors)
+        if (attempts.length > 0) {
+          try {
+            rawServices = await tryFetch(attempts[0].base, attempts[0].id);
+          } catch {
+            rawServices = [];
           }
-        } catch {}
+        }
       }
 
       return (rawServices || []).filter((service: any) => {
@@ -148,6 +156,9 @@ export function ServiceSelectionModal({
     },
     enabled: isOpen && !!normalizedClothingItem && !!serviceTargetId,
     retry: 1,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const getQuantity = (serviceId: string) => quantities[serviceId] || 1;

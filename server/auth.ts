@@ -180,29 +180,27 @@ export async function setupAuth(app: Express, options: SetupAuthOptions = {}) {
 
   passport.deserializeUser(async (id: string, done) => {
     try {
-      console.log("Deserializing user with ID:", id);
+      logger.debug({ id }, "Deserializing user");
       if (id === hardcodedAdmin.id) {
-        console.log("Found hardcoded admin");
+        logger.debug("Using hardcoded admin during deserialization");
         return done(null, { ...hardcodedAdmin, permissions: Array.from(collectPermissions(hardcodedAdmin)) });
       }
       const user = await storage.getUser(id);
-      console.log("Deserialized user:", user ? "found" : "not found");
+      logger.debug({ found: Boolean(user) }, "Deserialized user");
       if (user) {
         user.permissions = Array.from(collectPermissions(user));
       }
       done(null, user ?? false);
     } catch (error) {
-      console.error("Deserialization error:", error);
+      logger.error({ err: error }, "Deserialization error");
       done(error as any);
     }
   });
 }
 
 export const requireAuth: RequestHandler = (req, res, next) => {
-  console.log("Auth check - sessionID:", req.sessionID);
-  console.log("Session data:", req.session);
-  console.log("isAuthenticated:", req.isAuthenticated(), "user:", req.user ? "exists" : "none");
-  
+  // Keep logs lightweight to avoid perf impact
+  logger.debug({ sessionID: req.sessionID, isAuth: req.isAuthenticated() }, "Auth check");
   if (req.isAuthenticated()) {
     return next();
   }

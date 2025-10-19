@@ -27,6 +27,7 @@ import { CommandPaletteProvider } from "@/hooks/useCommandPalette";
 import CommandPalette from "@/components/navigation/CommandPalette";
 import { TourProvider } from "@/components/onboarding/TourProvider";
 import CreateOrderPage from "@/pages/orders/CreateOrder";
+import OrderDetailsPage from "@/pages/orders/OrderDetails";
 import CatalogExperimentsPage from "@/pages/catalog/Experiments";
 import WorkflowBuilderPage from "@/pages/automation/WorkflowBuilder";
 import IntegrationsCatalogPage from "@/pages/automation/IntegrationsCatalog";
@@ -55,6 +56,7 @@ function Router() {
       {isAuthenticated && <Route path="/admin" component={AdminDashboard} />}
       {isAuthenticated && <Route path="/packages" component={PackagesPage} />}
       {isAuthenticated && <Route path="/orders/create" component={CreateOrderPage} />}
+      {isAuthenticated && <Route path="/orders/:id" component={OrderDetailsPage} />}
       {isAuthenticated && <Route path="/catalog/experiments" component={CatalogExperimentsPage} />}
       {isAuthenticated && <Route path="/automation/workflows" component={WorkflowBuilderPage} />}
       {isAuthenticated && <Route path="/automation/integrations" component={IntegrationsCatalogPage} />}
