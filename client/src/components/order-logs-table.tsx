@@ -12,6 +12,7 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   ready: "Ready",
   handed_over: "Handed over",
   completed: "Completed",
+  cancelled: "Cancelled",
 };
 
 const DELIVERY_STATUS_LABELS: Record<string, string> = {
@@ -183,6 +184,11 @@ export function OrderLogsTable() {
                           {isValid(occurredAt) ? format(occurredAt, "PPp") : "Unknown"}
                         </time>
                       </div>
+                      {event.status === 'cancelled' && (log as any).cancelReason ? (
+                        <p className="mt-1 text-xs text-destructive">
+                          Cancelled: {(log as any).cancelReason}
+                        </p>
+                      ) : null}
                       {delta ? (
                         <p className="mt-1 text-xs text-muted-foreground">
                           {delta} since previous step

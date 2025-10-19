@@ -52,6 +52,7 @@ type BranchCustomization = {
   customCss?: string;
   enableGuestCheckout: boolean;
   requireAddressForGuests: boolean;
+  payLaterStaleDays?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -91,6 +92,7 @@ export function BranchCustomizationManager() {
     customCss: "",
     enableGuestCheckout: true,
     requireAddressForGuests: true,
+    payLaterStaleDays: 14,
   });
 
   const { data: customization, isLoading } = useQuery<BranchCustomization>({
@@ -497,7 +499,7 @@ export function BranchCustomizationManager() {
             <CardHeader>
               <CardTitle>Settings</CardTitle>
               <CardDescription>
-                Configure feature flags and customer experience options
+                Configure feature flags and operational preferences
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -526,6 +528,21 @@ export function BranchCustomizationManager() {
                   checked={formData.requireAddressForGuests || false}
                   onCheckedChange={(checked) => handleInputChange("requireAddressForGuests", checked)}
                   disabled={!formData.enableGuestCheckout}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="payLaterStaleDays">Stale Pay-Later Threshold (days)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Flag pay-later orders as stale after this many days
+                  </p>
+                </div>
+                <Input
+                  id="payLaterStaleDays"
+                  type="number"
+                  className="w-28"
+                  value={formData.payLaterStaleDays ?? 14}
+                  onChange={(e) => handleInputChange('payLaterStaleDays', parseInt(e.target.value || '14', 10))}
                 />
               </div>
             </CardContent>

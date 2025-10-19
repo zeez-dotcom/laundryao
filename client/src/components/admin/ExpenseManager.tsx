@@ -9,14 +9,17 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuthContext } from "@/context/AuthContext";
 import { Upload, PlusCircle, Filter, Trash2, Edit, Check, X } from "lucide-react";
+import SavedViewsBar from "@/components/SavedViewsBar";
 import { format } from "date-fns";
 import { useCurrency } from "@/lib/currency";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type Expense = {
   id: string;
   branchId: string;
   category: string;
   amount: string;
+  paymentMethod?: string | null;
   notes?: string;
   incurredAt: string;
   createdAt: string;
@@ -66,7 +69,7 @@ export function ExpenseManager() {
   const total = expensesResp?.total || 0;
 
   const createMutation = useMutation({
-    mutationFn: async (data: { category: string; amount: number; incurredAt?: string; notes?: string }) => {
+    mutationFn: async (data: { category: string; amount: number; incurredAt?: string; notes?: string; paymentMethod?: string }) => {
       const res = await apiRequest("POST", "/api/expenses", data);
       if (!res.ok) throw new Error((await res.json()).message || "Failed to create expense");
       return res.json();
@@ -78,9 +81,9 @@ export function ExpenseManager() {
     onError: (e: any) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
   });
 
-  const [form, setForm] = useState({ category: "", amount: "", incurredAt: new Date().toISOString().slice(0,10), notes: "" });
+  const [form, setForm] = useState({ category: "", amount: "", incurredAt: new Date().toISOString().slice(0,10), notes: "", paymentMethod: "cash" });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ category: string; amount: string; incurredAt: string; notes: string }>({ category: "", amount: "", incurredAt: new Date().toISOString().slice(0,10), notes: "" });
+  const [editForm, setEditForm] = useState<{ category: string; amount: string; incurredAt: string; notes: string; paymentMethod: string }>({ category: "", amount: "", incurredAt: new Date().toISOString().slice(0,10), notes: "", paymentMethod: "cash" });
 
   const pageTotal = useMemo(() => expenses.reduce((s, e) => s + parseFloat(e.amount), 0), [expenses]);
 
@@ -220,7 +223,7 @@ export function ExpenseManager() {
           <CardTitle>Add Expense</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-5">
             <div className="space-y-1">
               <Label>Category</Label>
               <Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="e.g. Rent, Wages, Supplies" />
@@ -228,6 +231,17 @@ export function ExpenseManager() {
             <div className="space-y-1">
               <Label>Amount</Label>
               <Input value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" />
+            </div>
+            <div className="space-y-1">
+              <Label>Payment Method</Label>
+              <Select value={form.paymentMethod} onValueChange={(v) => setForm({ ...form, paymentMethod: v })}>
+                <SelectTrigger className="w-full"><SelectValue placeholder="Method" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="card">Card</SelectItem>
+                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label>Date</Label>
@@ -241,7 +255,7 @@ export function ExpenseManager() {
           <div className="flex gap-2">
             <Button onClick={() => {
               if (!form.category || !form.amount) return toast({ title: "Category and amount required", variant: "destructive" });
-              createMutation.mutate({ category: form.category, amount: parseFloat(form.amount), incurredAt: form.incurredAt, notes: form.notes });
+              createMutation.mutate({ category: form.category, amount: parseFloat(form.amount), incurredAt: form.incurredAt, notes: form.notes, paymentMethod: form.paymentMethod });
             }}>Add</Button>
             <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files && handleCSVImport(e.target.files[0])} />
             <Button variant="outline" onClick={() => fileRef.current?.click()}>
@@ -285,6 +299,22 @@ export function ExpenseManager() {
           <CardDescription>Page total: {formatCurrency(pageTotal)} • All: {formatCurrency(total)}</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex items-center justify-between mb-2">
+            <SavedViewsBar
+              pageId="expenses"
+              current={{ start, end, search, pageSize }}
+              onApply={(v: any) => {
+                if (v.start) setStart(String(v.start).slice(0,10));
+                if (v.end) setEnd(String(v.end).slice(0,10));
+                if (typeof v.search === 'string') setSearch(v.search);
+                if (v.pageSize) setPageSize(Number(v.pageSize));
+                setPage(1);
+                refetch();
+              }}
+              getName={(v: any) => `${(v.start || '').slice(0,10)}-${(v.end || '').slice(0,10)}-${v.search || 'all'}-${v.pageSize || 10}`}
+            />
+            <Button onClick={() => setOpen(true)}>Add Expense</Button>
+          </div>
           <div className="flex justify-between items-center mb-2">
             <div className="text-sm text-muted-foreground">{total} records</div>
             <div className="flex gap-2">
@@ -346,6 +376,7 @@ export function ExpenseManager() {
                   <TableHead>Date</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead>Notes</TableHead>
+                  <TableHead>Method</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -377,6 +408,20 @@ export function ExpenseManager() {
                         e.notes || ""
                       )}
                     </TableCell>
+                    <TableCell>
+                      {editingId === e.id ? (
+                        <Select value={editForm.paymentMethod} onValueChange={(v) => setEditForm({ ...editForm, paymentMethod: v })}>
+                          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Method" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cash">Cash</SelectItem>
+                            <SelectItem value="card">Card</SelectItem>
+                            <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        (e.paymentMethod || 'cash').replace('_', ' ')
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       {editingId === e.id ? (
                         <Input value={editForm.amount} onChange={(ev) => setEditForm({ ...editForm, amount: ev.target.value })} />
@@ -388,7 +433,7 @@ export function ExpenseManager() {
                       {editingId === e.id ? (
                         <div className="flex justify-end gap-2">
                           <Button size="sm" variant="outline" onClick={() => {
-                            updateMutation.mutate({ id: e.id, data: { category: editForm.category, notes: editForm.notes, incurredAt: editForm.incurredAt, amount: parseFloat(editForm.amount) } });
+                            updateMutation.mutate({ id: e.id, data: { category: editForm.category, notes: editForm.notes, incurredAt: editForm.incurredAt, amount: parseFloat(editForm.amount), paymentMethod: editForm.paymentMethod } });
                           }}>
                             <Check className="h-4 w-4" />
                           </Button>
@@ -398,7 +443,7 @@ export function ExpenseManager() {
                         </div>
                       ) : (
                         <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="ghost" onClick={() => { setEditingId(e.id); setEditForm({ category: e.category, amount: e.amount, incurredAt: e.incurredAt.slice(0,10), notes: e.notes || "" }); }}>
+                          <Button size="sm" variant="ghost" onClick={() => { setEditingId(e.id); setEditForm({ category: e.category, amount: e.amount, incurredAt: e.incurredAt.slice(0,10), notes: e.notes || "", paymentMethod: e.paymentMethod || 'cash' }); }}>
                             <Edit className="h-4 w-4" />
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate(e.id)} disabled={deleteMutation.isPending}>

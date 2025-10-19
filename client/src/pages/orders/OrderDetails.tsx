@@ -21,7 +21,9 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
   const [payAmount, setPayAmount] = useState<string>("");
   const [payMethod, setPayMethod] = useState<string>("cash");
   const [payNotes, setPayNotes] = useState<string>("");
-  const [creatingPayment, setCreatingPayment] = useState(false);
+  const [isPaymentOpen, setPaymentOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -72,6 +74,7 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
   };
 
   return (
+    <>
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -89,6 +92,9 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
           )}
           {order && order.status !== 'completed' && (
             <Button variant="outline" onClick={() => updateStatus('completed')}>Mark as completed</Button>
+          )}
+          {order && order.status !== 'cancelled' && (
+            <Button variant="outline" onClick={() => setCancelOpen(true)}>Cancel Order</Button>
           )}
         </div>
       </div>
@@ -198,61 +204,8 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
             </CardHeader>
             <CardContent>
               {order.customerId && (
-                <div className="mb-4 p-3 border rounded grid gap-3 sm:grid-cols-5 items-end">
-                  <div className="sm:col-span-1">
-                    <label className="block text-xs text-muted-foreground mb-1">Amount</label>
-                    <Input type="number" min="0" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} placeholder="0.00" />
-                  </div>
-                  <div className="sm:col-span-1">
-                    <label className="block text-xs text-muted-foreground mb-1">Method</label>
-                    <Select value={payMethod} onValueChange={(v) => setPayMethod(v)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Payment method" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="cash">Cash</SelectItem>
-                        <SelectItem value="card">Card</SelectItem>
-                        <SelectItem value="knet">KNET</SelectItem>
-                        <SelectItem value="credit_card">Credit Card</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs text-muted-foreground mb-1">Notes</label>
-                    <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="Optional notes" />
-                  </div>
-                  <div className="sm:col-span-1">
-                    <Button disabled={creatingPayment || !payAmount || Number(payAmount) <= 0} onClick={async () => {
-                      if (!order.customerId) return;
-                      setCreatingPayment(true);
-                      setCreateError(null);
-                      try {
-                        const body: any = {
-                          orderId: orderId,
-                          amount: Number(payAmount),
-                          paymentMethod: payMethod,
-                          notes: payNotes || undefined,
-                          receivedBy: user?.username || user?.id || 'POS User',
-                        };
-                        await apiRequest("POST", `/api/customers/${order.customerId}/payments`, body);
-                        setPayAmount(""); setPayNotes("");
-                        // Refresh payments and order
-                        const pRes = await apiRequest("GET", `/api/customers/${order.customerId}/payments`);
-                        const pJson = await pRes.json();
-                        setPayments(Array.isArray(pJson) ? pJson : (Array.isArray(pJson?.data) ? pJson.data : []));
-                        const resO = await apiRequest("GET", `/api/orders/${orderId}`);
-                        const jsonO = await resO.json();
-                        setOrder(jsonO);
-                      } catch (e: any) {
-                        setCreateError(e?.message || 'Failed to create payment');
-                      } finally {
-                        setCreatingPayment(false);
-                      }
-                    }}>
-                      {creatingPayment ? 'Adding…' : 'Add Payment'}
-                    </Button>
-                  </div>
-                  {createError && <div className="sm:col-span-5 text-sm text-destructive">{createError}</div>}
+                <div className="mb-3">
+                  <Button variant="outline" onClick={() => setPaymentOpen(true)}>Record Payment</Button>
                 </div>
               )}
               <div className="overflow-x-auto border rounded">
@@ -275,7 +228,11 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
                         <td className="p-2 capitalize">{pay.paymentMethod ?? ''}</td>
                         <td className="p-2 text-right">{formatCurrency(pay.amount ?? 0)}</td>
                         <td className="p-2">{pay.notes ?? ''}</td>
-                        <td className="p-2">{pay.orderId === orderId ? 'This order' : (pay.orderId ? pay.orderId.slice(-6) : '')}</td>
+                        <td className="p-2">
+                          {pay.orderId === orderId ? (
+                            remainingForOrder <= 0 ? 'This order (Paid)' : 'This order'
+                          ) : (pay.orderId ? pay.orderId.slice(-6) : '')}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -287,5 +244,52 @@ export default function OrderDetailsPage({ params }: { params: { id: string } })
         </div>
       ) : null}
     </div>
+    <RecordPaymentDialog
+      open={isPaymentOpen}
+      onOpenChange={setPaymentOpen}
+      customerId={order?.customerId || ""}
+      customerName={order?.customerName || undefined}
+      defaultAmount={remainingForOrder}
+      orderId={orderId}
+      orderNumber={order?.orderNumber}
+      orderTotal={order?.total}
+      onSuccess={async () => {
+        try {
+          const pRes = await apiRequest("GET", `/api/customers/${order?.customerId}/payments`);
+          const pJson = await pRes.json();
+          setPayments(Array.isArray(pJson) ? pJson : (Array.isArray(pJson?.data) ? pJson.data : []));
+          const resO = await apiRequest("GET", `/api/orders/${orderId}`);
+          const jsonO = await resO.json();
+          setOrder(jsonO);
+        } catch {}
+      }}
+    />
+    {cancelOpen && (
+      <div className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center">
+        <div className="bg-white rounded shadow-lg w-[90%] max-w-md p-4">
+          <div className="font-semibold text-lg mb-2">Cancel Order</div>
+          <div className="grid gap-3">
+            <div>
+              <label className="block text-xs text-muted-foreground mb-1">Reason</label>
+              <Input value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="Enter cancellation reason" />
+            </div>
+            <div className="flex justify-end gap-2 mt-2">
+              <Button variant="outline" onClick={() => setCancelOpen(false)}>Close</Button>
+              <Button onClick={async () => {
+                try {
+                  await apiRequest('PATCH', `/api/orders/${orderId}/status`, { status: 'cancelled', reason: cancelReason || undefined });
+                  const res = await apiRequest('GET', `/api/orders/${orderId}`);
+                  setOrder(await res.json());
+                } finally {
+                  setCancelOpen(false); setCancelReason('');
+                }
+              }}>Confirm Cancel</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
+import { RecordPaymentDialog } from "@/components/record-payment-dialog";

@@ -10,6 +10,9 @@ import { Switch } from "@/components/ui/switch";
 import { apiRequest } from "@/lib/queryClient";
 import { Order, OrderPrint } from "@shared/schema";
 import { Search, Package, CheckCircle, AlertCircle, Printer } from "lucide-react";
+import { DatePickerWithRange } from "@/components/ui/date-range-picker";
+import type { DateRange } from "react-day-picker";
+import { startOfDay, endOfDay } from "date-fns";
 import { format } from "date-fns";
 import { useCurrency } from "@/lib/currency";
 import { ReceiptModal } from "./receipt-modal";
@@ -20,6 +23,8 @@ import { useAuthContext } from "@/context/AuthContext";
 import { buildReceiptData } from "@/lib/receipt";
 import { useApiError } from "@/hooks/use-api-error";
 import { RecordPaymentDialog } from "@/components/record-payment-dialog";
+import SavedViewsBar from "@/components/SavedViewsBar";
+import { Download } from "lucide-react";
 
 export interface OrderItem {
   clothingItem: string | { name: string };
@@ -99,6 +104,7 @@ export function OrderTracking() {
   const [isReceiptOpen, setReceiptOpen] = useState(false);
   const [isPaymentOpen, setPaymentOpen] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<OrderWithExtras | null>(null);
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -220,7 +226,7 @@ export function OrderTracking() {
         </div>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
           <Input
@@ -280,6 +286,69 @@ export function OrderTracking() {
           <Switch id="notify" checked={notifyCustomer} onCheckedChange={setNotifyCustomer} />
           <label htmlFor="notify" className="text-sm">{t.notifyCustomer}</label>
         </div>
+        <DatePickerWithRange date={dateRange} onDateChange={setDateRange} />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const params = new URLSearchParams();
+            if (statusFilter !== 'all') params.set('status', statusFilter);
+            if (paymentFilter !== 'all') params.set('method', paymentFilter);
+            if (dateRange?.from) params.set('start', startOfDay(dateRange.from).toISOString());
+            if (dateRange?.to) params.set('end', endOfDay(dateRange.to).toISOString());
+            const res = await fetch(`/api/reports/orders/export?${params.toString()}`, { credentials: 'include' });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g, '-');
+            a.href = url;
+            a.download = `orders-${statusFilter}-${paymentFilter}-${ts}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
+        >
+          <Download className="w-4 h-4 mr-1" /> Export CSV
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={async () => {
+            const params = new URLSearchParams();
+            if (statusFilter !== 'all') params.set('status', statusFilter);
+            if (paymentFilter !== 'all') params.set('method', paymentFilter);
+            if (dateRange?.from) params.set('start', startOfDay(dateRange.from).toISOString());
+            if (dateRange?.to) params.set('end', endOfDay(dateRange.to).toISOString());
+            const res = await fetch(`/api/reports/orders/export.xlsx?${params.toString()}`, { credentials: 'include' });
+            if (!res.ok) return;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g, '-');
+            a.href = url;
+            a.download = `orders-${statusFilter}-${paymentFilter}-${ts}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
+        >
+          <Download className="w-4 h-4 mr-1" /> Export Excel
+        </Button>
+        <SavedViewsBar
+          pageId="order-tracking"
+          current={{ statusFilter, sortField, sortDirection, paymentFilter, payLaterOnly }}
+          onApply={(v: any) => {
+            if (v.statusFilter) setStatusFilter(v.statusFilter);
+            if (v.sortField) setSortField(v.sortField);
+            if (v.sortDirection) setSortDirection(v.sortDirection);
+            if (v.paymentFilter) setPaymentFilter(v.paymentFilter);
+            if (typeof v.payLaterOnly === 'boolean') setPayLaterOnly(v.payLaterOnly);
+          }}
+          getName={(v: any) => `${v.statusFilter || 'all'}-${v.paymentFilter || 'all'}-${v.sortField || 'createdAt'}-${v.sortDirection || 'desc'}`}
+        />
       </div>
 
       </div>
@@ -457,9 +526,10 @@ export function OrderTracking() {
         onOpenChange={setPaymentOpen}
         customerId={paymentOrder?.customerId || ""}
         customerName={paymentOrder?.customerName || undefined}
-        defaultAmount={paymentOrder?.total}
+        defaultAmount={undefined as any}
         orderId={paymentOrder?.id}
         orderNumber={paymentOrder?.orderNumber}
+        orderTotal={paymentOrder?.total}
         onSuccess={() => {
           queryClient.invalidateQueries({ queryKey: ['/api/orders'] });
           if (paymentOrder?.customerId) {

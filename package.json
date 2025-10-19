@@ -30,6 +30,8 @@
     "db:migrate:fix-categories": "psql \"$DATABASE_URL\" -f migrations/0017_remove_category_duplicates.sql",
     "db:backfill-package-items": "dotenv -e .env -- tsx server/backfill-package-items.ts",
     "db:backfill-item-service-prices-branch": "dotenv -e .env -- tsx server/backfill-item-service-prices-branch.ts",
+    "db:backfill-tax": "dotenv -e .env -- tsx scripts/backfill-tax.ts",
+    "db:backfill-payments:channel": "dotenv -e .env -- tsx scripts/backfill-payment-channels.ts",
     "seed": "dotenv -e .env -- tsx scripts/seed.ts",
     "db:truncate": "npm run db:psql scripts/sql/truncate_all_user_tables.sql",
     "db:truncate:node": "dotenv -e .env -- tsx scripts/truncate-db.ts",

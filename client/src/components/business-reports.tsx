@@ -15,6 +15,7 @@ import { useTranslation } from "@/lib/i18n";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import EmptyState from "@/components/common/EmptyState";
 import { useToast } from "@/hooks/use-toast";
+import SavedViewsBar from "@/components/SavedViewsBar";
 
 type ReportPeriod = "today" | "week" | "month" | "all";
 
@@ -191,6 +192,47 @@ export function BusinessReports() {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportCSV = async () => {
+    const { start, end } = getDateRange(reportPeriod);
+    const params = new URLSearchParams();
+    if (branch?.id) params.set('branchId', branch.id);
+    if (start) params.set('start', start.toISOString());
+    if (end) params.set('end', end.toISOString());
+    params.set('format', 'csv');
+    const res = await fetch(`/api/reports/payments/export?${params.toString()}`, { credentials: 'include' });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g, '-');
+    link.href = url;
+    link.download = `payments-${branch?.name || 'all'}-${format(start, 'yyyy-MM-dd')}-${format(end, 'yyyy-MM-dd')}-${ts}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportPaymentsXlsx = async () => {
+    const { start, end } = getDateRange(reportPeriod);
+    const params = new URLSearchParams();
+    if (branch?.id) params.set('branchId', branch.id);
+    if (start) params.set('start', start.toISOString());
+    if (end) params.set('end', end.toISOString());
+    const res = await fetch(`/api/reports/payments/export.xlsx?${params.toString()}`, { credentials: 'include' });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g, '-');
+    link.href = url;
+    link.download = `payments-${branch?.name || 'all'}-${format(start, 'yyyy-MM-dd')}-${format(end, 'yyyy-MM-dd')}-${ts}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // Payment method breakdown - use only payments table to avoid double counting
   const paymentMethodBreakdown = useMemo(() => {
     const breakdown: Record<string, number> = {};
@@ -259,6 +301,12 @@ export function BusinessReports() {
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold">{t.businessReport}</h2>
           <div className="flex items-center gap-4">
+            <SavedViewsBar
+              pageId="business-reports"
+              current={{ reportPeriod }}
+              onApply={(v: any) => { if (v.reportPeriod) setReportPeriod(v.reportPeriod); }}
+              getName={(v: any) => v.reportPeriod || 'today'}
+            />
             <Badge
               variant="outline"
               className={streamConnected ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}
@@ -281,6 +329,12 @@ export function BusinessReports() {
             </Button>
             <Button variant="outline" size="sm" onClick={handleExportExcel}>
               {t.exportExcel}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportCSV}>
+              {t.exportCSV}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportPaymentsXlsx}>
+              Payments Excel
             </Button>
           </div>
         </div>

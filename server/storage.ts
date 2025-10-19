@@ -94,6 +94,7 @@ import {
   driverLocationTelemetry,
   type DriverLocation,
   expenses, type Expense, type InsertExpense,
+  cashSessions, type InsertCashSession,
   orderStatusEnum,
   deliveryStatusEnum,
 } from "@shared/schema";
@@ -688,6 +689,7 @@ export interface IStorage {
   getPayments(branchId?: string): Promise<Payment[]>;
   getPayment(id: string): Promise<Payment | undefined>;
   getPaymentsByCustomer(customerId: string, branchId?: string): Promise<Payment[]>;
+  getOrderPaymentsTotal(orderId: string): Promise<number>;
   createPayment(payment: InsertPayment): Promise<Payment>;
 
   // Order logs
@@ -1684,6 +1686,46 @@ export class MemStorage {
 
   async getOrderPrintHistory(orderId: string): Promise<OrderPrint[]> {
     return this.orderPrints.filter(p => p.orderId === orderId);
+  }
+
+  // Cash sessions
+  async getOpenCashSessionByUser(branchId: string | null, cashierId: string): Promise<any | undefined> {
+    const conditions: any[] = [eq(cashSessions.cashierId, cashierId), isNull(cashSessions.closedAt)];
+    if (branchId) conditions.push(eq(cashSessions.branchId, branchId));
+    const rows = await db.select().from(cashSessions).where(and(...conditions)).orderBy(desc(cashSessions.openedAt)).limit(1);
+    return rows[0] || undefined;
+  }
+
+  async createCashSession(data: Omit<InsertCashSession, 'id' | 'openedAt' | 'closedAt' | 'expectedCash' | 'variance'>): Promise<any> {
+    const [row] = await db.insert(cashSessions).values(data as any).returning();
+    return row;
+  }
+
+  async closeCashSession(id: string, updates: { countedCash?: number; expectedCash?: number; variance?: number; notes?: string; counts?: any }): Promise<any | undefined> {
+    const [row] = await db.update(cashSessions).set({
+      countedCash: (updates.countedCash as any) ?? undefined,
+      expectedCash: (updates.expectedCash as any) ?? undefined,
+      variance: (updates.variance as any) ?? undefined,
+      notes: (updates.notes as any) ?? undefined,
+      counts: updates.counts ? (updates.counts as any) : undefined,
+      closedAt: new Date(),
+    }).where(eq(cashSessions.id, id)).returning();
+    return row || undefined;
+  }
+
+  async getCashSessions(branchId?: string, limit = 20): Promise<any[]> {
+    const conditions: any[] = [];
+    if (branchId) conditions.push(eq(cashSessions.branchId, branchId));
+    const q = conditions.length ? and(...conditions) : undefined as any;
+    const rows = await db.select().from(cashSessions).where(q).orderBy(desc(cashSessions.openedAt)).limit(limit);
+    return rows;
+  }
+
+  async getCashSession(id: string, branchId?: string): Promise<any | undefined> {
+    const conditions: any[] = [eq(cashSessions.id, id)];
+    if (branchId) conditions.push(eq(cashSessions.branchId, branchId));
+    const rows = await db.select().from(cashSessions).where(and(...conditions)).limit(1);
+    return rows[0] || undefined;
   }
 
   async getLoyaltyHistory(customerId: string): Promise<LoyaltyHistory[]> {
@@ -3938,7 +3980,7 @@ export class DatabaseStorage {
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
     return await this.withTenant(branchId, async (tx) => {
-      const conditions = [eq(orders.isDeliveryRequest, false)] as any[];
+      const conditions = [eq(orders.isDeliveryRequest, false), ne(orders.status, 'cancelled' as any)] as any[];
       if (branchId) conditions.push(eq(orders.branchId, branchId));
 
       let query = tx
@@ -3992,7 +4034,7 @@ export class DatabaseStorage {
     branchId?: string,
   ): Promise<(Order & { paid: string; remaining: string })[]> {
     return await this.withTenant(branchId, async (tx) => {
-      const conditions = [eq(orders.customerId, customerId), eq(orders.isDeliveryRequest, false)];
+      const conditions = [eq(orders.customerId, customerId), eq(orders.isDeliveryRequest, false), ne(orders.status, 'cancelled' as any)];
       if (branchId) conditions.push(eq(orders.branchId, branchId));
 
       const results = await tx
@@ -4022,7 +4064,7 @@ export class DatabaseStorage {
     sortOrder: "asc" | "desc" = "desc",
   ): Promise<(Order & { customerNickname: string | null; balanceDue: string | null })[]> {
     return await this.withTenant(branchId, async (tx) => {
-      const conditions = [eq(orders.status, status as any), eq(orders.isDeliveryRequest, false)];
+      const conditions = [eq(orders.status, status as any), eq(orders.isDeliveryRequest, false), ne(orders.status, 'cancelled' as any)];
       if (branchId) conditions.push(eq(orders.branchId, branchId));
 
       let query = tx
@@ -4205,6 +4247,13 @@ export class DatabaseStorage {
     });
   }
 
+  async getOrderPaymentsTotal(orderId: string): Promise<number> {
+    const { rows } = await db.execute<any>(sql.raw(`
+      SELECT COALESCE(SUM(amount)::numeric, 0) AS total FROM payments WHERE order_id = '${orderId.replace(/'/g, "''")}'
+    `));
+    return Number(rows[0]?.total ?? 0);
+  }
+
   async getOrderLogs(status?: string): Promise<OrderLog[]> {
     const baseQuery = db
       .select({
@@ -4214,6 +4263,7 @@ export class DatabaseStorage {
         status: orders.status,
         createdAt: orders.createdAt,
         promisedReadyDate: orders.promisedReadyDate,
+        notes: orders.notes,
         packageName: sql<string>`max(${packages.nameEn})`,
       })
       .from(orders)
@@ -4297,18 +4347,26 @@ export class DatabaseStorage {
       historyMap.set(event.orderId, arr);
     }
 
-    return rows.map((r) => ({
+    return rows.map((r) => {
+      let cancelReason: string | null = null;
+      if (r.status === 'cancelled' && r.notes) {
+        const m = String(r.notes).split(/\n/).reverse().find((line) => /cancelled\s*:/i.test(line));
+        if (m) cancelReason = m.replace(/.*cancelled\s*:/i, '').trim() || null;
+      }
+      return ({
       id: r.id,
       orderNumber: r.orderNumber,
       customerName: r.customerName,
       packageName: r.packageName,
       status: r.status,
+      cancelReason,
       createdAt: r.createdAt ? r.createdAt.toISOString() : null,
       promisedReadyDate: r.promisedReadyDate ? r.promisedReadyDate.toISOString() : null,
       events: (historyMap.get(r.id) ?? []).sort((a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       ),
-    }));
+    });
+    });
   }
 
   async createNotification(notificationData: InsertNotification): Promise<Notification> {
@@ -5152,6 +5210,7 @@ export class DatabaseStorage {
           o.total::numeric AS order_total
         FROM orders o
         ${whereClause}
+        AND o.status <> 'cancelled'
       ),
       resolved AS (
         SELECT
@@ -5195,6 +5254,7 @@ export class DatabaseStorage {
                o.branch_id
         FROM orders o
         ${whereClause}
+        AND o.status <> 'cancelled'
       ),
       non_pay_later AS (
         SELECT
@@ -5259,6 +5319,7 @@ export class DatabaseStorage {
                o.branch_id
         FROM orders o
         ${whereClause}
+        AND o.status <> 'cancelled'
       ),
       non_pay_later AS (
         SELECT
@@ -5413,6 +5474,7 @@ export class DatabaseStorage {
       orderId: string;
       orderNumber: string;
       customerName: string | null;
+      customerId: string | null;
       createdAt: string;
       orderTotal: number;
       totalPaid: number;
@@ -5429,6 +5491,7 @@ export class DatabaseStorage {
         o.id AS order_id,
         o.order_number,
         c.name AS customer_name,
+        c.id AS customer_id,
         o.created_at,
         o.status,
         o.actual_pickup,
@@ -5453,6 +5516,7 @@ export class DatabaseStorage {
         orderId: r.order_id,
         orderNumber: r.order_number,
         customerName: r.customer_name ?? null,
+        customerId: r.customer_id ?? null,
         createdAt: createdAt.toISOString(),
         orderTotal: Number(r.order_total ?? 0),
         totalPaid: Number(r.total_paid ?? 0),
@@ -5496,6 +5560,7 @@ export class DatabaseStorage {
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method <> 'pay_later'
           AND o.is_delivery_request = false
+          AND o.status <> 'cancelled'
 
         UNION ALL
 
@@ -5508,6 +5573,7 @@ export class DatabaseStorage {
         WHERE o.created_at >= NOW() - INTERVAL ${interval} ${branchFilter}
           AND o.payment_method = 'pay_later'
           AND o.is_delivery_request = false
+          AND o.status <> 'cancelled'
       ) s
       GROUP BY period
       ORDER BY period;
@@ -5544,6 +5610,7 @@ export class DatabaseStorage {
         FROM orders o
         WHERE o.created_at >= NOW() - INTERVAL '${interval}'
           AND o.is_delivery_request = false
+          AND o.status <> 'cancelled'
           ${branchFilter}
       ),
       non_pay_later AS (
@@ -5592,6 +5659,163 @@ export class DatabaseStorage {
       count: Number(r.count),
       revenue: Number(r.revenue),
     }));
+  }
+
+  async getFinancialReport(filter: ReportDateRangeFilter = {}): Promise<{
+    totals: { cashSales: number; cashOutstanding: number; cashReceived: number; cardReceived: number; expensesTotal: number; netCash: number };
+    cashSales: { orderId: string; orderNumber: string; customerName: string | null; date: string; total: number }[];
+    cashReceipts: { paymentId: string; amount: number; date: string; source: 'regular_order' | 'pay_later_receipt' | 'package_or_other'; orderId: string | null; orderNumber: string | null; customerName: string | null; customerId?: string | null; cashier?: string | null; channel?: string | null }[];
+    cardReceipts: { paymentId: string; amount: number; date: string; source: 'regular_order' | 'pay_later_receipt' | 'package_or_other'; orderId: string | null; orderNumber: string | null; customerName: string | null; customerId?: string | null; cashier?: string | null; channel?: string | null }[];
+  }> {
+    const start = filter.start ? `'${(filter.start as Date).toISOString()}'` : undefined;
+    const end = filter.end ? `'${(filter.end as Date).toISOString()}'` : undefined;
+    const branchFilterOrders = filter.branchId ? `AND o.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+    const branchFilterPayments = filter.branchId ? `AND p.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'` : '';
+
+    // Cash sales (orders table)
+    const cashSalesWhere: string[] = ["o.payment_method = 'cash'", "o.is_delivery_request = false", "o.status <> 'cancelled'"];
+    if (start) cashSalesWhere.push(`o.created_at >= ${start}`);
+    if (end) cashSalesWhere.push(`o.created_at <= ${end}`);
+    if (branchFilterOrders) cashSalesWhere.push(branchFilterOrders.slice(4));
+    const { rows: cashSalesRows } = await db.execute<any>(sql.raw(`
+      SELECT o.id, o.order_number, o.customer_name, o.created_at, o.total::numeric AS total
+      FROM orders o
+      WHERE ${cashSalesWhere.join(' AND ')}
+      ORDER BY o.created_at DESC
+      LIMIT 100
+    `));
+
+    const cashSales = cashSalesRows.map((r: any) => ({
+      orderId: r.id,
+      orderNumber: r.order_number,
+      customerName: r.customer_name ?? null,
+      date: new Date(r.created_at).toISOString(),
+      total: Number(r.total ?? 0),
+    }));
+    const cashSalesTotal = cashSales.reduce((acc, r) => acc + r.total, 0);
+
+    // Outstanding (sum of remaining for pay-later orders at end)
+    const refIso = filter.end ? (filter.end as Date).toISOString() : new Date().toISOString();
+    const { rows: outstandingRows } = await db.execute<any>(sql.raw(`
+      WITH pay_later AS (${PAY_LATER_AGGREGATE})
+      SELECT SUM((o.total::numeric - COALESCE(p.amount, 0)::numeric))::numeric AS remaining
+      FROM orders o
+      LEFT JOIN pay_later p ON p.order_id = o.id
+      WHERE o.payment_method = 'pay_later'
+        ${branchFilterOrders}
+        AND o.created_at <= '${refIso}'
+        AND o.status <> 'cancelled'
+    `));
+    const cashOutstanding = Number(outstandingRows[0]?.remaining ?? 0);
+
+    // Payments helper
+    const paymentsWhere: string[] = [];
+    if (start) paymentsWhere.push(`p.created_at >= ${start}`);
+    if (end) paymentsWhere.push(`p.created_at <= ${end}`);
+    if (branchFilterPayments) paymentsWhere.push(branchFilterPayments.slice(4));
+    const wherePayments = paymentsWhere.length ? `WHERE ${paymentsWhere.join(' AND ')}` : '';
+
+    const basePaymentsSql = (methodFilter: string) => `
+      SELECT 
+        p.id AS payment_id,
+        p.amount::numeric AS amount,
+        p.created_at,
+        p.payment_method,
+        p.received_by,
+        p.notes,
+        o.id AS order_id,
+        o.order_number,
+        o.payment_method AS order_payment_method,
+        o.status AS order_status,
+        o.notes AS order_notes,
+        c.name AS customer_name,
+        c.id AS customer_id
+      FROM payments p
+      LEFT JOIN orders o ON o.id = p.order_id
+      LEFT JOIN customers c ON c.id = p.customer_id
+      ${wherePayments}
+        ${wherePayments ? 'AND' : 'WHERE'} p.payment_method IN (${methodFilter})
+      ORDER BY p.created_at DESC
+      LIMIT 200
+    `;
+
+    const cashMethods = `'cash'`;
+    const cardMethods = `'card','credit_card','knet'`;
+    const [cashRes, cardRes] = await Promise.all([
+      db.execute<any>(sql.raw(basePaymentsSql(cashMethods))),
+      db.execute<any>(sql.raw(basePaymentsSql(cardMethods))),
+    ]);
+
+    const classify = (r: any) => {
+      if (r.order_id) {
+        if (r.order_payment_method === 'pay_later') return 'pay_later_receipt' as const;
+        return 'regular_order' as const;
+      }
+      return 'package_or_other' as const;
+    };
+
+    const extractCancelReason = (notes: any) => {
+      if (!notes) return null;
+      const str = String(notes);
+      const m = str.split(/\n/).reverse().find((line) => /cancelled\s*:/i.test(line));
+      return m ? m.replace(/.*cancelled\s*:/i, '').trim() || null : null;
+    };
+
+    const cashReceipts = cashRes.rows.map((r: any) => ({
+      paymentId: r.payment_id,
+      amount: Number(r.amount ?? 0),
+      date: new Date(r.created_at).toISOString(),
+      source: classify(r),
+      channel: /online/i.test(r.notes || '') ? 'online' : 'pos',
+      orderId: r.order_id ?? null,
+      orderNumber: r.order_number ?? null,
+      customerName: r.customer_name ?? null,
+      customerId: r.customer_id ?? null,
+      cashier: r.received_by ?? null,
+      cancelled: r.order_status === 'cancelled',
+      cancelReason: r.order_status === 'cancelled' ? extractCancelReason(r.order_notes) : null,
+    }));
+    const cardReceipts = cardRes.rows.map((r: any) => ({
+      paymentId: r.payment_id,
+      amount: Number(r.amount ?? 0),
+      date: new Date(r.created_at).toISOString(),
+      source: classify(r),
+      channel: /online/i.test(r.notes || '') ? 'online' : 'pos',
+      orderId: r.order_id ?? null,
+      orderNumber: r.order_number ?? null,
+      customerName: r.customer_name ?? null,
+      customerId: r.customer_id ?? null,
+      cashier: r.received_by ?? null,
+      cancelled: r.order_status === 'cancelled',
+      cancelReason: r.order_status === 'cancelled' ? extractCancelReason(r.order_notes) : null,
+    }));
+
+    const cashReceivedTotal = cashReceipts.reduce((acc, p) => acc + p.amount, 0);
+    const cardReceivedTotal = cardReceipts.reduce((acc, p) => acc + p.amount, 0);
+
+    // Expenses total in range
+    const expWhere: string[] = [];
+    if (start) expWhere.push(`e.incurred_at >= ${start}`);
+    if (end) expWhere.push(`e.incurred_at <= ${end}`);
+    if (filter.branchId) expWhere.push(`e.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}'`);
+    const { rows: expRows } = await db.execute<any>(sql.raw(`
+      SELECT COALESCE(SUM(e.amount)::numeric, 0) AS total FROM expenses e ${expWhere.length ? 'WHERE ' + expWhere.join(' AND ') : ''}
+    `));
+    const expensesTotal = Number(expRows[0]?.total ?? 0);
+
+    return {
+      totals: {
+        cashSales: cashSalesTotal,
+        cashOutstanding,
+        cashReceived: cashReceivedTotal,
+        cardReceived: cardReceivedTotal,
+        expensesTotal,
+        netCash: cashReceivedTotal - expensesTotal,
+      },
+      cashSales,
+      cashReceipts,
+      cardReceipts,
+    };
   }
 
   async getTopProducts(range: string, branchId?: string): Promise<{ product: string; count: number; revenue: number }[]> {
@@ -6961,6 +7185,7 @@ export class DatabaseStorage {
       amount: (data as any).amount,
       notes: (data as any).notes,
       incurredAt: (data as any).incurredAt || new Date(),
+      paymentMethod: (data as any).paymentMethod || null,
       branchId: (data as any).branchId || branchId,
       createdBy,
     } as any;

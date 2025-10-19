@@ -91,6 +91,7 @@ import { registerAnalyticsWorkspaceRoutes } from "./routes/analytics";
 import { registerAlertRoutes } from "./routes/alerts";
 import { createAnalyticsEvent, type EventBus } from "./services/event-bus";
 import { registerWorkflowRoutes } from "./routes/workflows";
+import { glMappings, insertGlMappingSchema } from "@shared/schema";
 import { WorkflowEngine } from "./services/workflows/engine";
 import { registerGraphql } from "./graphql";
 
@@ -420,7 +421,15 @@ export async function computePackageUsage(
   }
 }
 
-const TAX_RATE = 0.085;
+function getServerTaxRate(): number {
+  const raw = (process.env.TAX_RATE_PERCENT ?? process.env.TAX_RATE ?? '').trim();
+  if (!raw) return 0; // default to no tax unless explicitly configured
+  const n = Number(raw);
+  if (!isFinite(n) || isNaN(n)) return 0;
+  // If given like 8.5 treat as percent; if <=1 assume decimal (0.085)
+  return n > 1 ? n / 100 : n;
+}
+const SERVER_TAX_RATE = getServerTaxRate();
 
 export async function computeTotalsWithCredits(
   cartItems: any[],
@@ -456,7 +465,7 @@ export async function computeTotalsWithCredits(
   }
 
   subtotal = Math.round(subtotal * 100) / 100;
-  const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
+  const tax = Math.round(subtotal * SERVER_TAX_RATE * 100) / 100;
   const total = Math.round((subtotal + tax) * 100) / 100;
   return { subtotal, tax, total };
 }
@@ -4161,13 +4170,20 @@ export async function registerRoutes(
   app.patch("/api/orders/:id/status", requireAuth, async (req, res) => {
     try {
       const user = req.user as UserWithBranch;
-      const { status, notify } = req.body as { status: string; notify?: boolean };
+      const { status, notify, reason } = req.body as { status: string; notify?: boolean; reason?: string };
       const id = await resolveUuidByPublicId(orders, req.params.id);
       const order = await storage.updateOrderStatus(id, status, {
         actor: getActorName(user),
       });
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
+      }
+
+      // If cancelled and reason provided, append to order notes
+      if (status === 'cancelled' && reason && reason.trim()) {
+        try {
+          await storage.updateOrder(id, { notes: `${order.notes ? order.notes + '\n' : ''}Cancelled: ${reason.trim()}` });
+        } catch {}
       }
 
       if (notify) {
@@ -4282,20 +4298,82 @@ export async function registerRoutes(
   );
 
   const handleCreatePayment = async (payment: InsertPayment, user: UserWithBranch, res: any) => {
+    // Server-side cap: do not allow paying more than remaining for an order unless explicitly overridden
     if (payment.orderId) {
-      const order = await storage.getOrder(payment.orderId, user.branchId || undefined);
+      try {
+        const order = await storage.getOrder(payment.orderId, undefined);
+        if (!order) {
+          return res.status(404).json({ message: "Order not found" });
+        }
+        const paidTotal = await storage.getOrderPaymentsTotal(order.id);
+        const orderTotal = parseFloat(order.total);
+        const remaining = Math.max(orderTotal - paidTotal, 0);
+        const amountNum = parseFloat(String(payment.amount));
+        const wantsOverride = Boolean((payment as any).isOverpayOverride);
+        if (amountNum > remaining + 1e-6) {
+          if (!wantsOverride) {
+            return res.status(400).json({
+              message: "Amount exceeds remaining for order",
+              code: "OVERPAY_NOT_ALLOWED",
+              remaining: remaining.toFixed(2),
+            });
+          }
+          const role = user?.role;
+          if (!(role === 'admin' || role === 'super_admin')) {
+            return res.status(403).json({ message: "Overpay override not permitted" });
+          }
+          if (!((payment as any).overrideReason && String((payment as any).overrideReason).trim().length)) {
+            return res.status(400).json({ message: "Override reason required" });
+          }
+        }
+      } catch (err) {
+        // If validation fails unexpectedly, block the payment
+        return res.status(400).json({ message: "Failed to validate payment" });
+      }
+    }
+    let branchForBalance: string | undefined = undefined;
+    if (payment.orderId) {
+      // Use the order's branch for balance adjustment
+      const order = await storage.getOrder(payment.orderId, undefined);
       if (!order) {
         return res.status(404).json({ message: "Order not found" });
       }
+      branchForBalance = order.branchId;
+    } else {
+      // Use the customer's branch
+      const customer = await storage.getCustomer(payment.customerId, undefined);
+      branchForBalance = customer?.branchId || undefined;
     }
+
     const newPayment = await storage.createPayment(payment);
 
     // Update customer balance when payment is received
     await storage.updateCustomerBalance(
       payment.customerId,
       -parseFloat(newPayment.amount),
-      user.branchId || undefined,
+      branchForBalance,
     );
+
+    // If this payment is for a pay-later order, check if fully settled
+    if (payment.orderId) {
+      try {
+        const order = await storage.getOrder(payment.orderId, undefined);
+        if (order) {
+          const paidTotal = await storage.getOrderPaymentsTotal(order.id);
+          const orderTotal = parseFloat(order.total);
+          if (paidTotal + 1e-6 >= orderTotal) {
+            // Append notes indicating settlement (do NOT change status automatically)
+            const createdWhen = order.createdAt ? new Date(order.createdAt).toISOString() : new Date().toISOString();
+            const settledWhen = new Date().toISOString();
+            const extra = `\nPay-later order created at ${createdWhen}. Settled at ${settledWhen} via ${payment.paymentMethod}${(payment as any).channel ? ' (' + (payment as any).channel + ')' : ''}.`;
+            await storage.updateOrder(order.id, {
+              paymentMethod: payment.paymentMethod as any,
+              notes: ((order.notes || '') + extra) as any,
+            });
+          }
+        }
+      } catch {}
+    }
 
     res.status(201).json(newPayment);
   };
@@ -4403,6 +4481,776 @@ export async function registerRoutes(
     }
   });
 
+  // Exceptions summary (overpay overrides, stale pay-later, cancellation spike)
+  app.get("/api/reports/exceptions", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { filter, error } = parseReportFilters(req, user);
+      if (error) return res.status(400).json({ message: error });
+      const branchId = filter.branchId;
+
+      // Load branch customization for stale threshold
+      let staleDays = 14;
+      if (branchId) {
+        try {
+          const customization = await storage.getBranchCustomization(branchId);
+          if (customization && typeof (customization as any).payLaterStaleDays === 'number') {
+            staleDays = (customization as any).payLaterStaleDays as number;
+          }
+        } catch {}
+      }
+
+      // Overpay overrides in window
+      const wherePayments: string[] = ["p.is_overpay_override = true"];
+      if (branchId) wherePayments.push(`p.branch_id = '${branchId.replace(/'/g, "''")}'`);
+      if (filter.start) wherePayments.push(`p.created_at >= '${filter.start.toISOString()}'`);
+      if (filter.end) wherePayments.push(`p.created_at <= '${filter.end.toISOString()}'`);
+      const clauseP = wherePayments.length ? `WHERE ${wherePayments.join(' AND ')}` : '';
+      const { rows: overpayRows } = await db.execute<any>(sql.raw(`
+        SELECT id, order_id, customer_id, amount, created_at FROM payments p ${clauseP} ORDER BY created_at DESC LIMIT 50
+      `));
+
+      // Stale pay-later orders: remaining > 0 and older than threshold
+      const staleCutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000).toISOString();
+      const branchClause = branchId ? `AND o.branch_id = '${branchId.replace(/'/g, "''")}'` : '';
+      const andDates = [filter.start ? `o.created_at >= '${filter.start.toISOString()}'` : '', filter.end ? `o.created_at <= '${filter.end.toISOString()}'` : ''].filter(Boolean).join(' AND ');
+      const dateClause = andDates ? `AND ${andDates}` : '';
+      const { rows: staleRows } = await db.execute<any>(sql.raw(`
+        SELECT o.id, o.order_number, o.customer_name, o.created_at, o.total,
+               COALESCE(paid.total_paid, 0) AS total_paid,
+               (o.total - COALESCE(paid.total_paid, 0)) AS remaining
+        FROM orders o
+        LEFT JOIN (
+          SELECT order_id, SUM(amount)::numeric AS total_paid FROM payments GROUP BY order_id
+        ) paid ON paid.order_id = o.id
+        WHERE o.is_delivery_request = false
+          AND o.status <> 'cancelled'
+          ${branchClause}
+          ${dateClause}
+          AND o.payment_method = 'pay_later'
+          AND o.created_at < '${staleCutoff}'
+          AND (o.total - COALESCE(paid.total_paid, 0)) > 0.009
+        ORDER BY o.created_at ASC
+        LIMIT 50
+      `));
+
+      // Cancellation spike: compare last 7 vs last 28
+      const now = new Date();
+      const d7 = new Date(now.getTime() - 7 * 86400000);
+      const d28 = new Date(now.getTime() - 28 * 86400000);
+      const branchFilter = branchId ? `AND is_delivery_request = false AND branch_id = '${branchId.replace(/'/g, "''")}'` : 'AND is_delivery_request = false';
+      const { rows: recent } = await db.execute<any>(sql.raw(`
+        SELECT 
+          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END)::int AS cancels,
+          COUNT(*)::int AS total
+        FROM orders WHERE created_at >= '${d7.toISOString()}' ${branchFilter}
+      `));
+      const { rows: base } = await db.execute<any>(sql.raw(`
+        SELECT 
+          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END)::int AS cancels,
+          COUNT(*)::int AS total
+        FROM orders WHERE created_at >= '${d28.toISOString()}' AND created_at < '${d7.toISOString()}' ${branchFilter}
+      `));
+      const recentRate = recent[0]?.total ? (Number(recent[0].cancels) / Number(recent[0].total)) : 0;
+      const baselineRate = base[0]?.total ? (Number(base[0].cancels) / Number(base[0].total)) : 0;
+      const isSpike = (recentRate > baselineRate * 2) && (recentRate > 0.10);
+
+      res.json({
+        overpayOverrides: { count: Number(overpayRows.length || 0), items: overpayRows },
+        stalePayLater: { thresholdDays: staleDays, count: Number(staleRows.length || 0), items: staleRows },
+        cancellationSpike: { recentRate, baselineRate, isSpike },
+      });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch exceptions' });
+    }
+  });
+
+  // Cash Drawer Sessions
+  app.get("/api/cash-sessions/current", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const session = await storage.getOpenCashSessionByUser(user.branchId || null, user.id);
+      res.json(session || null);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch current cash session' });
+    }
+  });
+
+  app.get("/api/cash-sessions", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const items = await storage.getCashSessions(user.branchId || undefined, Number(req.query.limit || 20));
+      res.json(items);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch cash sessions' });
+    }
+  });
+
+  app.post("/api/cash-sessions/open", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      if (!user.branchId) return res.status(400).json({ message: 'User has no branch' });
+      const exists = await storage.getOpenCashSessionByUser(user.branchId, user.id);
+      if (exists) return res.status(400).json({ message: 'A session is already open' });
+      const { openingFloat, notes, counts } = req.body as { openingFloat?: number; notes?: string; counts?: any };
+      const created = await storage.createCashSession({
+        branchId: user.branchId,
+        cashierId: user.id,
+        openingFloat: Number(openingFloat || 0) as any,
+        notes: notes as any,
+        counts: (counts || {}) as any,
+      } as any);
+      res.status(201).json(created);
+    } catch (err) {
+      res.status(400).json({ message: 'Failed to open cash session' });
+    }
+  });
+
+  app.post("/api/cash-sessions/:id/close", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const id = req.params.id;
+      const session = await storage.getCashSession(id, user.branchId || undefined);
+      if (!session) return res.status(404).json({ message: 'Session not found' });
+      if (session.closedAt) return res.status(400).json({ message: 'Session already closed' });
+      const { countedCash, notes, counts } = req.body as { countedCash: number; notes?: string; counts?: any };
+      // Compute expected cash: opening float + sum of cash payments in branch during session window
+      const startIso = new Date(session.openedAt).toISOString();
+      const endIso = new Date().toISOString();
+      const { rows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total
+        FROM payments
+        WHERE branch_id = '${(session.branchId as string).replace(/'/g, "''")}'
+          AND payment_method = 'cash'
+          AND created_at >= '${startIso}' AND created_at <= '${endIso}'
+      `));
+      const cashReceived = Number(rows[0]?.total ?? 0);
+      // Subtract cash expenses in the session window
+      const { rows: expRows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total
+        FROM expenses
+        WHERE branch_id = '${(session.branchId as string).replace(/'/g, "''")}'
+          AND (payment_method = 'cash' OR payment_method IS NULL)
+          AND incurred_at >= '${startIso}' AND incurred_at <= '${endIso}'
+      `));
+      const cashPaidOut = Number(expRows[0]?.total ?? 0);
+      const expectedCash = Number(session.openingFloat) + cashReceived - cashPaidOut;
+      const variance = Number(countedCash) - expectedCash;
+      const updated = await storage.closeCashSession(id, { countedCash, expectedCash, variance, notes, counts });
+      res.json({ ...updated, cashReceived, cashPaidOut });
+    } catch (err) {
+      res.status(400).json({ message: 'Failed to close cash session' });
+    }
+  });
+
+  app.get("/api/cash-sessions/:id/z-report", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const id = req.params.id;
+      const session = await storage.getCashSession(id, user.branchId || undefined);
+      if (!session) return res.status(404).json({ message: 'Session not found' });
+      const startIso = new Date(session.openedAt).toISOString();
+      const endIso = new Date(session.closedAt || new Date()).toISOString();
+      const { rows } = await db.execute<any>(sql.raw(`
+        SELECT created_at, amount, payment_method, channel, notes, received_by, order_id, customer_id
+        FROM payments
+        WHERE branch_id = '${(session.branchId as string).replace(/'/g, "''")}'
+          AND payment_method = 'cash'
+          AND created_at >= '${startIso}' AND created_at <= '${endIso}'
+        ORDER BY created_at ASC
+      `));
+      const header = [
+        'created_at','amount','payment_method','channel','notes','received_by','order_id','customer_id'
+      ];
+      const escape = (v: any) => {
+        const s = v == null ? '' : String(v);
+        return (s.includes(',') || s.includes('\n') || s.includes('"')) ? ('"' + s.replace(/"/g, '""') + '"') : s;
+      };
+      const lines = [header.join(',')];
+      for (const r of rows) {
+        lines.push([
+          (r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at),
+          r.amount,
+          r.payment_method,
+          r.channel ?? '',
+          r.notes ?? '',
+          r.received_by,
+          r.order_id ?? '',
+          r.customer_id,
+        ].map(escape).join(','));
+      }
+      const filename = `z-report-${(session.id as string).slice(0,8)}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(lines.join('\n'));
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to export Z-report' });
+    }
+  });
+
+  // Z-report XLSX
+  app.get("/api/cash-sessions/:id/z-report.xlsx", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const id = req.params.id;
+      const session = await storage.getCashSession(id, user.branchId || undefined);
+      if (!session) return res.status(404).json({ message: 'Session not found' });
+      const startIso = new Date(session.openedAt).toISOString();
+      const endIso = new Date(session.closedAt || new Date()).toISOString();
+      const { rows } = await db.execute<any>(sql.raw(`
+        SELECT created_at, amount, payment_method, channel, notes, received_by, order_id, customer_id
+        FROM payments
+        WHERE branch_id = '${(session.branchId as string).replace(/'/g, "''")}'
+          AND payment_method = 'cash'
+          AND created_at >= '${startIso}' AND created_at <= '${endIso}'
+        ORDER BY created_at ASC
+      `));
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Z-Report');
+      ws.columns = [
+        { header: 'created_at', key: 'created_at', width: 24 },
+        { header: 'amount', key: 'amount', width: 12 },
+        { header: 'payment_method', key: 'payment_method', width: 16 },
+        { header: 'channel', key: 'channel', width: 12 },
+        { header: 'notes', key: 'notes', width: 40 },
+        { header: 'received_by', key: 'received_by', width: 24 },
+        { header: 'order_id', key: 'order_id', width: 38 },
+        { header: 'customer_id', key: 'customer_id', width: 38 },
+      ];
+      rows.forEach((r) => ws.addRow({
+        created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+        amount: r.amount,
+        payment_method: r.payment_method,
+        channel: r.channel ?? '',
+        notes: r.notes ?? '',
+        received_by: r.received_by,
+        order_id: r.order_id ?? '',
+        customer_id: r.customer_id,
+      }));
+      const startStr = startIso.slice(0,10);
+      const filename = `z-report-${(session.id as string).slice(0,8)}-${startStr}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to export Z-report' });
+    }
+  });
+
+  // Daily close XLSX (all sessions in branch for a date)
+  app.get("/api/cash-sessions/daily-close.xlsx", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const date = (req.query.date as string | undefined) || new Date().toISOString().slice(0,10);
+      const dayStart = new Date(date + 'T00:00:00.000Z');
+      const dayEnd = new Date(date + 'T23:59:59.999Z');
+      const branchId = user.branchId || undefined;
+      // Sessions for day
+      const { rows: sessions } = await db.execute<any>(sql.raw(`
+        SELECT * FROM cash_sessions
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+          AND opened_at >= '${dayStart.toISOString()}' AND opened_at <= '${dayEnd.toISOString()}'
+        ORDER BY opened_at ASC
+      `));
+      const wb = new ExcelJS.Workbook();
+      // Sessions sheet
+      const ws = wb.addWorksheet('Sessions');
+      ws.columns = [
+        { header: 'id', key: 'id', width: 36 },
+        { header: 'cashier_id', key: 'cashier_id', width: 36 },
+        { header: 'opened_at', key: 'opened_at', width: 24 },
+        { header: 'closed_at', key: 'closed_at', width: 24 },
+        { header: 'opening_float', key: 'opening_float', width: 14 },
+        { header: 'expected_cash', key: 'expected_cash', width: 14 },
+        { header: 'counted_cash', key: 'counted_cash', width: 14 },
+        { header: 'variance', key: 'variance', width: 14 },
+      ];
+      let sumOpen = 0, sumExpected = 0, sumCounted = 0, sumVar = 0;
+      sessions.forEach((s) => {
+        sumOpen += Number(s.opening_float || 0);
+        sumExpected += Number(s.expected_cash || 0);
+        sumCounted += Number(s.counted_cash || 0);
+        sumVar += Number(s.variance || 0);
+        ws.addRow({
+          id: s.id,
+          cashier_id: s.cashier_id,
+          opened_at: s.opened_at,
+          closed_at: s.closed_at ?? '',
+          opening_float: s.opening_float,
+          expected_cash: s.expected_cash ?? '',
+          counted_cash: s.counted_cash ?? '',
+          variance: s.variance ?? '',
+        });
+      });
+      ws.addRow({});
+      ws.addRow({ id: 'TOTALS', opening_float: sumOpen, expected_cash: sumExpected, counted_cash: sumCounted, variance: sumVar });
+
+      // Receipts sheet (cash payments for day)
+      const wp = wb.addWorksheet('Cash Receipts');
+      wp.columns = [
+        { header: 'created_at', key: 'created_at', width: 24 },
+        { header: 'amount', key: 'amount', width: 12 },
+        { header: 'order_id', key: 'order_id', width: 36 },
+        { header: 'customer_id', key: 'customer_id', width: 36 },
+        { header: 'received_by', key: 'received_by', width: 24 },
+      ];
+      const { rows: receipts } = await db.execute<any>(sql.raw(`
+        SELECT created_at, amount, order_id, customer_id, received_by
+        FROM payments
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+          AND payment_method = 'cash'
+          AND created_at >= '${dayStart.toISOString()}' AND created_at <= '${dayEnd.toISOString()}'
+        ORDER BY created_at ASC
+      `));
+      receipts.forEach((r) => wp.addRow({ created_at: r.created_at, amount: r.amount, order_id: r.order_id ?? '', customer_id: r.customer_id, received_by: r.received_by }));
+
+      // Cash expenses sheet
+      const we = wb.addWorksheet('Cash Expenses');
+      we.columns = [
+        { header: 'incurred_at', key: 'incurred_at', width: 24 },
+        { header: 'category', key: 'category', width: 24 },
+        { header: 'notes', key: 'notes', width: 40 },
+        { header: 'amount', key: 'amount', width: 12 },
+      ];
+      const { rows: exp } = await db.execute<any>(sql.raw(`
+        SELECT incurred_at, category, notes, amount
+        FROM expenses
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+          AND (payment_method = 'cash' OR payment_method IS NULL)
+          AND incurred_at >= '${dayStart.toISOString()}' AND incurred_at <= '${dayEnd.toISOString()}'
+        ORDER BY incurred_at ASC
+      `));
+      exp.forEach((e) => we.addRow({ incurred_at: e.incurred_at, category: e.category, notes: e.notes ?? '', amount: e.amount }));
+
+      const filename = `daily-close-${date}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to export daily close' });
+    }
+  });
+
+  // Accounting journal (summary JSON) for a date
+  app.get("/api/accounting/journal", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const date = (req.query.date as string | undefined) || new Date().toISOString().slice(0,10);
+      const dayStart = new Date(date + 'T00:00:00.000Z');
+      const dayEnd = new Date(date + 'T23:59:59.999Z');
+      const branchId = user.branchId || undefined;
+      // Totals
+      const { rows: cashRows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total FROM payments
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}' AND payment_method = 'cash'
+        AND created_at >= '${dayStart.toISOString()}' AND created_at <= '${dayEnd.toISOString()}'`));
+      const { rows: cardRows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total FROM payments
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}' AND payment_method = 'card'
+        AND created_at >= '${dayStart.toISOString()}' AND created_at <= '${dayEnd.toISOString()}'`));
+      const { rows: expRows } = await db.execute<any>(sql.raw(`
+        SELECT category, COALESCE(SUM(amount)::numeric, 0) AS total
+        FROM expenses
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+          AND incurred_at >= '${dayStart.toISOString()}' AND incurred_at <= '${dayEnd.toISOString()}'
+        GROUP BY category`));
+      const cash = Number(cashRows[0]?.total ?? 0);
+      const card = Number(cardRows[0]?.total ?? 0);
+      const expensesByCat = expRows.map((r) => ({ category: r.category, total: Number(r.total) }));
+      // Load GL mappings for expenses
+      const { rows: mapRows } = await db.execute<any>(sql.raw(`
+        SELECT key, account FROM gl_mappings WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+      `));
+      const map = new Map<string, string>(mapRows.map((r: any) => [r.key, r.account]));
+      // Naive mapping defaults
+      const GL = {
+        cash: '1000',
+        bankClearing: '1010',
+        revenue: '4000',
+        expenses: (cat: string) => ({ acct: map.get(cat) || `5${String(Math.abs(cat.hashCode?.() ?? 0) % 1000).padStart(3,'0')}`, name: cat }),
+      } as const;
+      const entries: any[] = [];
+      if (cash > 0) entries.push({ debit: GL.cash, credit: GL.revenue, amount: cash, memo: 'Cash receipts' });
+      if (card > 0) entries.push({ debit: GL.bankClearing, credit: GL.revenue, amount: card, memo: 'Card receipts' });
+      for (const e of expensesByCat) {
+        const acct = GL.expenses(e.category);
+        entries.push({ debit: acct.acct, credit: GL.cash, amount: e.total, memo: `Expense: ${e.category}` });
+      }
+      res.json({ date, branchId, entries });
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to build journal' });
+    }
+  });
+
+  app.get("/api/accounting/journal.xlsx", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const date = (req.query.date as string | undefined) || new Date().toISOString().slice(0,10);
+      const dayStart = new Date(date + 'T00:00:00.000Z');
+      const dayEnd = new Date(date + 'T23:59:59.999Z');
+      const branchId = user.branchId || undefined;
+      const { rows: cashRows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total FROM payments
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}' AND payment_method = 'cash'
+        AND created_at >= '${dayStart.toISOString()}' AND created_at <= '${dayEnd.toISOString()}'`));
+      const { rows: cardRows } = await db.execute<any>(sql.raw(`
+        SELECT COALESCE(SUM(amount)::numeric, 0) AS total FROM payments
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}' AND payment_method = 'card'
+        AND created_at >= '${dayStart.toISOString()}' AND created_at <= '${dayEnd.toISOString()}'`));
+      const { rows: expRows } = await db.execute<any>(sql.raw(`
+        SELECT category, COALESCE(SUM(amount)::numeric, 0) AS total
+        FROM expenses
+        WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+          AND incurred_at >= '${dayStart.toISOString()}' AND incurred_at <= '${dayEnd.toISOString()}'
+        GROUP BY category`));
+      const expensesByCat = expRows.map((r) => ({ category: r.category, total: Number(r.total) }));
+      const { rows: mapRows } = await db.execute<any>(sql.raw(`
+        SELECT key, account FROM gl_mappings WHERE branch_id = '${(branchId as string).replace(/'/g, "''")}'
+      `));
+      const map = new Map<string, string>(mapRows.map((r: any) => [r.key, r.account]));
+      const cash = Number(cashRows[0]?.total ?? 0);
+      const card = Number(cardRows[0]?.total ?? 0);
+      const GL = { cash: '1000', bankClearing: '1010', revenue: '4000', expenses: (cat: string) => map.get(cat) || `5${String(Math.abs(cat.hashCode?.() ?? 0) % 1000).padStart(3,'0')}` } as const;
+      const entries: any[] = [];
+      if (cash > 0) entries.push({ debit: GL.cash, credit: GL.revenue, amount: cash, memo: 'Cash receipts' });
+      if (card > 0) entries.push({ debit: GL.bankClearing, credit: GL.revenue, amount: card, memo: 'Card receipts' });
+      for (const e of expensesByCat) entries.push({ debit: GL.expenses(e.category), credit: GL.cash, amount: e.total, memo: `Expense: ${e.category}` });
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Journal');
+      ws.columns = [
+        { header: 'debit', key: 'debit', width: 16 },
+        { header: 'credit', key: 'credit', width: 16 },
+        { header: 'amount', key: 'amount', width: 12 },
+        { header: 'memo', key: 'memo', width: 40 },
+      ];
+      ws.addRows(entries);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="journal-${date}.xlsx"`);
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to build journal' });
+    }
+  });
+
+  // GL mappings endpoints
+  app.get("/api/accounting/gl-mappings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === 'super_admin' ? (req.query.branchId as string || user.branchId) : user.branchId;
+      if (!branchId) return res.status(400).json({ message: 'Branch is required' });
+      const { rows } = await db.execute<any>(sql.raw(`SELECT id, key, account, type FROM gl_mappings WHERE branch_id = '${branchId.replace(/'/g, "''")}' ORDER BY key ASC`));
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ message: 'Failed to fetch mappings' });
+    }
+  });
+
+  app.put("/api/accounting/gl-mappings", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const branchId = user.role === 'super_admin' ? (req.body.branchId as string || user.branchId) : user.branchId;
+      if (!branchId) return res.status(400).json({ message: 'Branch is required' });
+      const mappings = Array.isArray(req.body?.mappings) ? req.body.mappings : [];
+      // Upsert by (branchId, key)
+      for (const m of mappings) {
+        const parsed = insertGlMappingSchema.parse({ ...m, branchId });
+        await db.execute(sql.raw(`
+          INSERT INTO gl_mappings (branch_id, key, account, type)
+          VALUES ('${branchId.replace(/'/g, "''")}', '${String(parsed.key).replace(/'/g, "''")}', '${String(parsed.account).replace(/'/g, "''")}', '${String(parsed.type).replace(/'/g, "''")}')
+          ON CONFLICT (branch_id, key) DO UPDATE SET account = EXCLUDED.account, type = EXCLUDED.type, updated_at = now()
+        `));
+      }
+      res.json({ message: 'Mappings saved', count: mappings.length });
+    } catch (err) {
+      res.status(400).json({ message: 'Failed to save mappings' });
+    }
+  });
+
+  // Orders export (CSV)
+  app.get("/api/reports/orders/export", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+    try {
+      const status = (req.query.status as string | undefined)?.trim();
+      const method = (req.query.method as string | undefined)?.trim();
+      const where: string[] = ["o.is_delivery_request = false"]; // exclude delivery requests
+      if (filter.branchId) where.push(`o.branch_id = '${filter.branchId}'`);
+      if (filter.start) where.push(`o.created_at >= '${filter.start.toISOString()}'`);
+      if (filter.end) where.push(`o.created_at <= '${filter.end.toISOString()}'`);
+      if (status) {
+        where.push(`o.status = '${status.replace(/'/g, "''")}'`);
+      } else {
+        // Exclude cancelled by default
+        where.push("o.status <> 'cancelled'");
+      }
+      if (method) where.push(`o.payment_method = '${method.replace(/'/g, "''")}'`);
+      const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sqlText = `
+        SELECT 
+          o.created_at as created_at,
+          o.order_number as order_number,
+          o.customer_name as customer_name,
+          o.status as status,
+          o.total as total,
+          o.payment_method as payment_method,
+          o.branch_id as branch_id,
+          o.id as order_id
+        FROM orders o
+        ${clause}
+        ORDER BY o.created_at ASC
+      `;
+
+      const { rows } = await db.execute<any>(sql.raw(sqlText));
+      const header = [
+        "created_at","order_number","customer_name","status","total","payment_method","branch_id","order_id"
+      ];
+      const escape = (v: any) => {
+        const s = v == null ? "" : String(v);
+        if (s.includes(",") || s.includes("\n") || s.includes('"')) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+      const lines = [header.join(",")];
+      for (const r of rows) {
+        lines.push([
+          r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+          r.order_number,
+          r.customer_name ?? "",
+          r.status,
+          r.total,
+          r.payment_method,
+          r.branch_id,
+          r.order_id,
+        ].map(escape).join(","));
+      }
+      const startStr = filter.start ? new Date(filter.start).toISOString().slice(0,10) : 'all';
+      const endStr = filter.end ? new Date(filter.end).toISOString().slice(0,10) : 'now';
+      const branchStr = filter.branchId ? filter.branchId.slice(0,8) : 'all';
+      const filename = `orders-${branchStr}-${startStr}-${endStr}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=\"${filename}\"`);
+      res.send(lines.join("\n"));
+    } catch (err) {
+      logger.error({ err }, "Failed to export orders");
+      res.status(500).json({ message: "Failed to export orders" });
+    }
+  });
+
+  // Orders export (XLSX)
+  app.get("/api/reports/orders/export.xlsx", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) return res.status(400).json({ message: error });
+    try {
+      const status = (req.query.status as string | undefined)?.trim();
+      const method = (req.query.method as string | undefined)?.trim();
+      const where: string[] = ["o.is_delivery_request = false"]; // exclude delivery requests
+      if (filter.branchId) where.push(`o.branch_id = '${filter.branchId}'`);
+      if (filter.start) where.push(`o.created_at >= '${filter.start.toISOString()}'`);
+      if (filter.end) where.push(`o.created_at <= '${filter.end.toISOString()}'`);
+      if (status) {
+        where.push(`o.status = '${status.replace(/'/g, "''")}'`);
+      } else {
+        where.push("o.status <> 'cancelled'");
+      }
+      if (method) where.push(`o.payment_method = '${method.replace(/'/g, "''")}'`);
+      const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sqlText = `
+        SELECT o.created_at, o.order_number, o.customer_name, o.status, o.total, o.payment_method, o.branch_id, o.id as order_id
+        FROM orders o
+        ${clause}
+        ORDER BY o.created_at ASC
+      `;
+      const { rows } = await db.execute<any>(sql.raw(sqlText));
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Orders');
+      ws.columns = [
+        { header: 'created_at', key: 'created_at', width: 24 },
+        { header: 'order_number', key: 'order_number', width: 18 },
+        { header: 'customer_name', key: 'customer_name', width: 28 },
+        { header: 'status', key: 'status', width: 16 },
+        { header: 'total', key: 'total', width: 12 },
+        { header: 'payment_method', key: 'payment_method', width: 18 },
+        { header: 'branch_id', key: 'branch_id', width: 36 },
+        { header: 'order_id', key: 'order_id', width: 38 },
+      ];
+      rows.forEach((r) => ws.addRow({
+        created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+        order_number: r.order_number,
+        customer_name: r.customer_name ?? '',
+        status: r.status,
+        total: r.total,
+        payment_method: r.payment_method,
+        branch_id: r.branch_id,
+        order_id: r.order_id,
+      }));
+
+      const startStr = filter.start ? new Date(filter.start).toISOString().slice(0,10) : 'all';
+      const endStr = filter.end ? new Date(filter.end).toISOString().slice(0,10) : 'now';
+      const branchStr = filter.branchId ? filter.branchId.slice(0,8) : 'all';
+      const filename = `orders-${branchStr}-${startStr}-${endStr}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (err) {
+      logger.error({ err }, 'Failed to export orders xlsx');
+      res.status(500).json({ message: 'Failed to export orders' });
+    }
+  });
+
+  // Payments export (CSV)
+  app.get("/api/reports/payments/export", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const method = (req.query.method as string | undefined)?.trim();
+      const channel = (req.query.channel as string | undefined)?.trim();
+
+      const where: string[] = [];
+      if (filter.branchId) where.push(`p.branch_id = '${filter.branchId}'`);
+      if (filter.start) where.push(`p.created_at >= '${filter.start.toISOString()}'`);
+      if (filter.end) where.push(`p.created_at <= '${filter.end.toISOString()}'`);
+      if (method) where.push(`p.payment_method = '${method.replace(/'/g, "''")}'`);
+      if (channel) where.push(`p.channel = '${channel.replace(/'/g, "''")}'`);
+      const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sqlText = `
+        SELECT 
+          p.created_at as created_at,
+          p.amount as amount,
+          p.payment_method as payment_method,
+          p.channel as channel,
+          p.notes as notes,
+          p.received_by as received_by,
+          p.order_id as order_id,
+          p.customer_id as customer_id
+        FROM payments p
+        ${clause}
+        ORDER BY p.created_at ASC
+      `;
+
+      const { rows } = await db.execute<any>(sql.raw(sqlText));
+
+      const header = [
+        "created_at",
+        "amount",
+        "payment_method",
+        "channel",
+        "notes",
+        "received_by",
+        "order_id",
+        "customer_id",
+      ];
+
+      const escape = (v: any) => {
+        const s = v == null ? "" : String(v);
+        if (s.includes(",") || s.includes("\n") || s.includes('"')) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+
+      const lines = [header.join(",")];
+      for (const r of rows) {
+        lines.push([
+          r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+          r.amount,
+          r.payment_method,
+          r.channel ?? "",
+          r.notes ?? "",
+          r.received_by,
+          r.order_id ?? "",
+          r.customer_id,
+        ].map(escape).join(","));
+      }
+
+      const startStr = filter.start ? new Date(filter.start).toISOString().slice(0,10) : 'all';
+      const endStr = filter.end ? new Date(filter.end).toISOString().slice(0,10) : 'now';
+      const branchStr = filter.branchId ? filter.branchId.slice(0,8) : 'all';
+      const filename = `payments-${branchStr}-${startStr}-${endStr}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename=\"${filename}\"`);
+      res.send(lines.join("\n"));
+    } catch (err) {
+      logger.error({ err }, "Failed to export payments");
+      res.status(500).json({ message: "Failed to export payments" });
+    }
+  });
+
+  // Payments export (XLSX)
+  app.get("/api/reports/payments/export.xlsx", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) return res.status(400).json({ message: error });
+    try {
+      const method = (req.query.method as string | undefined)?.trim();
+      const channel = (req.query.channel as string | undefined)?.trim();
+      const where: string[] = [];
+      if (filter.branchId) where.push(`p.branch_id = '${filter.branchId}'`);
+      if (filter.start) where.push(`p.created_at >= '${filter.start.toISOString()}'`);
+      if (filter.end) where.push(`p.created_at <= '${filter.end.toISOString()}'`);
+      if (method) where.push(`p.payment_method = '${method.replace(/'/g, "''")}'`);
+      if (channel) where.push(`p.channel = '${channel.replace(/'/g, "''")}'`);
+      const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const sqlText = `
+        SELECT p.created_at, p.amount, p.payment_method, p.channel, p.notes, p.received_by, p.order_id, p.customer_id
+        FROM payments p
+        ${clause}
+        ORDER BY p.created_at ASC
+      `;
+      const { rows } = await db.execute<any>(sql.raw(sqlText));
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Payments');
+      ws.columns = [
+        { header: 'created_at', key: 'created_at', width: 24 },
+        { header: 'amount', key: 'amount', width: 12 },
+        { header: 'payment_method', key: 'payment_method', width: 16 },
+        { header: 'channel', key: 'channel', width: 12 },
+        { header: 'notes', key: 'notes', width: 40 },
+        { header: 'received_by', key: 'received_by', width: 24 },
+        { header: 'order_id', key: 'order_id', width: 38 },
+        { header: 'customer_id', key: 'customer_id', width: 38 },
+      ];
+      rows.forEach((r) => ws.addRow({
+        created_at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
+        amount: r.amount,
+        payment_method: r.payment_method,
+        channel: r.channel ?? '',
+        notes: r.notes ?? '',
+        received_by: r.received_by,
+        order_id: r.order_id ?? '',
+        customer_id: r.customer_id,
+      }));
+
+      const startStr = filter.start ? new Date(filter.start).toISOString().slice(0,10) : 'all';
+      const endStr = filter.end ? new Date(filter.end).toISOString().slice(0,10) : 'now';
+      const branchStr = filter.branchId ? filter.branchId.slice(0,8) : 'all';
+      const filename = `payments-${branchStr}-${startStr}-${endStr}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      await wb.xlsx.write(res);
+      res.end();
+    } catch (err) {
+      logger.error({ err }, 'Failed to export payments xlsx');
+      res.status(500).json({ message: 'Failed to export payments' });
+    }
+  });
+
   // Pay-later receipts report (payments received by date)
   app.get("/api/reports/pay-later-receipts", requireAdminOrSuperAdmin, async (req, res) => {
     try {
@@ -4428,6 +5276,20 @@ export async function registerRoutes(
       res.json(summary);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch pay-later order-date summary" });
+    }
+  });
+
+  // Financial report endpoint (cash sales, outstanding, cash and card receipts)
+  app.get("/api/reports/financials", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const filter: any = {};
+      if (req.query.start) filter.start = new Date(req.query.start as string);
+      if (req.query.end) filter.end = new Date(req.query.end as string);
+      if (req.query.branchId) filter.branchId = req.query.branchId as string;
+      const report = await storage.getFinancialReport(filter);
+      res.json(report);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch financial report" });
     }
   });
 
@@ -5000,7 +5862,7 @@ export async function registerRoutes(
       const items = await storage.getExpenses(effectiveBranchId, startDate, endDate, q as string | undefined);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="expenses_${start || 'all'}_${end || 'all'}.csv"`);
-      const header = ["category", "amount", "incurredAt", "notes"];
+      const header = ["category", "amount", "incurredAt", "notes", "paymentMethod"];
       res.write(header.join(",") + "\n");
       for (const r of items) {
         const row = [
@@ -5008,6 +5870,7 @@ export async function registerRoutes(
           JSON.stringify((r as any).amount ?? ""),
           JSON.stringify((r as any).incurredAt ? new Date((r as any).incurredAt).toISOString().slice(0,10) : ""),
           JSON.stringify((r as any).notes ?? ""),
+          JSON.stringify((r as any).paymentMethod ?? ""),
         ];
         res.write(row.join(",") + "\n");
       }
@@ -5037,6 +5900,7 @@ export async function registerRoutes(
         { header: "Amount", key: "amount", width: 15 },
         { header: "Date", key: "incurredAt", width: 15 },
         { header: "Notes", key: "notes", width: 50 },
+        { header: "Method", key: "paymentMethod", width: 16 },
       ];
       ws.addRows(
         items.map((r: any) => ({
@@ -5044,6 +5908,7 @@ export async function registerRoutes(
           amount: Number(r.amount || 0),
           incurredAt: r.incurredAt ? new Date(r.incurredAt).toISOString().slice(0, 10) : "",
           notes: r.notes || "",
+          paymentMethod: r.paymentMethod || "",
         }))
       );
       res.setHeader(

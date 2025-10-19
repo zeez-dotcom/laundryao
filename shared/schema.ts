@@ -30,6 +30,7 @@ export const orderStatusEnum = [
   "ready",
   "handed_over",
   "completed",
+  "cancelled",
 ] as const;
 
 export const promisedReadyOptionEnum = [
@@ -504,8 +505,11 @@ export const payments = pgTable("payments", {
   branchId: uuid("branch_id").references(() => branches.id),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
   paymentMethod: text("payment_method").notNull(),
+  channel: text("channel"), // 'pos' | 'online' (optional)
   notes: text("notes"),
   receivedBy: varchar("received_by", { length: 255 }).notNull(),
+  isOverpayOverride: boolean("is_overpay_override").notNull().default(false),
+  overrideReason: text("override_reason"),
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
@@ -515,11 +519,33 @@ export const expenses = pgTable("expenses", {
   branchId: uuid("branch_id").references(() => branches.id).notNull(),
   category: text("category").notNull(),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  paymentMethod: text("payment_method"), // 'cash' | 'card' | 'bank_transfer' (optional)
   notes: text("notes"),
   incurredAt: timestamptz("incurred_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   createdBy: uuid("created_by").references(() => users.id).notNull(),
   createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
+
+// Cash drawer sessions for reconciliation
+export const cashSessions = pgTable(
+  "cash_sessions",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    cashierId: uuid("cashier_id").references(() => users.id).notNull(),
+    openedAt: timestamptz("opened_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    closedAt: timestamptz("closed_at"),
+    openingFloat: numeric("opening_float", { precision: 10, scale: 2 }).notNull().default("0" as any),
+    countedCash: numeric("counted_cash", { precision: 10, scale: 2 }),
+    expectedCash: numeric("expected_cash", { precision: 10, scale: 2 }),
+    variance: numeric("variance", { precision: 10, scale: 2 }),
+    counts: jsonb("counts").notNull().default(sql`'{}'::jsonb`),
+    notes: text("notes"),
+  },
+  (table) => ({
+    branchOpenedIdx: index("cash_sessions_branch_opened_idx").on(table.branchId, table.openedAt),
+  })
+);
 
 export const auditEvents = pgTable(
   "audit_events",
@@ -568,6 +594,26 @@ export const dataQualityExceptions = pgTable(
     checkIdx: index("data_quality_exceptions_check_idx").on(table.checkName),
   }),
 );
+
+// GL account mappings (basic)
+export const glMappings = pgTable(
+  "gl_mappings",
+  {
+    id: uuid("id").primaryKey().default(uuidFn),
+    branchId: uuid("branch_id").references(() => branches.id).notNull(),
+    key: text("key").notNull(), // e.g., expense category name
+    account: text("account").notNull(),
+    type: text("type").notNull().default('expense'), // 'expense' | future: 'revenue','asset','liability'
+    createdAt: timestamptz("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+    updatedAt: timestamptz("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  },
+  (table) => ({
+    branchKeyUnique: uniqueIndex("gl_mappings_branch_key_unique").on(table.branchId, table.key),
+  })
+);
+
+export const insertGlMappingSchema = createInsertSchema(glMappings).omit({ id: true, createdAt: true, updatedAt: true });
+export type GlMapping = typeof glMappings.$inferSelect;
 
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().default(uuidFn),
@@ -1245,6 +1291,19 @@ export const insertPaymentSchema = createInsertSchema(payments).omit({
   createdAt: true,
 });
 
+export const insertCashSessionSchema = createInsertSchema(cashSessions).omit({
+  id: true,
+  openedAt: true,
+  closedAt: true,
+  expectedCash: true,
+  variance: true,
+});
+
+export const updateCashSessionSchema = insertCashSessionSchema.partial();
+
+export type CashSession = typeof cashSessions.$inferSelect;
+export type InsertCashSession = z.infer<typeof insertCashSessionSchema>;
+
 export const insertNotificationSchema = createInsertSchema(notifications).omit({
   id: true,
   sentAt: true,
@@ -1451,6 +1510,7 @@ export interface OrderLog {
   customerName: string;
   packageName?: string | null;
   status: string;
+  cancelReason?: string | null;
   createdAt?: string | null;
   promisedReadyDate?: string | null;
   events: OrderTimelineEvent[];
@@ -1544,6 +1604,7 @@ export const branchCustomizationTable = pgTable("branch_customizations", {
   requireAddressForGuests: boolean("require_address_for_guests").default(true),
   // Feature flags
   expensesEnabled: boolean("expenses_enabled").default(false).notNull(),
+  payLaterStaleDays: integer("pay_later_stale_days").default(14),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

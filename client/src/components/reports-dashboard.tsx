@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Package as PackageIcon, FileDown } from "lucide-react";
+import SavedViewsBar from "@/components/SavedViewsBar";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,11 +12,16 @@ import { Transaction } from "@shared/schema";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { OrderLogsTable } from "./order-logs-table";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 import OrderDetailModal from "@/components/OrderDetailModal";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
 import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiSelectItem, SelectTrigger as UiSelectTrigger, SelectValue as UiSelectValue } from "@/components/ui/select";
+import { RecordPaymentDialog } from "@/components/record-payment-dialog";
 import { apiRequest } from "@/lib/queryClient";
+import { Input } from "@/components/ui/input";
+import CashDrawerManager from "@/components/admin/CashDrawerManager";
+import GlMappingsManager from "@/components/admin/GlMappingsManager";
 
 type RevenueSummary = {
   totalOrders: number;
@@ -228,6 +234,18 @@ export function ReportsDashboard() {
     keepPreviousData: true,
   });
 
+  // Exceptions banner
+  const { data: exceptions } = useQuery<any>({
+    queryKey: ["/api/reports/exceptions", startIso, endIso, reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const res = await fetch(`/api/reports/exceptions?${params.toString()}`, { credentials: 'include' });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    keepPreviousData: true,
+  });
+
   // Pay-later receipts attributed to payment (receipt) date
   const { data: receiptsData } = useQuery<PayLaterReceipts>({
     queryKey: ["/api/reports/pay-later-receipts", startIso, endIso, reportsBranchId || branch?.id],
@@ -311,6 +329,108 @@ export function ReportsDashboard() {
     keepPreviousData: true,
   });
 
+  // Financial report (cash sales, outstanding, receipts)
+  type FinancialsResponse = {
+    totals: { cashSales: number; cashOutstanding: number; cashReceived: number; cardReceived: number; expensesTotal?: number; netCash?: number };
+    cashSales: { orderId: string; orderNumber: string; customerName: string | null; date: string; total: number }[];
+    cashReceipts: { paymentId: string; amount: number; date: string; source: 'regular_order' | 'pay_later_receipt' | 'package_or_other'; orderId: string | null; orderNumber: string | null; customerName: string | null; customerId?: string | null }[];
+    cardReceipts: { paymentId: string; amount: number; date: string; source: 'regular_order' | 'pay_later_receipt' | 'package_or_other'; orderId: string | null; orderNumber: string | null; customerName: string | null; customerId?: string | null }[];
+  };
+  const { data: financials } = useQuery<FinancialsResponse>({
+    queryKey: ["/api/reports/financials", startIso, endIso, reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const res = await fetch(`/api/reports/financials?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) return { totals: { cashSales: 0, cashOutstanding: 0, cashReceived: 0, cardReceived: 0 }, cashSales: [], cashReceipts: [], cardReceipts: [] };
+      return res.json();
+    },
+    keepPreviousData: true,
+  });
+
+  // Financials filters + CSV helpers
+  const [filterMethod, setFilterMethod] = useState<'all' | 'cash' | 'card'>('all');
+  const [filterSource, setFilterSource] = useState<'all' | 'regular_order' | 'pay_later_receipt' | 'package_or_other'>('all');
+  const cashAll = financials?.cashReceipts ?? [];
+  const cardAll = financials?.cardReceipts ?? [];
+  const matchSource = (s: string) => filterSource === 'all' || s === filterSource;
+  const filteredCash = cashAll.filter((p) => (filterMethod === 'all' || filterMethod === 'cash') && matchSource(p.source));
+  const filteredCard = cardAll.filter((p) => (filterMethod === 'all' || filterMethod === 'card') && matchSource(p.source));
+
+  function exportReceiptsCsv(kind: 'cash' | 'card', rows: any[]) {
+  const header = ["Date","Amount","Source","Channel","Order","Customer"];
+  const data = rows.map((p) => [
+    format(new Date(p.date), 'yyyy-MM-dd HH:mm'),
+    String(p.amount),
+    p.source,
+    (p as any).channel || '',
+    p.orderNumber ?? (p.orderId ? p.orderId.slice(-6) : ''),
+    p.customerName ?? ''
+  ]);
+    const all = [header, ...data];
+    const csv = all.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${kind}-receipts-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCashSalesCsv(rows: any[]) {
+    const header = ["Order #","Customer","Date","Total"];
+    const data = rows.map((r) => [r.orderNumber ?? r.orderId?.slice(-6) ?? '', r.customerName ?? '', format(new Date(r.date), 'yyyy-MM-dd HH:mm'), String(r.total)]);
+    const all = [header, ...data];
+    const csv = all.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cash-sales-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportCashierCsv(rows: any[]) {
+    const header = ["Cashier","Cash","Card","Total","Transactions"];
+    const data = rows.map((r) => [r.name, String(r.cash), String(r.card), String(r.total), String(r.count)]);
+    const all = [header, ...data];
+    const csv = all.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cashier-breakdown-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Cashier breakdown
+  const cashierRows = (() => {
+    const byCashier = new Map<string, { cash: number; card: number; count: number }>();
+    for (const p of cashAll) {
+      const name = (p as any).cashier || 'Unknown';
+      const cur = byCashier.get(name) || { cash: 0, card: 0, count: 0 };
+      cur.cash += Number(p.amount || 0);
+      cur.count += 1;
+      byCashier.set(name, cur);
+    }
+    for (const p of cardAll) {
+      const name = (p as any).cashier || 'Unknown';
+      const cur = byCashier.get(name) || { cash: 0, card: 0, count: 0 };
+      cur.card += Number(p.amount || 0);
+      cur.count += 1;
+      byCashier.set(name, cur);
+    }
+    return Array.from(byCashier.entries()).map(([name, v]) => ({ name, cash: v.cash, card: v.card, total: v.cash + v.card, count: v.count }));
+  })();
+
   const [receiptsView, setReceiptsView] = useState<'payment' | 'order'>('payment');
   const [showOutstandingOnly, setShowOutstandingOnly] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
@@ -318,11 +438,7 @@ export function ReportsDashboard() {
   const [addOpen, setAddOpen] = useState(false);
   const [addCustomerId, setAddCustomerId] = useState<string | null>(null);
   const [addOrderId, setAddOrderId] = useState<string | null>(null);
-  const [addAmount, setAddAmount] = useState<string>("");
-  const [addMethod, setAddMethod] = useState<string>("cash");
-  const [addNotes, setAddNotes] = useState<string>("");
-  const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
+  const [addDefaultAmount, setAddDefaultAmount] = useState<number | null>(null);
 
   // Super admin branch selector
   type Branch = { id: string; name: string };
@@ -460,7 +576,28 @@ export function ReportsDashboard() {
             <h1 className="text-3xl font-bold text-gray-900">Reports & Analytics</h1>
           </div>
 
-          <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-4">
+            <SavedViewsBar
+              pageId="reports-dashboard"
+              current={{
+                range,
+                start: dateRange?.from ? startOfDay(dateRange.from).toISOString() : undefined,
+                end: dateRange?.to ? endOfDay(dateRange.to).toISOString() : undefined,
+                branchId: reportsBranchId || branch?.id,
+              }}
+              onApply={(v: any) => {
+                if (v.range) setRange(v.range);
+                const from = v.start ? new Date(v.start) : dateRange?.from;
+                const to = v.end ? new Date(v.end) : dateRange?.to;
+                setDateRange({ from, to } as any);
+                if (v.branchId) setReportsBranchId(v.branchId);
+              }}
+              getName={(v: any) => {
+                const s = (v.start || '').slice(0,10);
+                const e = (v.end || '').slice(0,10);
+                return `${v.range || 'daily'}-${s}-${e}`;
+              }}
+            />
             <DatePickerWithRange
               date={dateRange}
               onDateChange={setDateRange}
@@ -484,8 +621,41 @@ export function ReportsDashboard() {
           </div>
         </div>
 
+        {/* Cash Drawer Manager */
+        <div className="mb-6">
+          <CashDrawerManager />
+        </div>
+
+        {/* GL Mappings */}
+        <div className="mb-6">
+          <GlMappingsManager />
+        </div>
+
+        {exceptions && (
+          <div className="mb-6 p-4 border rounded bg-amber-50">
+            <div className="flex items-center justify-between">
+              <div className="font-semibold">Exceptions</div>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-3 text-sm">
+              <div>
+                <div className="text-muted-foreground">Overpay Overrides</div>
+                <div className="font-medium">{exceptions.overpayOverrides?.count ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Stale Pay-Later (>{exceptions.stalePayLater?.thresholdDays} days)</div>
+                <div className="font-medium">{exceptions.stalePayLater?.count ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Cancellation Spike</div>
+                <div className="font-medium">{exceptions.cancellationSpike?.isSpike ? `Yes (${Math.round((exceptions.cancellationSpike.recentRate||0)*100)}% vs ${Math.round((exceptions.cancellationSpike.baselineRate||0)*100)}%)` : 'No'}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Key Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div id="cash-sales" />
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
@@ -499,6 +669,7 @@ export function ReportsDashboard() {
             </CardContent>
           </Card>
 
+          <div id="cash-receipts" />
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Total Orders</CardTitle>
@@ -512,6 +683,7 @@ export function ReportsDashboard() {
             </CardContent>
           </Card>
 
+          <div id="card-receipts" />
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Avg. Order Value</CardTitle>
@@ -527,7 +699,15 @@ export function ReportsDashboard() {
         </div>
 
         <Tabs defaultValue="services" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-1">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-10 gap-1">
+            <TabsTrigger value="financials" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Financials</span>
+              <span className="sm:hidden">Fin</span>
+            </TabsTrigger>
+            <TabsTrigger value="expenses" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Expenses</span>
+              <span className="sm:hidden">Exp</span>
+            </TabsTrigger>
             <TabsTrigger value="services" className="text-xs sm:text-sm">
               <span className="hidden sm:inline">Services</span>
               <span className="sm:hidden">Svc</span>
@@ -564,7 +744,272 @@ export function ReportsDashboard() {
               <span className="hidden sm:inline">Outstanding (Aging)</span>
               <span className="sm:hidden">Aging</span>
             </TabsTrigger>
-          </TabsList>
+        </TabsList>
+
+        <TabsContent value="financials" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+            <Card className="cursor-pointer" onClick={() => { const el = document.getElementById('cash-sales'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Cash Sales</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(financials?.totals.cashSales ?? 0)}</div>
+                <p className="text-xs text-muted-foreground">Orders paid by cash</p>
+              </CardContent>
+            </Card>
+            <Card className="cursor-pointer" onClick={() => { const el = document.getElementById('aging'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Cash Outstanding</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(financials?.totals.cashOutstanding ?? 0)}</div>
+                <p className="text-xs text-muted-foreground">Pay-later remaining balance</p>
+              </CardContent>
+            </Card>
+            <Card className="cursor-pointer" onClick={() => { const el = document.getElementById('cash-receipts'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Cash Received</CardTitle>
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(financials?.totals.cashReceived ?? 0)}</div>
+                <p className="text-xs text-muted-foreground">Payments table (cash)</p>
+              </CardContent>
+            </Card>
+            <Card className="cursor-pointer" onClick={() => { const el = document.getElementById('card-receipts'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Card Received</CardTitle>
+                <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(financials?.totals.cardReceived ?? 0)}</div>
+                <p className="text-xs text-muted-foreground">Payments table (card)</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Expenses</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(financials?.totals.expensesTotal ?? 0)}</div>
+                <p className="text-xs text-muted-foreground">In selected period</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Net (Cash − Expenses)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency((financials?.totals.cashReceived ?? 0) - (financials?.totals.expensesTotal ?? 0))}</div>
+                <p className="text-xs text-muted-foreground">Cash received minus expenses</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Net (Cash+Card − Expenses)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{formatCurrency(((financials?.totals.cashReceived ?? 0) + (financials?.totals.cardReceived ?? 0)) - (financials?.totals.expensesTotal ?? 0))}</div>
+                <p className="text-xs text-muted-foreground">All receipts minus expenses</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Filters + CSV exports */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Filter receipts:</span>
+              <UiSelect value={String(filterMethod)} onValueChange={(v) => setFilterMethod(v as any)}>
+                <UiSelectTrigger className="w-[140px]"><UiSelectValue placeholder="Method" /></UiSelectTrigger>
+                <UiSelectContent>
+                  <UiSelectItem value="all">All methods</UiSelectItem>
+                  <UiSelectItem value="cash">Cash</UiSelectItem>
+                  <UiSelectItem value="card">Card</UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+              <UiSelect value={String(filterSource)} onValueChange={(v) => setFilterSource(v as any)}>
+                <UiSelectTrigger className="w-[200px]"><UiSelectValue placeholder="Source" /></UiSelectTrigger>
+                <UiSelectContent>
+                  <UiSelectItem value="all">All sources</UiSelectItem>
+                  <UiSelectItem value="regular_order">Regular orders</UiSelectItem>
+                  <UiSelectItem value="pay_later_receipt">Pay-later receipts</UiSelectItem>
+                  <UiSelectItem value="package_or_other">Packages/Other</UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => exportReceiptsCsv('cash', filteredCash)}><FileDown className="h-4 w-4 mr-1" /> Cash CSV</Button>
+              <Button variant="outline" size="sm" onClick={() => exportReceiptsCsv('card', filteredCard)}><FileDown className="h-4 w-4 mr-1" /> Card CSV</Button>
+              <Button variant="outline" size="sm" onClick={() => exportCashSalesCsv(financials?.cashSales ?? [])}><FileDown className="h-4 w-4 mr-1" /> Sales CSV</Button>
+              <Button variant="outline" size="sm" onClick={() => exportCashierCsv(cashierRows)}><FileDown className="h-4 w-4 mr-1" /> Cashier CSV</Button>
+            </div>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Recent Cash Sales</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-[var(--surface-muted)]">
+                    <tr>
+                      <th className="text-left p-2">Order #</th>
+                      <th className="text-left p-2">Customer</th>
+                      <th className="text-left p-2">Date</th>
+                      <th className="text-right p-2">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(financials?.cashSales ?? []).map((r) => (
+                      <tr key={r.orderId} className="border-t">
+                        <td className="p-2"><button className="text-blue-600 hover:underline" onClick={() => setLocation(`/orders/${r.orderId}`)}>{r.orderNumber}</button></td>
+                        <td className="p-2">{r.customerName ?? ''}</td>
+                        <td className="p-2">{format(new Date(r.date), 'MMM dd, yyyy HH:mm')}</td>
+                        <td className="p-2 text-right">{formatCurrency(r.total)}</td>
+                      </tr>
+                    ))}
+                    {((financials?.cashSales ?? []).length === 0) && (
+                      <tr><td className="p-2" colSpan={4}>No cash sales in range</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Cash Payments Received</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-[var(--surface-muted)]">
+                    <tr>
+                      <th className="text-left p-2">Date</th>
+                      <th className="text-right p-2">Amount</th>
+                      <th className="text-left p-2">Source</th>
+                      <th className="text-left p-2">Channel</th>
+                      <th className="text-left p-2">Cashier</th>
+                      <th className="text-left p-2">Order</th>
+                      <th className="text-left p-2">Customer</th>
+                      <th className="text-left p-2">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCash.map((p) => (
+                      <tr key={p.paymentId} className="border-t">
+                        <td className="p-2">{format(new Date(p.date), 'MMM dd, yyyy HH:mm')}</td>
+                        <td className="p-2 text-right">{formatCurrency(p.amount)}</td>
+                        <td className="p-2 capitalize">{p.source.replaceAll('_',' ')}</td>
+                        <td className="p-2 uppercase">{(p as any).channel || 'POS'}</td>
+                        <td className="p-2">{p['cashier'] ?? '-'}</td>
+                        <td className="p-2">{p.orderId ? <button className="text-blue-600 hover:underline" onClick={() => setLocation(`/orders/${p.orderId}`)}>{p.orderNumber ?? p.orderId.slice(-6)}</button> : '-'}</td>
+                        <td className="p-2">{p.customerName ?? ''}</td>
+                        <td className="p-2">
+                          {p.customerId && (
+                            <Button size="sm" variant="outline" onClick={() => { setAddCustomerId(p.customerId!); setAddOrderId(p.orderId ?? null); setAddDefaultAmount(undefined as any); setAddOpen(true); }}>Record Payment</Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredCash.length === 0 && (
+                      <tr><td className="p-2" colSpan={5}>No cash receipts in range</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Card Payments Received</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-[var(--surface-muted)]">
+                    <tr>
+                      <th className="text-left p-2">Date</th>
+                      <th className="text-right p-2">Amount</th>
+                      <th className="text-left p-2">Source</th>
+                      <th className="text-left p-2">Channel</th>
+                      <th className="text-left p-2">Cashier</th>
+                      <th className="text-left p-2">Order</th>
+                      <th className="text-left p-2">Customer</th>
+                      <th className="text-left p-2">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCard.map((p) => (
+                      <tr key={p.paymentId} className="border-t">
+                        <td className="p-2">{format(new Date(p.date), 'MMM dd, yyyy HH:mm')}</td>
+                        <td className="p-2 text-right">{formatCurrency(p.amount)}</td>
+                        <td className="p-2 capitalize">{p.source.replaceAll('_',' ')}</td>
+                        <td className="p-2 uppercase">{(p as any).channel || 'POS'}</td>
+                        <td className="p-2">{p['cashier'] ?? '-'}</td>
+                        <td className="p-2">{p.orderId ? <button className="text-blue-600 hover:underline" onClick={() => setLocation(`/orders/${p.orderId}`)}>{p.orderNumber ?? p.orderId.slice(-6)}</button> : '-'}</td>
+                        <td className="p-2">{p.customerName ?? ''}</td>
+                        <td className="p-2">
+                          {p.customerId && (
+                            <Button size="sm" variant="outline" onClick={() => { setAddCustomerId(p.customerId!); setAddOrderId(p.orderId ?? null); setAddDefaultAmount(undefined as any); setAddOpen(true); }}>Record Payment</Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredCard.length === 0 && (
+                      <tr><td className="p-2" colSpan={5}>No card receipts in range</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Cashier breakdown */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Cashier Breakdown</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-[var(--surface-muted)]">
+                    <tr>
+                      <th className="text-left p-2">Cashier</th>
+                      <th className="text-right p-2">Cash</th>
+                      <th className="text-right p-2">Card</th>
+                      <th className="text-right p-2">Total</th>
+                      <th className="text-right p-2">Transactions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cashierRows.map((r) => (
+                      <tr key={r.name} className="border-t">
+                        <td className="p-2">{r.name}</td>
+                        <td className="p-2 text-right">{formatCurrency(r.cash)}</td>
+                        <td className="p-2 text-right">{formatCurrency(r.card)}</td>
+                        <td className="p-2 text-right">{formatCurrency(r.total)}</td>
+                        <td className="p-2 text-right">{r.count}</td>
+                      </tr>
+                    ))}
+                    {cashierRows.length === 0 && (
+                      <tr><td className="p-2" colSpan={5}>No receipts in range</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="expenses" className="space-y-4">
+          <ExpensesTab startIso={startIso} endIso={endIso} branchId={reportsBranchId || branch?.id} />
+        </TabsContent>
 
           <TabsContent value="services" className="space-y-4">
             <Card>
@@ -977,7 +1422,7 @@ export function ReportsDashboard() {
                                     size="sm"
                                     variant="outline"
                                     className="ml-2"
-                                    onClick={() => { setAddCustomerId(d.customerId!); setAddOrderId(d.orderId ?? null); setAddOpen(true); }}
+                                    onClick={() => { setAddCustomerId(d.customerId!); setAddOrderId(d.orderId ?? null); setAddDefaultAmount(d.remaining ?? null); setAddOpen(true); }}
                                   >
                                     Add payment
                                   </Button>
@@ -1106,78 +1551,40 @@ export function ReportsDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <OutstandingOrdersTable rangeParams={rangeParamsStr} onOpenDetail={(id: string) => { setDetailOrderId(id); setDetailOpen(true); }} />
+              <OutstandingOrdersTable
+                rangeParams={rangeParamsStr}
+                onOpenDetail={(id: string) => { setDetailOrderId(id); setDetailOpen(true); }}
+                onRecordPayment={(customerId: string, orderId: string, defaultAmount?: number) => {
+                  setAddCustomerId(customerId);
+                  setAddOrderId(orderId);
+                  setAddDefaultAmount(defaultAmount ?? null);
+                  setAddOpen(true);
+                }}
+              />
             </CardContent>
           </Card>
         </TabsContent>
         </Tabs>
       </div>
     </div>
-    {addOpen && (
-      <div className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center">
-        <div className="bg-white rounded shadow-lg w-[90%] max-w-md p-4">
-          <div className="font-semibold text-lg mb-2">Add Payment</div>
-          <div className="grid gap-3">
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Amount</label>
-              <input className="w-full border rounded px-2 py-1" type="number" min="0" step="0.01" value={addAmount} onChange={(e) => setAddAmount(e.target.value)} placeholder="0.00" />
-            </div>
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Method</label>
-              <UiSelect value={addMethod} onValueChange={(v) => setAddMethod(v)}>
-                <UiSelectTrigger>
-                  <UiSelectValue placeholder="Payment method" />
-                </UiSelectTrigger>
-                <UiSelectContent>
-                  <UiSelectItem value="cash">Cash</UiSelectItem>
-                  <UiSelectItem value="card">Card</UiSelectItem>
-                  <UiSelectItem value="knet">KNET</UiSelectItem>
-                  <UiSelectItem value="credit_card">Credit Card</UiSelectItem>
-                </UiSelectContent>
-              </UiSelect>
-            </div>
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">Notes</label>
-              <input className="w-full border rounded px-2 py-1" value={addNotes} onChange={(e) => setAddNotes(e.target.value)} placeholder="Optional" />
-            </div>
-            {addError && <div className="text-sm text-destructive">{addError}</div>}
-            <div className="flex justify-end gap-2 mt-2">
-              <Button variant="outline" onClick={() => { setAddOpen(false); setAddError(null); setAddAmount(""); }}>Cancel</Button>
-              <Button disabled={adding || !addCustomerId || !addAmount || Number(addAmount) <= 0} onClick={async () => {
-                if (!addCustomerId) return;
-                setAdding(true);
-                setAddError(null);
-                try {
-                  const body: any = {
-                    orderId: addOrderId || undefined,
-                    amount: Number(addAmount),
-                    paymentMethod: addMethod,
-                    notes: addNotes || undefined,
-                    receivedBy: 'POS User',
-                  };
-                  await apiRequest('POST', `/api/customers/${addCustomerId}/payments`, body);
-                  setAddOpen(false);
-                  setAddAmount(""); setAddNotes("");
-                  queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-receipts"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-aging"] });
-                  queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-outstanding-orders"] });
-                } catch (e: any) {
-                  setAddError(e?.message || 'Failed to add payment');
-                } finally {
-                  setAdding(false);
-                }
-              }}>{adding ? 'Adding…' : 'Add Payment'}</Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
+    <RecordPaymentDialog
+      open={addOpen}
+      onOpenChange={(v) => setAddOpen(v)}
+      customerId={addCustomerId || ''}
+      defaultAmount={addDefaultAmount ?? undefined}
+      orderId={addOrderId ?? undefined}
+      onSuccess={() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-receipts"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-aging"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/reports/pay-later-outstanding-orders"] });
+      }}
+    />
     <OrderDetailModal orderId={detailOrderId} isOpen={detailOpen} onClose={() => setDetailOpen(false)} />
     </>
   );
 }
 
-function OutstandingOrdersTable({ rangeParams, onOpenDetail }: { rangeParams: string; onOpenDetail: (id: string) => void }) {
+function OutstandingOrdersTable({ rangeParams, onOpenDetail, onRecordPayment }: { rangeParams: string; onOpenDetail: (id: string) => void; onRecordPayment: (customerId: string, orderId: string, defaultAmount?: number) => void }) {
   const { formatCurrency } = useCurrency();
   const { data, isLoading } = useQuery<{ orders: any[] }>({
     queryKey: ["/api/reports/pay-later-outstanding-orders", rangeParams],
@@ -1204,6 +1611,7 @@ function OutstandingOrdersTable({ rangeParams, onOpenDetail }: { rangeParams: st
             <th className="text-right p-2">Age (days)</th>
             <th className="text-left p-2">Status</th>
             <th className="text-left p-2">Items Status</th>
+            <th className="text-left p-2">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1226,10 +1634,269 @@ function OutstandingOrdersTable({ rangeParams, onOpenDetail }: { rangeParams: st
               <td className="p-2 text-right">{o.ageDays}</td>
               <td className="p-2 capitalize">{o.status}</td>
               <td className="p-2">{o.inShop ? 'In shop' : 'Handed over'}</td>
+              <td className="p-2">
+                {o.customerId && (
+                  <Button size="sm" variant="outline" onClick={() => onRecordPayment(o.customerId, o.orderId, o.remaining)}>Record Payment</Button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function ExpensesTab({ startIso, endIso, branchId }: { startIso?: string; endIso?: string; branchId?: string }) {
+  const { formatCurrency } = useCurrency();
+  const [search, setSearch] = useState("");
+  const [categories, setCategories] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Expense | null>(null);
+  const [category, setCategory] = useState("");
+  const [amount, setAmount] = useState("");
+  const [notes, setNotes] = useState("");
+  const [incurredAt, setIncurredAt] = useState<string>("");
+  const queryClient = useQueryClient();
+
+  const params = new URLSearchParams();
+  if (startIso) params.set("start", startIso);
+  if (endIso) params.set("end", endIso);
+  if (branchId) params.set("branchId", branchId);
+  if (search) params.set("q", search);
+
+  type Expense = { id: string; category: string; amount: string; notes?: string | null; incurredAt: string; createdBy: string };
+  const { data, error } = useQuery<{ data: Expense[]; total: number } | Expense[]>({
+    queryKey: ["/api/expenses", startIso, endIso, branchId, search],
+    queryFn: async () => {
+      const res = await fetch(`/api/expenses?${params.toString()}`, { credentials: 'include' });
+      if (res.status === 403) return { data: [], total: 0 } as any; // feature disabled
+      if (!res.ok) return { data: [], total: 0 } as any;
+      return res.json();
+    },
+    keepPreviousData: true,
+  });
+  const list: Expense[] = Array.isArray(data) ? data : (data?.data ?? []);
+  const total = list.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+
+  async function createExpense() {
+    const amt = parseFloat(amount);
+    if (!(amt > 0) || !category.trim()) return;
+    await apiRequest('POST', '/api/expenses', {
+      category: category.trim(),
+      amount: amt.toFixed(2),
+      notes: notes || undefined,
+      incurredAt: incurredAt ? new Date(incurredAt).toISOString() : undefined,
+      ...(branchId ? { branchId } : {}),
+    });
+    setOpen(false); setCategory(""); setAmount(""); setNotes(""); setIncurredAt("");
+    queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/reports/financials"] });
+  }
+
+  async function updateExpense() {
+    if (!editing) return;
+    const amt = parseFloat(amount);
+    if (!(amt > 0) || !category.trim()) return;
+    await apiRequest('PUT', `/api/expenses/${editing.id}`, {
+      category: category.trim(),
+      amount: amt.toFixed(2),
+      notes: notes || undefined,
+      incurredAt: incurredAt ? new Date(incurredAt).toISOString() : undefined,
+    });
+    setEditing(null); setOpen(false); setCategory(""); setAmount(""); setNotes(""); setIncurredAt("");
+    queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/reports/financials"] });
+  }
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  async function deleteExpense(id: string) {
+    await apiRequest('DELETE', `/api/expenses/${id}`);
+    queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/reports/financials"] });
+  }
+
+  function exportExpensesCsv(rows: any[]) {
+    const header = ["Date","Category","Notes","Amount"];
+    const data = rows.map((e) => [
+      new Date(e.incurredAt).toISOString().replace('T',' ').slice(0,16),
+      e.category,
+      e.notes ?? '',
+      String(e.amount)
+    ]);
+    const all = [header, ...data];
+    const csv = all.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `expenses-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportExpensesByCategoryCsv(rows: Array<[string, number]>) {
+    const header = ["Category","Total"];
+    const data = rows.map(([cat, sum]) => [cat, String(sum)]);
+    const all = [header, ...data];
+    const csv = all.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `expenses-by-category-${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Input placeholder="Search expenses" value={search} onChange={(e) => setSearch(e.target.value)} className="w-64" />
+          <div className="text-sm text-muted-foreground">Total in range: <span className="font-semibold">{formatCurrency(total)}</span></div>
+        </div>
+        <Button onClick={() => setOpen(true)}>Add Expense</Button>
+      </div>
+
+      <div className="overflow-x-auto border rounded">
+        <table className="min-w-full text-sm">
+          <thead className="bg-[var(--surface-muted)]">
+            <tr>
+              <th className="text-left p-2">Date</th>
+              <th className="text-left p-2">Category</th>
+              <th className="text-left p-2">Notes</th>
+              <th className="text-right p-2">Amount</th>
+              <th className="text-left p-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((e) => (
+              <tr key={e.id} className="border-t">
+                <td className="p-2">{new Date(e.incurredAt).toLocaleString()}</td>
+                <td className="p-2">{e.category}</td>
+                <td className="p-2">{e.notes ?? ''}</td>
+                <td className="p-2 text-right">{formatCurrency(Number(e.amount))}</td>
+                <td className="p-2">
+                  <Button size="sm" variant="outline" className="mr-2" onClick={() => { setEditing(e); setCategory(e.category); setAmount(String(e.amount)); setNotes(e.notes ?? ''); setIncurredAt(new Date(e.incurredAt).toISOString().slice(0,16)); setOpen(true); }}>Edit</Button>
+                  <Button size="sm" variant="outline" onClick={() => setConfirmDeleteId(e.id)}>Delete</Button>
+                </td>
+              </tr>
+            ))}
+            {list.length === 0 && (
+              <tr><td className="p-2" colSpan={5}>No expenses found</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="border rounded">
+          <div className="flex items-center justify-between p-3 border-b">
+            <div className="font-semibold">Expenses by Category</div>
+            <Button variant="outline" size="sm" onClick={() => exportExpensesByCategoryCsv((() => {
+              const m = new Map<string, number>();
+              for (const e of list) {
+                const key = e.category || 'Other';
+                m.set(key, (m.get(key) || 0) + Number(e.amount || 0));
+              }
+              return Array.from(m.entries()).sort((a,b) => b[1] - a[1]);
+            })())}>Export CSV</Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-[var(--surface-muted)]">
+                <tr>
+                  <th className="text-left p-2">Category</th>
+                  <th className="text-right p-2">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const m = new Map<string, number>();
+                  for (const e of list) {
+                    const key = e.category || 'Other';
+                    m.set(key, (m.get(key) || 0) + Number(e.amount || 0));
+                  }
+                  const rows = Array.from(m.entries()).sort((a,b) => b[1] - a[1]);
+                  if (rows.length === 0) {
+                    return (<tr><td className="p-2" colSpan={2}>No data</td></tr>);
+                  }
+                  return rows.map(([cat, sum]) => (
+                    <tr key={cat} className="border-t">
+                      <td className="p-2">{cat}</td>
+                      <td className="p-2 text-right">{formatCurrency(sum)}</td>
+                    </tr>
+                  ));
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {open && (
+        <div className="fixed inset-0 z-[120] bg-black/40 flex items-center justify-center">
+          <div className="bg-white rounded shadow-lg w-[90%] max-w-md p-4">
+            <div className="font-semibold text-lg mb-2">{editing ? 'Edit Expense' : 'Add Expense'}</div>
+            <div className="grid gap-3">
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Category</label>
+                {categories.length > 0 ? (
+                  <UiSelect value={category} onValueChange={(v) => setCategory(v)}>
+                    <UiSelectTrigger className="w-full"><UiSelectValue placeholder="Select category or type" /></UiSelectTrigger>
+                    <UiSelectContent>
+                      {categories.map((name) => (
+                        <UiSelectItem key={name} value={name}>{name}</UiSelectItem>
+                      ))}
+                    </UiSelectContent>
+                  </UiSelect>
+                ) : null}
+                <Input className="mt-2" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g., Rent, Utilities, Supplies" />
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Amount</label>
+                <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Notes</label>
+                <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
+              </div>
+              <div>
+                <label className="block text-xs text-muted-foreground mb-1">Date & time</label>
+                <Input type="datetime-local" value={incurredAt} onChange={(e) => setIncurredAt(e.target.value)} />
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <Button variant="outline" onClick={() => { setOpen(false); setEditing(null); }}>Cancel</Button>
+                {editing ? (
+                  <Button onClick={updateExpense}>Update</Button>
+                ) : (
+                  <Button onClick={createExpense}>Save</Button>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-2">
+              <Button variant="outline" onClick={() => exportExpensesCsv(list)}>Export CSV</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+    {/* Confirm delete */}
+    <ConfirmDialog
+      open={!!confirmDeleteId}
+      onOpenChange={(v) => { if (!v) setConfirmDeleteId(null); }}
+      title="Delete expense?"
+      description="This action cannot be undone."
+      confirmText="Delete"
+      cancelText="Cancel"
+      onConfirm={async () => { if (confirmDeleteId) { await deleteExpense(confirmDeleteId); setConfirmDeleteId(null); } }}
+    />
+    </>
   );
 }
