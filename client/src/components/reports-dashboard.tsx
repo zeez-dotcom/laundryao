@@ -621,7 +621,7 @@ export function ReportsDashboard() {
           </div>
         </div>
 
-        {/* Cash Drawer Manager */
+        {/* Cash Drawer Manager */}
         <div className="mb-6">
           <CashDrawerManager />
         </div>
