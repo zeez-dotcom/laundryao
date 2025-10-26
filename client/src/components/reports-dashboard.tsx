@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Package as PackageIcon, FileDown, Info } from "lucide-react";
 import SavedViewsBar from "@/components/SavedViewsBar";
@@ -486,6 +486,35 @@ export function ReportsDashboard() {
   const services = serviceResponse?.services ?? [];
   const clothing = clothingResponse?.items ?? [];
   const paymentMethods = paymentResponse?.methods ?? [];
+  // Load options for Packages tab filters (assigned packages + customers)
+  const { data: assignedPkgResp } = useQuery<{ assignments: Array<{ id: string; packageId: string; packageName: string; customerId: string; customerName: string; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
+    queryKey: ["/api/reports/package-assignments", reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/package-assignments`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to load assignments');
+      return res.json();
+    }
+  });
+  const packageOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const items = (assignedPkgResp?.assignments ?? []).filter((a: any) => a.packageId).map((a: any) => ({ id: a.packageId, name: a.packageName }));
+    const unique = [] as Array<{ id: string; name: string }>;
+    for (const p of items) {
+      if (!seen.has(p.id)) { seen.add(p.id); unique.push(p); }
+    }
+    return unique.sort((a,b) => a.name.localeCompare(b.name));
+  }, [assignedPkgResp]);
+  const { data: customersResp } = useQuery<any>({
+    queryKey: ["/api/customers", reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/customers?page=1&pageSize=200');
+      return res.json();
+    }
+  });
+  const customerOptions = useMemo(() => {
+    const list = Array.isArray(customersResp) ? customersResp : (customersResp?.data || customersResp?.items || []);
+    return (list as any[]).map((c: any) => ({ id: c.id, name: c.name })).sort((a,b) => a.name.localeCompare(b.name));
+  }, [customersResp]);
   const totalRevenue = summary.totalRevenue;
   const totalOrders = summary.totalOrders;
   const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
@@ -1231,10 +1260,10 @@ export function ReportsDashboard() {
               </CardHeader>
               <CardContent>
                 <div className="flex flex-wrap gap-2 mb-3">
-                  <UiSelect value={usagePackageId || ''} onValueChange={(v) => setUsagePackageId(v || undefined)}>
+                  <UiSelect value={usagePackageId ?? '__all__'} onValueChange={(v) => setUsagePackageId(v === '__all__' ? undefined : v)}>
                     <UiSelectTrigger className="w-[220px]"><UiSelectValue placeholder="Filter by package" /></UiSelectTrigger>
                     <UiSelectContent>
-                      <UiSelectItem value="">All packages</UiSelectItem>
+                      <UiSelectItem value="__all__">All packages</UiSelectItem>
                       {packageOptions.map(p => (<UiSelectItem key={p.id} value={p.id}>{p.name}</UiSelectItem>))}
                     </UiSelectContent>
                   </UiSelect>
@@ -2333,32 +2362,4 @@ function ExpensesTab({ startIso, endIso, branchId }: { startIso?: string; endIso
     </>
   );
 }
-  // Load options for Packages tab filters
-  const { data: assignedPkgResp } = useQuery<{ assignments: Array<{ id: string; packageId: string; packageName: string; customerId: string; customerName: string; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
-    queryKey: ["/api/reports/package-assignments", reportsBranchId || branch?.id],
-    queryFn: async () => {
-      const res = await fetch(`/api/reports/package-assignments`, { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to load assignments');
-      return res.json();
-    }
-  });
-  const packageOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const items = (assignedPkgResp?.assignments ?? []).filter(a => a.packageId).map(a => ({ id: a.packageId, name: a.packageName }));
-    const unique = [] as Array<{ id: string; name: string }>;
-    for (const p of items) {
-      if (!seen.has(p.id)) { seen.add(p.id); unique.push(p); }
-    }
-    return unique.sort((a,b) => a.name.localeCompare(b.name));
-  }, [assignedPkgResp]);
-  const { data: customersResp } = useQuery<any>({
-    queryKey: ["/api/customers", reportsBranchId || branch?.id],
-    queryFn: async () => {
-      const res = await apiRequest('GET', '/api/customers?page=1&pageSize=200');
-      return res.json();
-    }
-  });
-  const customerOptions = useMemo(() => {
-    const list = Array.isArray(customersResp) ? customersResp : (customersResp?.data || customersResp?.items || []);
-    return (list as any[]).map(c => ({ id: c.id, name: c.name })).sort((a,b) => a.name.localeCompare(b.name));
-  }, [customersResp]);
+  
