@@ -11,6 +11,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Loader2, Phone, Lock, KeyRound, CheckCircle, ArrowLeft } from "lucide-react";
 import { z } from "zod";
 import { useTranslationContext } from "@/context/TranslationContext";
+import { interpolate } from "@/lib/i18n";
 
 type RequestResetFormData = {
   phoneNumber: string;
@@ -166,7 +167,7 @@ export function CustomerPasswordResetForm({
           <p className="text-sm text-muted-foreground">
             {step === "request"
               ? t.customerAuth.reset.subtitleRequest
-              : t.customerAuth.reset.subtitleOtp.replace("{phone}", maskedPhone)}
+              : interpolate(t.customerAuth.reset.subtitleOtp, { phone: maskedPhone })}
           </p>
         </CardHeader>
 

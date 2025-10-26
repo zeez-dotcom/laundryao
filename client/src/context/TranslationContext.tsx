@@ -30,7 +30,11 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
     }
   }, [language, locales]);
 
-  const t = locales[language] || (enMessages as Translations);
+  // Merge with English defaults so missing keys gracefully fall back
+  const current = locales[language];
+  const t = (current
+    ? ({ ...(enMessages as Translations), ...current } as Translations)
+    : (enMessages as Translations));
 
   return (
     <TranslationContext.Provider value={{ language, setLanguage, t }}>

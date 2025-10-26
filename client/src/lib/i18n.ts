@@ -28,6 +28,23 @@ export const useTranslation = () => {
   return context;
 };
 
+// Safely interpolate placeholders in translation strings.
+// Supports both Handlebars-style `{{key}}` and simple `{key}` tokens.
+export function interpolate(
+  template: string | null | undefined,
+  params: Record<string, string | number> = {}
+): string {
+  let result = template ?? "";
+  for (const [key, value] of Object.entries(params)) {
+    const v = String(value);
+    // Replace all occurrences of both token styles
+    result = result
+      .replaceAll(`{{${key}}}` as string, v)
+      .replaceAll(`{${key}}` as string, v);
+  }
+  return result;
+}
+
 // Remove this function as we now use the currency system
 // export const formatCurrency = (amount: string | number, language: Language = 'en') => {
 //   const num = typeof amount === 'string' ? parseFloat(amount) : amount;

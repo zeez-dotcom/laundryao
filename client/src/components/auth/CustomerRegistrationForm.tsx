@@ -13,6 +13,7 @@ import { CitySelect } from "@/components/city-select";
 import { Loader2, User, Phone, Lock, MapPin } from "lucide-react";
 import { z } from "zod";
 import { useTranslationContext } from "@/context/TranslationContext";
+import { interpolate } from "@/lib/i18n";
 
 type RegistrationFormData = {
   branchCode: string;
@@ -95,7 +96,7 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
     onSuccess: (customer) => {
       toast({
         title: t.customerAuth.registration.toast.successTitle,
-        description: t.customerAuth.registration.toast.successDescription.replace("{name}", customer.name),
+        description: interpolate(t.customerAuth.registration.toast.successDescription, { name: customer.name }),
       });
       queryClient.invalidateQueries({ queryKey: ["/customer/me"] });
       onSuccess(customer);
@@ -140,9 +141,7 @@ export function CustomerRegistrationForm({ branchCode, onSuccess, onLoginRedirec
           </div>
           <CardTitle className="text-2xl font-bold">{t.customerAuth.registration.title}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            {t.customerAuth.registration.subtitle
-              .replace("{step}", String(step))
-              .replace("{total}", String(totalSteps))}
+            {interpolate(t.customerAuth.registration.subtitle, { step: String(step), total: String(totalSteps) })}
           </p>
           <div className="flex space-x-2 justify-center">
             <div className={`h-2 w-8 rounded-full ${step >= 1 ? "bg-blue-600" : "bg-gray-200"}`} />

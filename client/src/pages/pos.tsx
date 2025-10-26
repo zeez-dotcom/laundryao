@@ -20,6 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, postOrder } from "@/lib/queryClient";
 import { getTaxRate } from "@/lib/tax";
+import { interpolate } from "@/lib/i18n";
 import { LanguageSelector } from "@/components/language-selector";
 import BranchSelector from "@/components/BranchSelector";
 import { useCurrency } from "@/lib/currency";
@@ -201,10 +202,9 @@ export default function POS() {
         setCurrentTransaction(null);
         toast({
           title: t.posOrderCreatedTitle,
-          description: t.posPayLaterOrderCreated.replace(
-            "{{customerName}}",
-            order.customerName || t.posWalkInCustomer
-          ),
+          description: interpolate(t.posPayLaterOrderCreated, {
+            customerName: order.customerName || t.posWalkInCustomer,
+          }),
         });
       }
 
@@ -243,10 +243,11 @@ export default function POS() {
     addToCart(clothingItem as any, service, quantity);
     toast({
       title: t.posAddedToCartTitle,
-      description: t.posAddedToCartDescription
-        .replace("{{quantity}}", String(quantity))
-        .replace("{{itemName}}", clothingItem.name)
-        .replace("{{serviceName}}", service.name),
+      description: interpolate(t.posAddedToCartDescription, {
+        quantity: String(quantity),
+        itemName: clothingItem.name,
+        serviceName: service.name,
+      }),
     });
   };
 
@@ -423,10 +424,9 @@ export default function POS() {
           {
             id: "sales-catalog",
             title: t.posSalesCatalogTitle,
-            summary: t.posSalesCatalogSummary.replace(
-              "{{count}}",
-              String(cartSummary.itemCount),
-            ),
+            summary: interpolate(t.posSalesCatalogSummary, {
+              count: String(cartSummary.itemCount),
+            }),
             defaultOpen: true,
             fullHeight: true,
             content: (
@@ -499,10 +499,9 @@ export default function POS() {
           {
             id: "sales-summary",
             title: t.posSessionSummaryTitle,
-            summary: t.posSessionSummarySummary.replace(
-              "{{total}}",
-              formatCurrency(cartSummary.total),
-            ),
+            summary: interpolate(t.posSessionSummarySummary, {
+              total: formatCurrency(cartSummary.total),
+            }),
             content: (
               <div className="space-y-3 text-[var(--text-sm)] text-muted-foreground">
                 <div>

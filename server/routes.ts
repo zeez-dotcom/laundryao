@@ -4481,6 +4481,22 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/reports/cashflow-summary", requireAdminOrSuperAdmin, async (req, res) => {
+    const user = req.user as UserWithBranch;
+    const { filter, error } = parseReportFilters(req, user);
+    if (error) {
+      return res.status(400).json({ message: error });
+    }
+
+    try {
+      const data = await storage.getCashflowSummaryByDateRange(filter);
+      res.json(data);
+    } catch (err) {
+      logger.error({ err }, "Failed to fetch cashflow summary");
+      res.status(500).json({ message: "Failed to fetch cashflow summary" });
+    }
+  });
+
   // Exceptions summary (overpay overrides, stale pay-later, cancellation spike)
   app.get("/api/reports/exceptions", requireAdminOrSuperAdmin, async (req, res) => {
     try {
@@ -5416,6 +5432,22 @@ export async function registerRoutes(
       res.json({ packages });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch top packages" });
+    }
+  });
+
+  app.get("/api/reports/package-assignments", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const status = (req.query.status as string) || "all";
+      const limit = req.query.limit ? Number(req.query.limit) : 100;
+      const list = await storage.getAssignedPackages(
+        user.branchId || undefined,
+        status === "active" || status === "expired" ? (status as any) : "all",
+        limit,
+      );
+      res.json({ assignments: list });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch package assignments" });
     }
   });
 

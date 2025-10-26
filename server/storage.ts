@@ -711,6 +711,20 @@ export interface IStorage {
   getTopServices(range: string, branchId?: string): Promise<{ service: string; count: number; revenue: number }[]>;
   getTopProducts(range: string, branchId?: string): Promise<{ product: string; count: number; revenue: number }[]>;
   getTopPackages(range: string, branchId?: string): Promise<{ pkg: string; count: number; revenue: number }[]>;
+  getAssignedPackages(
+    branchId?: string,
+    status?: "active" | "expired" | "all",
+    limit?: number,
+  ): Promise<{
+    id: string;
+    packageName: string;
+    customerName: string;
+    customerPhone: string | null;
+    startsAt: string;
+    expiresAt: string | null;
+    balance: number;
+    totalCredits: number;
+  }[]>;
   getServiceBreakdown(filter: ReportDateRangeFilter): Promise<{ service: string; count: number; revenue: number }[]>;
   getClothingBreakdown(filter: ReportDateRangeFilter): Promise<{ item: string; count: number; revenue: number }[]>;
   getPaymentMethodBreakdown(filter: ReportDateRangeFilter): Promise<{ method: string; count: number; revenue: number }[]>;
@@ -719,6 +733,21 @@ export interface IStorage {
     totalRevenue: number;
     averageOrderValue: number;
     daily: { date: string; orders: number; revenue: number }[];
+  }>;
+  getCashflowSummaryByDateRange(filter: ReportDateRangeFilter): Promise<{
+    totals: {
+      immediateOrders: number;
+      payLaterReceipts: number;
+      packagePurchases: number;
+      all: number;
+    };
+    daily: {
+      date: string;
+      immediateOrders: number;
+      payLaterReceipts: number;
+      packagePurchases: number;
+      total: number;
+    }[];
   }>;
   getClothingItemStats(
     range: string,
@@ -4993,6 +5022,78 @@ export class DatabaseStorage {
     return { totalOrders, totalRevenue, averageOrderValue, daily };
   }
 
+  async getCashflowSummaryByDateRange(filter: ReportDateRangeFilter = {}): Promise<{
+    totals: { immediateOrders: number; payLaterReceipts: number; packagePurchases: number; all: number };
+    daily: { date: string; immediateOrders: number; payLaterReceipts: number; packagePurchases: number; total: number }[];
+  }> {
+    // 1) Immediate orders (non-pay-later) attributed by order date
+    const ordersWhere = buildOrderDateFilter("o", filter);
+    const { rows: immediateRows } = await db.execute<any>(sql.raw(`
+      SELECT o.created_at::date AS d, SUM(o.total)::numeric AS revenue
+      FROM orders o
+      ${ordersWhere}
+        AND o.payment_method <> 'pay_later'
+        AND o.status <> 'cancelled'
+      GROUP BY o.created_at::date
+      ORDER BY d
+    `));
+    const immediateMap = new Map<string, number>();
+    for (const r of immediateRows) {
+      const key = r.d instanceof Date ? r.d.toISOString().split('T')[0] : String(r.d);
+      immediateMap.set(key, Number(r.revenue || 0));
+    }
+
+    // 2) Pay-later receipts by payment date
+    const payLater = await this.getPayLaterReceiptsByDateRange(filter);
+    const payLaterMap = new Map<string, number>();
+    for (const r of payLater.daily) {
+      payLaterMap.set(r.date, r.amount);
+    }
+
+    // 3) Package purchases by payment date (notes ILIKE 'Package purchase:%')
+    const pWhere = buildPaymentDateFilter('p', filter);
+    const pkgBranchJoin = filter.branchId
+      ? `AND (p.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}' OR c.branch_id = '${(filter.branchId as string).replace(/'/g, "''")}')`
+      : '';
+    const { rows: pkgRows } = await db.execute<any>(sql.raw(`
+      SELECT p.created_at::date AS d, SUM(p.amount)::numeric AS revenue
+      FROM payments p
+      LEFT JOIN customers c ON c.id = p.customer_id
+      ${pWhere}
+      ${pkgBranchJoin}
+      WHERE p.notes ILIKE 'Package purchase:%'
+      GROUP BY p.created_at::date
+      ORDER BY d
+    `));
+    const pkgMap = new Map<string, number>();
+    for (const r of pkgRows) {
+      const key = r.d instanceof Date ? r.d.toISOString().split('T')[0] : String(r.d);
+      pkgMap.set(key, Number(r.revenue || 0));
+    }
+
+    // Union dates
+    const dates = new Set<string>([...immediateMap.keys(), ...payLaterMap.keys(), ...pkgMap.keys()]);
+    const daily: { date: string; immediateOrders: number; payLaterReceipts: number; packagePurchases: number; total: number }[] = [];
+    let totImmediate = 0, totPayLater = 0, totPackages = 0;
+    Array.from(dates).sort().forEach((d) => {
+      const a = immediateMap.get(d) || 0;
+      const b = payLaterMap.get(d) || 0;
+      const c = pkgMap.get(d) || 0;
+      daily.push({ date: d, immediateOrders: a, payLaterReceipts: b, packagePurchases: c, total: a + b + c });
+      totImmediate += a; totPayLater += b; totPackages += c;
+    });
+
+    return {
+      totals: {
+        immediateOrders: totImmediate,
+        payLaterReceipts: totPayLater,
+        packagePurchases: totPackages,
+        all: totImmediate + totPayLater + totPackages,
+      },
+      daily,
+    };
+  }
+
   async getPayLaterReceiptsByDateRange(filter: ReportDateRangeFilter = {}): Promise<{
     totalReceipts: number;
     totalAmount: number;
@@ -5943,6 +6044,66 @@ export class DatabaseStorage {
       pkg: r.pkg,
       count: Number(r.count),
       revenue: Number(r.revenue),
+    }));
+  }
+
+  async getAssignedPackages(
+    branchId?: string,
+    status: "active" | "expired" | "all" = "all",
+    limit = 100,
+  ): Promise<{
+    id: string;
+    packageName: string;
+    customerName: string;
+    customerPhone: string | null;
+    startsAt: string;
+    expiresAt: string | null;
+    balance: number;
+    totalCredits: number;
+  }[]> {
+    // Optional branch filter: match package branch or customer branch
+    const branchFilter = branchId
+      ? (assertUuid(branchId), `AND (p.branch_id = '${branchId.replace(/'/g, "''")}' OR c.branch_id = '${branchId.replace(/'/g, "''")}')`)
+      : "";
+
+    let statusFilter = "";
+    if (status === "active") {
+      statusFilter = "AND (cp.expires_at IS NULL OR cp.expires_at >= NOW()) AND cp.starts_at <= NOW()";
+    } else if (status === "expired") {
+      statusFilter = "AND cp.expires_at IS NOT NULL AND cp.expires_at < NOW()";
+    }
+
+    const { rows } = await db.execute<any>(sql.raw(`
+      SELECT
+        cp.id,
+        p.name_en AS package_name,
+        COALESCE(c.name, '') AS customer_name,
+        COALESCE(c.phone_number, NULL) AS customer_phone,
+        cp.starts_at,
+        cp.expires_at,
+        COALESCE(SUM(cpi.balance), cp.balance)::numeric AS balance,
+        COALESCE(SUM(cpi.total_credits), 0)::numeric AS total_credits
+      FROM customer_packages cp
+      JOIN packages p ON p.id = cp.package_id
+      JOIN customers c ON c.id = cp.customer_id
+      LEFT JOIN customer_package_items cpi ON cpi.customer_package_id = cp.id
+      WHERE 1=1
+        ${branchFilter}
+        ${statusFilter}
+      GROUP BY cp.id, p.name_en, c.name, c.phone_number, cp.starts_at, cp.expires_at
+      ORDER BY cp.starts_at DESC
+      LIMIT ${Number.isFinite(limit) ? limit : 100};
+    `));
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      packageName: r.package_name,
+      customerName: r.customer_name,
+      customerPhone: r.customer_phone,
+      startsAt: r.starts_at,
+      expiresAt: r.expires_at,
+      balance: Number(r.balance),
+      totalCredits: Number(r.total_credits),
     }));
   }
 

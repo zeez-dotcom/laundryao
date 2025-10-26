@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Loader2, Phone, Lock, LogIn, AlertCircle } from "lucide-react";
 import { z } from "zod";
 import { useTranslationContext } from "@/context/TranslationContext";
+import { interpolate } from "@/lib/i18n";
 
 type LoginFormData = {
   phoneNumber: string;
@@ -65,7 +66,7 @@ export function CustomerLoginForm({ onSuccess, onRegisterRedirect, onForgotPassw
       setLoginError(null);
       toast({
         title: t.customerAuth.login.toast.successTitle,
-        description: t.customerAuth.login.toast.successDescription.replace("{name}", customer.name),
+        description: interpolate(t.customerAuth.login.toast.successDescription, { name: customer.name }),
       });
       queryClient.invalidateQueries({ queryKey: ["/customer/me"] });
       onSuccess(customer);

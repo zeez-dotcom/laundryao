@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Package as PackageIcon, FileDown } from "lucide-react";
+import { BarChart3, TrendingUp, DollarSign, Calendar, Download, Package as PackageIcon, FileDown, Info } from "lucide-react";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import { useLocation } from "wouter";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { DatePickerWithRange } from "@/components/ui/date-range-picker";
@@ -22,6 +22,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
 import CashDrawerManager from "@/components/admin/CashDrawerManager";
 import GlMappingsManager from "@/components/admin/GlMappingsManager";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 type RevenueSummary = {
   totalOrders: number;
@@ -109,6 +110,17 @@ export function ReportsDashboard() {
     return params;
   };
   const rangeParamsStr = useMemo(() => buildRangeParams().toString(), [startIso, endIso, reportsBranchId, branch?.id]);
+
+  const { data: cashflow } = useQuery<{ totals: { immediateOrders: number; payLaterReceipts: number; packagePurchases: number; all: number } } | undefined>({
+    queryKey: ["/api/reports/cashflow-summary", rangeParamsStr],
+    queryFn: async () => {
+      const params = buildRangeParams();
+      const url = params.size ? `/api/reports/cashflow-summary?${params.toString()}` : `/api/reports/cashflow-summary`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch cashflow summary");
+      return res.json();
+    },
+  });
 
   const { data: summaryData } = useQuery<RevenueSummary>({
     queryKey: ["/api/reports/summary", startIso, endIso],
@@ -698,6 +710,21 @@ export function ReportsDashboard() {
           </Card>
         </div>
 
+        {/* Friendly guide to reduce overwhelm */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Info className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm">Report Guide</CardTitle>
+            </div>
+            <CardDescription className="mt-2">
+              - Filters apply to all tabs: Branch and Date Range.
+              <br />- Cashflow sums real money in: Immediate Orders (order date), Pay-Later Receipts (payment date), Package Purchases (payment date).
+              <br />- Expand sections to view details without clutter.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+
         <Tabs defaultValue="services" className="space-y-6">
         <TabsList className="grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-10 gap-1">
             <TabsTrigger value="financials" className="text-xs sm:text-sm">
@@ -816,6 +843,54 @@ export function ReportsDashboard() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-sm font-medium">Cashflow (In Range)</CardTitle>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    try {
+                      const rows = [["Date","Immediate Orders","Pay-Later Receipts","Package Purchases","Total"], ...(((cashflow as any)?.daily ?? []).map((r: any) => [r.date, String(r.immediateOrders), String(r.payLaterReceipts), String(r.packagePurchases), String(r.total)]))];
+                      const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\n");
+                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `cashflow-${Date.now()}.csv`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    } catch {}
+                  }}
+                >
+                  <FileDown className="h-4 w-4 mr-1" /> Export CSV
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{formatCurrency(cashflow?.totals?.all ?? 0)}</div>
+              <div className="text-xs text-muted-foreground mt-2">
+                <div className="flex justify-between">
+                  <span>Immediate Orders</span>
+                  <span>{formatCurrency(cashflow?.totals?.immediateOrders ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Pay-Later Receipts</span>
+                  <span>{formatCurrency(cashflow?.totals?.payLaterReceipts ?? 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Package Purchases</span>
+                  <span>{formatCurrency(cashflow?.totals?.packagePurchases ?? 0)}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Filters + CSV exports */}
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1015,6 +1090,7 @@ export function ReportsDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Service Performance</CardTitle>
+                <CardDescription>Revenue and volume, resolved for pay-later receipts.</CardDescription>
               </CardHeader>
               <CardContent>
                 {services.length === 0 ? (
@@ -1044,7 +1120,15 @@ export function ReportsDashboard() {
           <TabsContent value="packages" className="space-y-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle>Top Packages</CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle>Top Packages</CardTitle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-4 w-4 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Based on package purchase payments within range.</TooltipContent>
+                  </Tooltip>
+                </div>
                 <div className="flex items-center gap-2">
                   <PackageIcon className="h-4 w-4 text-muted-foreground" />
                   <Select value={range} onValueChange={(v) => setRange(v as any)}>
@@ -1078,12 +1162,31 @@ export function ReportsDashboard() {
                 )}
               </CardContent>
             </Card>
+
+            <Card>
+              <CardHeader className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CardTitle>Assigned Packages</CardTitle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-4 w-4 text-muted-foreground" />
+                    </TooltipTrigger>
+                    <TooltipContent>Packages assigned to customers, with used and remaining credits.</TooltipContent>
+                  </Tooltip>
+                </div>
+                <AssignedPackagesExportButton branchId={reportsBranchId || branch?.id} />
+              </CardHeader>
+              <CardContent>
+                <AssignedPackagesTable branchId={reportsBranchId || branch?.id} />
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="items" className="space-y-4">
             <Card>
               <CardHeader>
                 <CardTitle>Clothing Item Performance</CardTitle>
+                <CardDescription>Combined from orders and receipts according to attribution rules.</CardDescription>
               </CardHeader>
               <CardContent>
                 {clothing.length === 0 ? (
@@ -1111,6 +1214,7 @@ export function ReportsDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Daily Revenue Breakdown</CardTitle>
+                <CardDescription>Orders by order date; pay-later revenue resolved by receipts.</CardDescription>
               </CardHeader>
               <CardContent>
                 {dailyRows.length === 0 ? (
@@ -1135,6 +1239,7 @@ export function ReportsDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Payment Method Analytics</CardTitle>
+                <CardDescription>Breakdown of revenue by payment method in range.</CardDescription>
               </CardHeader>
               <CardContent>
                 {paymentMethods.length === 0 ? (
@@ -1170,33 +1275,41 @@ export function ReportsDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Recent Transactions</CardTitle>
+                <CardDescription>Latest 20 in range. Expand to view.</CardDescription>
               </CardHeader>
               <CardContent>
-                {recentTransactionsToShow.length === 0 ? (
-                  <div className="text-sm text-gray-500">No transactions found for the selected period.</div>
-                ) : (
-                  <div className="space-y-3">
-                    {recentTransactionsToShow.map((transaction) => (
-                      <div key={transaction.id} className="flex items-center justify-between p-4 border rounded-lg">
-                        <div>
-                          <div className="font-medium">Order #{transaction.id.slice(-6)}</div>
-                          <div className="text-sm text-gray-600">
-                            {format(new Date(transaction.createdAt), 'MMM dd, yyyy HH:mm')}
+                <Collapsible>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="outline" size="sm">Show recent transactions</Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-3">
+                    {recentTransactionsToShow.length === 0 ? (
+                      <div className="text-sm text-gray-500">No transactions found for the selected period.</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {recentTransactionsToShow.map((transaction) => (
+                          <div key={transaction.id} className="flex items-center justify-between p-4 border rounded-lg">
+                            <div>
+                              <div className="font-medium">Order #{transaction.id.slice(-6)}</div>
+                              <div className="text-sm text-gray-600">
+                                {format(new Date(transaction.createdAt), 'MMM dd, yyyy HH:mm')}
+                              </div>
+                              <div className="text-sm text-gray-600 capitalize">
+                                {transaction.paymentMethod} • {transaction.sellerName}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold text-lg">{formatCurrency(transaction.total)}</div>
+                              <div className="text-sm text-gray-600">
+                                {((transaction.items as any[]) || []).length} items
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-600 capitalize">
-                            {transaction.paymentMethod} • {transaction.sellerName}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-bold text-lg">{formatCurrency(transaction.total)}</div>
-                          <div className="text-sm text-gray-600">
-                            {((transaction.items as any[]) || []).length} items
-                          </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                )}
+                    )}
+                  </CollapsibleContent>
+                </Collapsible>
               </CardContent>
             </Card>
           </TabsContent>
@@ -1205,12 +1318,20 @@ export function ReportsDashboard() {
             <Card>
               <CardHeader>
                 <CardTitle>Order Logs</CardTitle>
+                <CardDescription>Full activity history. Expand to view.</CardDescription>
               </CardHeader>
               <CardContent>
-                <OrderLogsTable />
-          </CardContent>
-          </Card>
-        </TabsContent>
+                <Collapsible>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="outline" size="sm">Show logs</Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-3">
+                    <OrderLogsTable />
+                  </CollapsibleContent>
+                </Collapsible>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
         {/* Pay-Later Receipts tab content */}
         <TabsContent value="receipts" className="space-y-4">
@@ -1344,8 +1465,13 @@ export function ReportsDashboard() {
                         <FileDown className="h-4 w-4 mr-1" /> Export CSV
                       </Button>
                     </div>
-                    <div className="overflow-x-auto border rounded">
-                      <table className="min-w-full text-sm">
+                    <Collapsible>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="outline" size="sm" className="mb-2">Show table</Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="overflow-x-auto border rounded">
+                          <table className="min-w-full text-sm">
                         <thead className="bg-[var(--surface-muted)]">
                           <tr>
                             <th className="text-left p-2">Order #</th>
@@ -1431,8 +1557,10 @@ export function ReportsDashboard() {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
-                    </div>
+                          </table>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
                 </div>
               )}
@@ -1581,6 +1709,104 @@ export function ReportsDashboard() {
     />
     <OrderDetailModal orderId={detailOrderId} isOpen={detailOpen} onClose={() => setDetailOpen(false)} />
     </>
+  );
+}
+
+function AssignedPackagesTable({ branchId }: { branchId?: string }) {
+  const { data, isLoading } = useQuery<{ assignments: Array<{ id: string; packageName: string; customerName: string; customerPhone: string | null; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
+    queryKey: ["/api/reports/package-assignments", branchId],
+    queryFn: async () => {
+      const url = `/api/reports/package-assignments`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load package assignments");
+      return await res.json();
+    },
+  });
+
+  if (isLoading) {
+    return <div className="text-sm text-gray-500">Loading assignments…</div>;
+  }
+  const rows = data?.assignments || [];
+  if (rows.length === 0) {
+    return <div className="text-sm text-gray-500">No assigned packages found.</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead className="bg-[var(--surface-muted)]">
+          <tr>
+            <th className="text-left p-2">Package</th>
+            <th className="text-left p-2">Customer</th>
+            <th className="text-left p-2">Phone</th>
+            <th className="text-left p-2">Purchased</th>
+            <th className="text-left p-2">Expires</th>
+            <th className="text-right p-2">Used</th>
+            <th className="text-right p-2">Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const used = Math.max((r.totalCredits || 0) - (r.balance || 0), 0);
+            return (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">{r.packageName}</td>
+                <td className="p-2">{r.customerName}</td>
+                <td className="p-2">{r.customerPhone || "—"}</td>
+                <td className="p-2">{r.startsAt ? format(new Date(r.startsAt), "MMM dd, yyyy") : "—"}</td>
+                <td className="p-2">{r.expiresAt ? format(new Date(r.expiresAt), "MMM dd, yyyy") : "—"}</td>
+                <td className="p-2 text-right">{used}</td>
+                <td className="p-2 text-right">{r.balance}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AssignedPackagesExportButton({ branchId }: { branchId?: string }) {
+  const { data } = useQuery<{ assignments: Array<{ id: string; packageName: string; customerName: string; customerPhone: string | null; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
+    queryKey: ["/api/reports/package-assignments", branchId, "export"],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/package-assignments`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load package assignments");
+      return await res.json();
+    },
+  });
+
+  const rows = data?.assignments || [];
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        try {
+          const csvRows = [["Package","Customer","Phone","Purchased","Expires","Used","Remaining"], ...rows.map((r) => [
+            r.packageName,
+            r.customerName,
+            r.customerPhone || "",
+            r.startsAt ? format(new Date(r.startsAt), 'yyyy-MM-dd') : '',
+            r.expiresAt ? format(new Date(r.expiresAt), 'yyyy-MM-dd') : '',
+            String(Math.max((r.totalCredits || 0) - (r.balance || 0), 0)),
+            String(r.balance || 0),
+          ])];
+          const csv = csvRows.map(r => r.map(v => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\n");
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `assigned-packages-${Date.now()}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch {}
+      }}
+    >
+      <FileDown className="h-4 w-4 mr-1" /> Export CSV
+    </Button>
   );
 }
 

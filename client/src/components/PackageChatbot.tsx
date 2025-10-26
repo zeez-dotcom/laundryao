@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Bot, Send, User, Calculator, TrendingDown, TrendingUp, Package, ArrowLeft, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthContext } from "@/context/AuthContext";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, interpolate } from "@/lib/i18n";
 import { useCurrency } from "@/lib/currency";
 
 interface Message {
@@ -286,7 +286,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
     
     // Display the English name in the confirmation message
     const displayName = parsedName.en || name;
-    addMessage("assistant", t.packageChatbot.goodPackageName.replace("{name}", displayName));
+    addMessage("assistant", interpolate(t.packageChatbot.goodPackageName, { name: displayName }));
     goToNextStep();
   };
 
@@ -324,7 +324,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
     const clothingItem = option.metadata as ClothingItem;
     setSelectedClothingItem(clothingItem);
     addMessage("user", option.label);
-    addMessage("assistant", t.packageChatbot.excellentChoice.replace("{item}", clothingItem.name));
+    addMessage("assistant", interpolate(t.packageChatbot.excellentChoice, { item: clothingItem.name }));
     
     try {
       setLoading(true);
@@ -356,11 +356,11 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
       
       if (servicesForItem.length === 0) {
         // debug logs removed
-        addMessage("assistant", t.packageChatbot.noServicesAvailable.replace("{item}", clothingItem.name));
+        addMessage("assistant", interpolate(t.packageChatbot.noServicesAvailable, { item: clothingItem.name }));
         return;
       }
       
-      addMessage("assistant", t.packageChatbot.selectService.replace("{item}", clothingItem.name));
+      addMessage("assistant", interpolate(t.packageChatbot.selectService, { item: clothingItem.name }));
       
       // debug logs removed
       
@@ -412,7 +412,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
       setActualPrice(actualPrice);
       
       addMessage("assistant", 
-        t.packageChatbot.enterPackagePrice.replace("{price}", formatCurrency(actualPrice))
+        interpolate(t.packageChatbot.enterPackagePrice, { price: formatCurrency(actualPrice) })
       );
       
       goToNextStep();
@@ -428,7 +428,7 @@ export function PackageChatbot({ open, onClose }: PackageChatbotProps) {
     }
     
     setPackagePrice(price);
-    addMessage("assistant", t.packageChatbot.packagePriceSet.replace("{price}", formatCurrency(price)));
+    addMessage("assistant", interpolate(t.packageChatbot.packagePriceSet, { price: formatCurrency(price) }));
     goToNextStep();
   };
 
