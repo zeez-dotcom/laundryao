@@ -17,12 +17,14 @@ import OrderDetailModal from "@/components/OrderDetailModal";
 import { useCurrency } from "@/lib/currency";
 import { useAuthContext } from "@/context/AuthContext";
 import { Select as UiSelect, SelectContent as UiSelectContent, SelectItem as UiSelectItem, SelectTrigger as UiSelectTrigger, SelectValue as UiSelectValue } from "@/components/ui/select";
+import { CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { RecordPaymentDialog } from "@/components/record-payment-dialog";
 import { apiRequest } from "@/lib/queryClient";
 import { Input } from "@/components/ui/input";
 import CashDrawerManager from "@/components/admin/CashDrawerManager";
 import GlMappingsManager from "@/components/admin/GlMappingsManager";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type RevenueSummary = {
   totalOrders: number;
@@ -97,6 +99,11 @@ export function ReportsDashboard() {
   const [reportsBranchId, setReportsBranchId] = useState<string | undefined>(undefined);
 
   const [range, setRange] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('daily');
+  // Usage filters (shared across cards in Packages tab)
+  const [usagePackageId, setUsagePackageId] = useState<string | undefined>(undefined);
+  const [usageCustomerId, setUsageCustomerId] = useState<string | undefined>(undefined);
+  const [isCustomerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const usageCardRef = useRef<HTMLDivElement>(null);
 
   const startIso = dateRange?.from ? startOfDay(dateRange.from).toISOString() : undefined;
   const endIso = dateRange?.to ? endOfDay(dateRange.to).toISOString() : undefined;
@@ -1177,9 +1184,78 @@ export function ReportsDashboard() {
                 <AssignedPackagesExportButton branchId={reportsBranchId || branch?.id} />
               </CardHeader>
               <CardContent>
-                <AssignedPackagesTable branchId={reportsBranchId || branch?.id} />
+                <AssignedPackagesTable
+                  branchId={reportsBranchId || branch?.id}
+                  onViewUsage={(pkgId, customerId) => {
+                    setUsagePackageId(pkgId);
+                    setUsageCustomerId(customerId);
+                    setTimeout(() => usageCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                  }}
+                />
               </CardContent>
             </Card>
+
+            <Card ref={usageCardRef} id="package-usage-card">
+              <CardHeader className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Package Usage History</CardTitle>
+                  <CardDescription>Per-order credit usage with order numbers and dates.</CardDescription>
+                </div>
+                <Button variant="outline" size="sm" onClick={async () => {
+                  try {
+                    const params = buildRangeParams();
+                    if (usagePackageId) params.set('packageId', usagePackageId);
+                    if (usageCustomerId) params.set('customerId', usageCustomerId);
+                    const url = `/api/reports/package-usage?${params.toString()}`;
+                    const res = await fetch(url, { credentials: 'include' });
+                    if (!res.ok) return;
+                    const json = await res.json();
+                    const rows = [["Date","Order #","Customer","Package","Service","Item","Used"], ...((json?.usage ?? []) as any[]).map(r => [
+                      format(new Date(r.orderDate), 'yyyy-MM-dd HH:mm'),
+                      r.orderNumber ?? r.orderId?.slice(-6) ?? '',
+                      r.customerName ?? '',
+                      r.packageName ?? '',
+                      r.serviceName ?? '',
+                      r.clothingItemName ?? '',
+                      String(r.quantity || 0)
+                    ])];
+                    const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const urlDL = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = urlDL; a.download = `package-usage-${Date.now()}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(urlDL);
+                  } catch {}
+                }}>
+                  <FileDown className="h-4 w-4 mr-1" /> Export CSV
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <UiSelect value={usagePackageId || ''} onValueChange={(v) => setUsagePackageId(v || undefined)}>
+                    <UiSelectTrigger className="w-[220px]"><UiSelectValue placeholder="Filter by package" /></UiSelectTrigger>
+                    <UiSelectContent>
+                      <UiSelectItem value="">All packages</UiSelectItem>
+                      {packageOptions.map(p => (<UiSelectItem key={p.id} value={p.id}>{p.name}</UiSelectItem>))}
+                    </UiSelectContent>
+                  </UiSelect>
+                  <Button variant="outline" onClick={() => setCustomerPickerOpen(true)}>{usageCustomerId ? (customerOptions.find(c => c.id === usageCustomerId)?.name || 'Customer') : 'Filter by customer'}</Button>
+                </div>
+                <PackageUsageTable buildRangeParams={buildRangeParams} packageId={usagePackageId} customerId={usageCustomerId} />
+              </CardContent>
+            </Card>
+            <CommandDialog open={isCustomerPickerOpen} onOpenChange={setCustomerPickerOpen}>
+              <CommandInput placeholder="Search customers..." />
+              <CommandList>
+                <CommandEmpty>No results found.</CommandEmpty>
+                <CommandGroup heading="Customers">
+                  {customerOptions.map((c) => (
+                    <CommandItem key={c.id} onSelect={() => { setUsageCustomerId(c.id); setCustomerPickerOpen(false); setTimeout(() => usageCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); }}>
+                      {c.name}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </CommandDialog>
           </TabsContent>
 
           <TabsContent value="items" className="space-y-4">
@@ -1712,7 +1788,7 @@ export function ReportsDashboard() {
   );
 }
 
-function AssignedPackagesTable({ branchId }: { branchId?: string }) {
+function AssignedPackagesTable({ branchId, onViewUsage }: { branchId?: string; onViewUsage?: (packageId?: string, customerId?: string) => void }) {
   const { data, isLoading } = useQuery<{ assignments: Array<{ id: string; packageName: string; customerName: string; customerPhone: string | null; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
     queryKey: ["/api/reports/package-assignments", branchId],
     queryFn: async () => {
@@ -1726,7 +1802,7 @@ function AssignedPackagesTable({ branchId }: { branchId?: string }) {
   if (isLoading) {
     return <div className="text-sm text-gray-500">Loading assignments…</div>;
   }
-  const rows = data?.assignments || [];
+  const rows = (data?.assignments || []) as any[];
   if (rows.length === 0) {
     return <div className="text-sm text-gray-500">No assigned packages found.</div>;
   }
@@ -1743,10 +1819,11 @@ function AssignedPackagesTable({ branchId }: { branchId?: string }) {
             <th className="text-left p-2">Expires</th>
             <th className="text-right p-2">Used</th>
             <th className="text-right p-2">Remaining</th>
+            <th className="text-right p-2">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
+          {rows.map((r: any) => {
             const used = Math.max((r.totalCredits || 0) - (r.balance || 0), 0);
             return (
               <tr key={r.id} className="border-t">
@@ -1757,11 +1834,141 @@ function AssignedPackagesTable({ branchId }: { branchId?: string }) {
                 <td className="p-2">{r.expiresAt ? format(new Date(r.expiresAt), "MMM dd, yyyy") : "—"}</td>
                 <td className="p-2 text-right">{used}</td>
                 <td className="p-2 text-right">{r.balance}</td>
+                <td className="p-2 text-right">
+                  <Button size="sm" variant="outline" onClick={() => onViewUsage?.(r.packageId, (r as any).customerId)}>View usage</Button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function PackageUsageTable({ buildRangeParams, packageId, customerId }: { buildRangeParams: () => URLSearchParams; packageId?: string; customerId?: string }) {
+  const { formatCurrency } = useCurrency();
+  const [packageQuery, setPackageQuery] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [groupBy, setGroupBy] = useState<'none'|'package'|'customer'>('none');
+  const params = buildRangeParams();
+  if (packageId) params.set('packageId', packageId);
+  if (customerId) params.set('customerId', customerId);
+  const { data, isLoading } = useQuery<{ usage: Array<{ orderId: string; orderNumber: string | null; orderDate: string; customerName: string | null; packageName: string | null; serviceName: string | null; clothingItemName: string | null; quantity: number; }> }>({
+    queryKey: ["/api/reports/package-usage", params.toString()],
+    queryFn: async () => {
+      const url = params.size ? `/api/reports/package-usage?${params.toString()}` : `/api/reports/package-usage`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load package usage");
+      return await res.json();
+    },
+  });
+
+  if (isLoading) return <div className="text-sm text-gray-500">Loading usage…</div>;
+  const rows = data?.usage || [];
+  // client-side filters
+  const filtered = rows.filter(r => {
+    const pkgOk = packageQuery ? (r.packageName || '').toLowerCase().includes(packageQuery.toLowerCase()) : true;
+    const custOk = customerQuery ? (r.customerName || '').toLowerCase().includes(customerQuery.toLowerCase()) : true;
+    return pkgOk && custOk;
+  });
+
+  // grouped summaries
+  const summaryByPackage = (() => {
+    const map = new Map<string, number>();
+    for (const r of filtered) {
+      const key = r.packageName || 'Unknown';
+      map.set(key, (map.get(key) || 0) + (r.quantity || 0));
+    }
+    return Array.from(map.entries()).map(([name, qty]) => ({ name, qty })).sort((a,b) => b.qty - a.qty);
+  })();
+  const summaryByCustomer = (() => {
+    const map = new Map<string, number>();
+    for (const r of filtered) {
+      const key = r.customerName || 'Unknown';
+      map.set(key, (map.get(key) || 0) + (r.quantity || 0));
+    }
+    return Array.from(map.entries()).map(([name, qty]) => ({ name, qty })).sort((a,b) => b.qty - a.qty);
+  })();
+
+  if (!rows.length) return <div className="text-sm text-gray-500">No package usage found.</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2 items-center">
+        <Input placeholder="Filter by package" className="w-56" value={packageQuery} onChange={(e) => setPackageQuery(e.target.value)} />
+        <Input placeholder="Filter by customer" className="w-56" value={customerQuery} onChange={(e) => setCustomerQuery(e.target.value)} />
+        <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
+          <SelectTrigger className="w-[180px]"><SelectValue placeholder="Group by" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">No grouping</SelectItem>
+            <SelectItem value="package">Group by package</SelectItem>
+            <SelectItem value="customer">Group by customer</SelectItem>
+          </SelectContent>
+        </Select>
+        {groupBy !== 'none' && (
+          <Button variant="outline" size="sm" onClick={() => {
+            try {
+              const src = groupBy === 'package' ? summaryByPackage : summaryByCustomer;
+              const header = groupBy === 'package' ? 'Package' : 'Customer';
+              const rowsCsv = [[header, 'Used Credits'], ...src.map(r => [r.name, String(r.qty)])];
+              const csv = rowsCsv.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = `package-usage-summary-${groupBy}-${Date.now()}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+            } catch {}
+          }}>
+            <FileDown className="h-4 w-4 mr-1" /> Export Summary CSV
+          </Button>
+        )}
+      </div>
+
+      {groupBy === 'package' && (
+        <div className="overflow-x-auto border rounded">
+          <table className="min-w-full text-sm">
+            <thead className="bg-[var(--surface-muted)]"><tr><th className="text-left p-2">Package</th><th className="text-right p-2">Used</th></tr></thead>
+            <tbody>{summaryByPackage.map(row => (<tr key={row.name} className="border-t"><td className="p-2">{row.name}</td><td className="p-2 text-right">{row.qty}</td></tr>))}</tbody>
+          </table>
+        </div>
+      )}
+      {groupBy === 'customer' && (
+        <div className="overflow-x-auto border rounded">
+          <table className="min-w-full text-sm">
+            <thead className="bg-[var(--surface-muted)]"><tr><th className="text-left p-2">Customer</th><th className="text-right p-2">Used</th></tr></thead>
+            <tbody>{summaryByCustomer.map(row => (<tr key={row.name} className="border-t"><td className="p-2">{row.name}</td><td className="p-2 text-right">{row.qty}</td></tr>))}</tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-[var(--surface-muted)]">
+            <tr>
+              <th className="text-left p-2">Date</th>
+              <th className="text-left p-2">Order #</th>
+              <th className="text-left p-2">Customer</th>
+              <th className="text-left p-2">Package</th>
+              <th className="text-left p-2">Service</th>
+              <th className="text-left p-2">Item</th>
+              <th className="text-right p-2">Used</th>
+            </tr>
+          </thead>
+          <tbody>
+          {filtered.map((r) => (
+            <tr key={`${r.orderId}-${r.serviceName}-${r.clothingItemName}-${r.orderDate}`} className="border-t">
+              <td className="p-2">{format(new Date(r.orderDate), 'MMM dd, yyyy')}</td>
+              <td className="p-2">{r.orderNumber ?? r.orderId.slice(-6)}</td>
+              <td className="p-2">{r.customerName ?? ''}</td>
+              <td className="p-2">{r.packageName ?? ''}</td>
+              <td className="p-2">{r.serviceName ?? ''}</td>
+              <td className="p-2">{r.clothingItemName ?? ''}</td>
+              <td className="p-2 text-right">{r.quantity}</td>
+            </tr>
+          ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -2126,3 +2333,32 @@ function ExpensesTab({ startIso, endIso, branchId }: { startIso?: string; endIso
     </>
   );
 }
+  // Load options for Packages tab filters
+  const { data: assignedPkgResp } = useQuery<{ assignments: Array<{ id: string; packageId: string; packageName: string; customerId: string; customerName: string; startsAt: string; expiresAt: string | null; balance: number; totalCredits: number; }> }>({
+    queryKey: ["/api/reports/package-assignments", reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/package-assignments`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to load assignments');
+      return res.json();
+    }
+  });
+  const packageOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const items = (assignedPkgResp?.assignments ?? []).filter(a => a.packageId).map(a => ({ id: a.packageId, name: a.packageName }));
+    const unique = [] as Array<{ id: string; name: string }>;
+    for (const p of items) {
+      if (!seen.has(p.id)) { seen.add(p.id); unique.push(p); }
+    }
+    return unique.sort((a,b) => a.name.localeCompare(b.name));
+  }, [assignedPkgResp]);
+  const { data: customersResp } = useQuery<any>({
+    queryKey: ["/api/customers", reportsBranchId || branch?.id],
+    queryFn: async () => {
+      const res = await apiRequest('GET', '/api/customers?page=1&pageSize=200');
+      return res.json();
+    }
+  });
+  const customerOptions = useMemo(() => {
+    const list = Array.isArray(customersResp) ? customersResp : (customersResp?.data || customersResp?.items || []);
+    return (list as any[]).map(c => ({ id: c.id, name: c.name })).sort((a,b) => a.name.localeCompare(b.name));
+  }, [customersResp]);

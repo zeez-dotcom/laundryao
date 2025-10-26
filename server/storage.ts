@@ -725,6 +725,20 @@ export interface IStorage {
     balance: number;
     totalCredits: number;
   }[]>;
+  getPackageUsageReport(filter: ReportDateRangeFilter & { customerId?: string; packageId?: string }): Promise<{
+    orderId: string;
+    orderNumber: string | null;
+    orderDate: string;
+    customerId: string | null;
+    customerName: string | null;
+    packageId: string | null;
+    packageName: string | null;
+    serviceId: string | null;
+    serviceName: string | null;
+    clothingItemId: string | null;
+    clothingItemName: string | null;
+    quantity: number;
+  }[]>;
   getServiceBreakdown(filter: ReportDateRangeFilter): Promise<{ service: string; count: number; revenue: number }[]>;
   getClothingBreakdown(filter: ReportDateRangeFilter): Promise<{ item: string; count: number; revenue: number }[]>;
   getPaymentMethodBreakdown(filter: ReportDateRangeFilter): Promise<{ method: string; count: number; revenue: number }[]>;
@@ -6053,7 +6067,9 @@ export class DatabaseStorage {
     limit = 100,
   ): Promise<{
     id: string;
+    packageId: string;
     packageName: string;
+    customerId: string;
     customerName: string;
     customerPhone: string | null;
     startsAt: string;
@@ -6076,7 +6092,9 @@ export class DatabaseStorage {
     const { rows } = await db.execute<any>(sql.raw(`
       SELECT
         cp.id,
+        p.id AS package_id,
         p.name_en AS package_name,
+        c.id AS customer_id,
         COALESCE(c.name, '') AS customer_name,
         COALESCE(c.phone_number, NULL) AS customer_phone,
         cp.starts_at,
@@ -6090,20 +6108,95 @@ export class DatabaseStorage {
       WHERE 1=1
         ${branchFilter}
         ${statusFilter}
-      GROUP BY cp.id, p.name_en, c.name, c.phone_number, cp.starts_at, cp.expires_at
+      GROUP BY cp.id, p.id, p.name_en, c.id, c.name, c.phone_number, cp.starts_at, cp.expires_at
       ORDER BY cp.starts_at DESC
       LIMIT ${Number.isFinite(limit) ? limit : 100};
     `));
 
     return rows.map((r: any) => ({
       id: r.id,
+      packageId: r.package_id,
       packageName: r.package_name,
+      customerId: r.customer_id,
       customerName: r.customer_name,
       customerPhone: r.customer_phone,
       startsAt: r.starts_at,
       expiresAt: r.expires_at,
       balance: Number(r.balance),
       totalCredits: Number(r.total_credits),
+    }));
+  }
+
+  async getPackageUsageReport(filter: ReportDateRangeFilter & { customerId?: string; packageId?: string }): Promise<{
+    orderId: string;
+    orderNumber: string | null;
+    orderDate: string;
+    customerId: string | null;
+    customerName: string | null;
+    packageId: string | null;
+    packageName: string | null;
+    serviceId: string | null;
+    serviceName: string | null;
+    clothingItemId: string | null;
+    clothingItemName: string | null;
+    quantity: number;
+  }[]> {
+    const conditions: string[] = ["o.package_usages IS NOT NULL", "o.is_delivery_request = false"]; 
+    if (filter.branchId) {
+      assertUuid(filter.branchId);
+      conditions.push(`o.branch_id = '${filter.branchId.replace(/'/g, "''")}'`);
+    }
+    if (filter.start) conditions.push(`o.created_at >= '${filter.start.toISOString()}'`);
+    if (filter.end) conditions.push(`o.created_at <= '${filter.end.toISOString()}'`);
+    if (filter.customerId) {
+      assertUuid(filter.customerId);
+      conditions.push(`o.customer_id = '${filter.customerId.replace(/'/g, "''")}'`);
+    }
+    if (filter.packageId) {
+      assertUuid(filter.packageId);
+      conditions.push(`EXISTS (SELECT 1 FROM jsonb_array_elements(o.package_usages::jsonb) as pu WHERE (pu->>'packageId')::uuid = '${filter.packageId.replace(/'/g, "''")}')`);
+    }
+    const clause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const { rows } = await db.execute<any>(sql.raw(`
+      SELECT 
+        o.id AS order_id,
+        o.order_number,
+        o.created_at,
+        c.id AS customer_id,
+        c.name AS customer_name,
+        (pu->>'packageId')::uuid AS package_id,
+        pkg.name_en AS package_name,
+        (itm->>'serviceId')::uuid AS service_id,
+        ls.name AS service_name,
+        (itm->>'clothingItemId')::uuid AS clothing_item_id,
+        ci.name AS clothing_item_name,
+        COALESCE(NULLIF(itm->>'quantity','')::int, 0) AS quantity
+      FROM orders o
+      LEFT JOIN customers c ON c.id = o.customer_id
+      LEFT JOIN LATERAL jsonb_array_elements(o.package_usages::jsonb) AS pu ON TRUE
+      LEFT JOIN LATERAL jsonb_array_elements(pu->'items') AS itm ON TRUE
+      LEFT JOIN packages pkg ON pkg.id = (pu->>'packageId')::uuid
+      LEFT JOIN laundry_services ls ON ls.id = (itm->>'serviceId')::uuid
+      LEFT JOIN clothing_items ci ON ci.id = (itm->>'clothingItemId')::uuid
+      ${clause}
+      ORDER BY o.created_at DESC
+      LIMIT 1000;
+    `));
+
+    return rows.map((r: any) => ({
+      orderId: r.order_id,
+      orderNumber: r.order_number ?? null,
+      orderDate: new Date(r.created_at).toISOString(),
+      customerId: r.customer_id ?? null,
+      customerName: r.customer_name ?? null,
+      packageId: r.package_id ?? null,
+      packageName: r.package_name ?? null,
+      serviceId: r.service_id ?? null,
+      serviceName: r.service_name ?? null,
+      clothingItemId: r.clothing_item_id ?? null,
+      clothingItemName: r.clothing_item_name ?? null,
+      quantity: Number(r.quantity ?? 0),
     }));
   }
 

@@ -4030,6 +4030,25 @@ export async function registerRoutes(
 
       const order = await storage.createOrder({ ...orderData, branchId: effectiveBranchId, packageUsages: pkgUsages });
 
+      // Record immediate payment for non-pay-later orders so cash/card receipts are reflected in reports
+      if (order.paymentMethod !== 'pay_later' && order.customerId) {
+        try {
+          const paymentData = insertPaymentSchema.parse({
+            customerId: order.customerId,
+            orderId: order.id,
+            branchId: effectiveBranchId,
+            amount: order.total,
+            paymentMethod: order.paymentMethod,
+            channel: 'pos',
+            notes: `Order payment: ${order.orderNumber || order.id}`,
+            receivedBy: (user as any)?.username || 'POS User',
+          });
+          await storage.createPayment(paymentData);
+        } catch (err) {
+          logger.error({ err, orderId: order.id }, 'Failed to record immediate payment for order');
+        }
+      }
+
       // If payment method is pay_later, update customer balance
       if (order.paymentMethod === 'pay_later' && order.customerId) {
         try {
@@ -5432,6 +5451,20 @@ export async function registerRoutes(
       res.json({ packages });
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch top packages" });
+    }
+  });
+
+  app.get("/api/reports/package-usage", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const user = req.user as UserWithBranch;
+      const { filter, error } = parseReportFilters(req, user);
+      if (error) return res.status(400).json({ message: error });
+      const customerId = req.query.customerId as string | undefined;
+      const packageId = req.query.packageId as string | undefined;
+      const rows = await storage.getPackageUsageReport({ ...filter, customerId, packageId });
+      res.json({ usage: rows });
+    } catch (e) {
+      res.status(500).json({ message: 'Failed to fetch package usage' });
     }
   });
 

@@ -38,6 +38,7 @@ const statusColors = {
   processing: "bg-yellow-100 text-yellow-800",
   ready: "bg-green-100 text-green-800",
   handed_over: "bg-gray-100 text-gray-800",
+  cancelled: "bg-red-100 text-red-800",
 };
 
 const statusIcons = {
@@ -46,6 +47,7 @@ const statusIcons = {
   processing: AlertCircle,
   ready: CheckCircle,
   handed_over: CheckCircle,
+  cancelled: AlertCircle,
 };
 
 export const getItemsSummary = (items: OrderItem[], t: Translations): string => {
@@ -118,6 +120,7 @@ export function OrderTracking() {
     processing: t.processing,
     ready: t.ready,
     handed_over: t.handedOver,
+    cancelled: t.cancelled,
   };
 
   const paymentLabels: Record<string, string> = {

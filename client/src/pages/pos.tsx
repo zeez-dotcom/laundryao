@@ -29,6 +29,7 @@ import { ClothingItem, LaundryService, Customer } from "@shared/schema";
 import { ShoppingCart, Package, BarChart3, Settings, Users, Truck, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslationContext } from "@/context/TranslationContext";
 import { buildReceiptData } from "@/lib/receipt";
@@ -54,6 +55,17 @@ export default function POS() {
   const [showChatbot, setShowChatbot] = useState(false);
   const [branchOverrideCode, setBranchOverrideCode] = useState("");
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
+  // Payment timing prompt state
+  const [isPaymentTimingOpen, setIsPaymentTimingOpen] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState<{
+    redeemedPoints: number;
+    readyByOption: string;
+    readyByDate: Date;
+    packageUsage?: {
+      packageId: string;
+      items: { serviceId: string; clothingItemId: string; quantity: number }[];
+    };
+  } | null>(null);
   
   const isMobile = useIsMobile();
   const { toast } = useToast();
@@ -263,7 +275,14 @@ export default function POS() {
         quantity: number;
       }[];
     },
+    timing?: 'now' | 'later',
   ) => {
+    // If the user selected cash/card but didn't choose timing yet, prompt.
+    if (!timing && (paymentMethod === 'cash' || paymentMethod === 'card')) {
+      setPendingCheckout({ redeemedPoints, readyByOption, readyByDate, packageUsage });
+      setIsPaymentTimingOpen(true);
+      return;
+    }
     if (cartSummary.items.length === 0) {
       toast({
         title: t.posCartEmptyTitle,
@@ -321,6 +340,12 @@ export default function POS() {
     const finalTotal = Math.max(grossTotal - redeemedAmount, 0);
     const pointsEarned = Math.floor(finalTotal);
 
+    // If user chose to pay later, override to pay_later but preserve intent in notes
+    const effectiveMethod = timing === 'later' ? 'pay_later' : paymentMethod;
+    const intentNote = timing === 'later' && (paymentMethod === 'cash' || paymentMethod === 'card')
+      ? `Payment deferred; intended method: ${paymentMethod}`
+      : undefined;
+
     const orderData = {
       cartItems: orderItems,
       customerId: customer?.id, // let server default to Walk-in when undefined
@@ -331,7 +356,7 @@ export default function POS() {
       subtotal: subtotalVal.toFixed(2),
       tax: taxVal.toFixed(2),
       total: grossTotal.toFixed(2),
-      paymentMethod,
+      paymentMethod: effectiveMethod,
       status: "start_processing",
       estimatedPickup: new Date(
         Date.now() + 3 * 24 * 60 * 60 * 1000,
@@ -342,10 +367,11 @@ export default function POS() {
       sellerName: username,
       loyaltyPointsEarned: pointsEarned,
       loyaltyPointsRedeemed: redeemedPoints,
+      ...(intentNote ? { notes: intentNote } : {}),
       packageUsage,
     };
 
-    const transaction = paymentMethod === "pay_later" ? undefined : {
+    const transaction = effectiveMethod === "pay_later" ? undefined : {
       items: orderItems,
       subtotal: subtotalVal.toFixed(2),
       tax: taxVal.toFixed(2),
@@ -969,6 +995,30 @@ export default function POS() {
         printNumber={printInfo?.printNumber}
         printedAt={printInfo?.printedAt}
       />
+
+      {/* Payment timing prompt */}
+      <Dialog open={isPaymentTimingOpen} onOpenChange={setIsPaymentTimingOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t.payment}</DialogTitle>
+            <DialogDescription>
+              {t.payLater || 'Pay later'}? {t.or || 'or'} {t.pay || 'Pay'} {paymentMethod === 'card' ? (t.card || 'card') : (t.cash || 'cash')} {t.now || 'now'}?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => {
+              const p = pendingCheckout; if (!p) return; setIsPaymentTimingOpen(false);
+              void handleCheckout(p.redeemedPoints, p.readyByOption, p.readyByDate, p.packageUsage, 'later');
+              setPendingCheckout(null);
+            }}>{t.payLater || 'Pay later (at pickup)'}</Button>
+            <Button onClick={() => {
+              const p = pendingCheckout; if (!p) return; setIsPaymentTimingOpen(false);
+              void handleCheckout(p.redeemedPoints, p.readyByOption, p.readyByDate, p.packageUsage, 'now');
+              setPendingCheckout(null);
+            }}>{t.pay || 'Pay now'}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
