@@ -43,6 +43,8 @@ import {
   type ClothingItem,
   orders,
   branchAds,
+  cities,
+  type City,
 } from "@shared/schema";
 import { loginSchema } from "@shared/schemas";
 import {
@@ -1634,6 +1636,263 @@ export async function registerRoutes(
       res.status(500).json({ message: "Failed to fetch cities" });
     }
   });
+
+  // Admin Cities Management
+  app.post("/api/admin/cities", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const cityPayload = z
+        .object({
+          nameEn: z.string().min(1),
+          nameAr: z.string().min(1),
+          type: z.enum(["governorate", "area"]).default("area"),
+          parentId: z.string().uuid().optional().nullable(),
+          displayOrder: z.coerce.number().int().optional(),
+          isActive: z.boolean().optional(),
+        })
+        .parse(req.body);
+
+      if (cityPayload.type === "area") {
+        if (!cityPayload.parentId) {
+          return res.status(400).json({ message: "parentId is required for area" });
+        }
+        const [parent] = await db
+          .select({ id: cities.id, type: cities.type })
+          .from(cities)
+          .where(eq(cities.id, cityPayload.parentId));
+        if (!parent || (parent as any).type !== "governorate") {
+          return res.status(400).json({ message: "Invalid governorate parentId" });
+        }
+      }
+
+      const [created] = await db
+        .insert(cities)
+        .values({
+          nameEn: cityPayload.nameEn,
+          nameAr: cityPayload.nameAr,
+          type: cityPayload.type as any,
+          parentId: cityPayload.parentId ?? null,
+          displayOrder: cityPayload.displayOrder ?? 0,
+          isActive: cityPayload.isActive ?? true,
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      res.status(201).json(created);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to create city" });
+    }
+  });
+
+  app.put("/api/admin/cities/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const payload = z
+        .object({
+          nameEn: z.string().min(1).optional(),
+          nameAr: z.string().min(1).optional(),
+          type: z.enum(["governorate", "area"]).optional(),
+          parentId: z.string().uuid().nullable().optional(),
+          displayOrder: z.coerce.number().int().optional(),
+          isActive: z.boolean().optional(),
+        })
+        .parse(req.body);
+
+      if (payload.type === "area") {
+        if (payload.parentId === undefined) {
+          // leave as is
+        } else if (!payload.parentId) {
+          return res.status(400).json({ message: "parentId is required for area" });
+        } else {
+          const [parent] = await db
+            .select({ id: cities.id, type: cities.type })
+            .from(cities)
+            .where(eq(cities.id, payload.parentId));
+          if (!parent || (parent as any).type !== "governorate") {
+            return res.status(400).json({ message: "Invalid governorate parentId" });
+          }
+        }
+      }
+
+      const updateData: any = { updatedAt: new Date() };
+      for (const [k, v] of Object.entries(payload)) {
+        if (v !== undefined) (updateData as any)[k] = v;
+      }
+
+      const [updated] = await db.update(cities).set(updateData).where(eq(cities.id, id)).returning();
+      if (!updated) return res.status(404).json({ message: "City not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(400).json({ message: "Failed to update city" });
+    }
+  });
+
+  app.delete("/api/admin/cities/:id", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const [updated] = await db
+        .update(cities)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(eq(cities.id, id))
+        .returning();
+    
+      if (!updated) return res.status(404).json({ message: "City not found" });
+      res.status(204).end();
+    } catch (error) {
+      res.status(400).json({ message: "Failed to delete city" });
+    }
+  });
+
+  // Bulk cities template (CSV)
+  app.get("/api/admin/cities/template", requireAdminOrSuperAdmin, async (_req, res) => {
+    const csv = [
+      [
+        "nameEn",
+        "nameAr",
+        "type",
+        "parentId",
+        "parentNameEn",
+        "displayOrder",
+        "isActive",
+      ].join(","),
+    ].join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=city-template.csv");
+    res.send(csv);
+  });
+
+  // Bulk cities sample (CSV with example data)
+  app.get("/api/admin/cities/sample", requireAdminOrSuperAdmin, async (_req, res) => {
+    const header = [
+      "nameEn",
+      "nameAr",
+      "type",
+      "parentId",
+      "parentNameEn",
+      "displayOrder",
+      "isActive",
+    ].join(",");
+
+    // Provide a small representative subset that uses parentNameEn links
+    const rows = [
+      // Governorates
+      ["Al Asimah", "العاصمة", "governorate", "", "", "0", "true"],
+      ["Hawalli", "حولي", "governorate", "", "", "0", "true"],
+      // Areas under Al Asimah
+      ["Sharq", "شرق", "area", "", "Al Asimah", "1", "true"],
+      ["Shuwaikh", "الشويخ", "area", "", "Al Asimah", "2", "true"],
+      // Areas under Hawalli
+      ["Salmiya", "السالمية", "area", "", "Hawalli", "1", "true"],
+      ["Jabriya", "الجابرية", "area", "", "Hawalli", "2", "true"],
+    ];
+
+    const csv = [header, ...rows.map((r) => r.join(","))].join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=city-sample.csv");
+    res.send(csv);
+  });
+
+  // Bulk cities upload (CSV)
+  app.post(
+    "/api/admin/cities/bulk-upload",
+    requireAdminOrSuperAdmin,
+    upload.single("file"),
+    async (req, res) => {
+      try {
+        const buf = req.file?.buffer;
+        if (!buf || !buf.length) {
+          return res.status(400).json({ message: "No file uploaded" });
+        }
+        const text = buf.toString("utf8");
+        const lines = text
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+        if (lines.length === 0) {
+          return res.status(400).json({ message: "Empty CSV" });
+        }
+        const headers = lines[0].split(",").map((h) => h.trim());
+        const idx = (name: string) => headers.indexOf(name);
+        const required = ["nameEn", "nameAr", "type"];
+        for (const r of required) {
+          if (idx(r) === -1) {
+            return res.status(400).json({ message: `Missing column: ${r}` });
+          }
+        }
+
+        const colParentId = idx("parentId");
+        const colParentName = idx("parentNameEn");
+        const colDisp = idx("displayOrder");
+        const colActive = idx("isActive");
+
+        let inserted = 0;
+        let updated = 0;
+        const errors: { line: number; error: string }[] = [];
+
+        // cache governorates by nameEn for quick lookups
+        const govRows = await db
+          .select({ id: cities.id, nameEn: cities.nameEn })
+          .from(cities)
+          .where(eq(cities.type, "governorate" as any));
+        const govByName = new Map(govRows.map((g) => [g.nameEn.toLowerCase(), g.id]));
+
+        for (let i = 1; i < lines.length; i++) {
+          const parts = lines[i].split(",").map((p) => p.trim());
+          if (parts.length === 1 && parts[0] === "") continue;
+          const safe = (idx: number) => (idx >= 0 ? (parts[idx] ?? "").trim() : "");
+          const nameEn = safe(idx("nameEn"));
+          const nameAr = safe(idx("nameAr"));
+          const type = safe(idx("type")).toLowerCase();
+          let parentId = colParentId >= 0 ? safe(colParentId) : "";
+          const parentNameEn = colParentName >= 0 ? safe(colParentName) : "";
+          const displayOrder = colDisp >= 0 ? Number.parseInt(safe(colDisp) || "0", 10) : 0;
+          const isActive = colActive >= 0 ? /^true|1|yes$/i.test(safe(colActive)) : true;
+
+          if (!nameEn || !nameAr || !["governorate", "area"].includes(type)) {
+            errors.push({ line: i + 1, error: "Invalid row values" });
+            continue;
+          }
+
+          if (type === "area" && !parentId) {
+            if (parentNameEn) {
+              const govId = govByName.get(parentNameEn.toLowerCase());
+              if (govId) parentId = govId;
+            }
+          }
+          if (type === "area" && !parentId) {
+            errors.push({ line: i + 1, error: "Missing parent governorate" });
+            continue;
+          }
+
+          // Try find existing city by nameEn + type
+          const [existing] = await db
+            .select({ id: cities.id })
+            .from(cities)
+            .where(and(eq(cities.nameEn, nameEn), eq(cities.type, type as any)))
+            .limit(1);
+
+          if (existing) {
+            const [row] = await db
+              .update(cities)
+              .set({ nameAr, parentId: type === "area" ? (parentId || null) : null, displayOrder, isActive, updatedAt: new Date() })
+              .where(eq(cities.id, existing.id))
+              .returning();
+            if (row) updated++;
+          } else {
+            const [row] = await db
+              .insert(cities)
+              .values({ nameEn, nameAr, type: type as any, parentId: type === "area" ? (parentId || null) : null, displayOrder, isActive, updatedAt: new Date() })
+              .returning();
+            if (row) inserted++;
+          }
+        }
+
+        res.json({ inserted, updated, errors });
+      } catch (error) {
+        logger.error("Bulk upload cities failed", error as any);
+        res.status(400).json({ message: "Failed to process file" });
+      }
+    },
+  );
 
   // Coupon management routes
   app.get("/api/coupons", requireAuth, async (req, res) => {
@@ -6230,6 +6489,23 @@ export async function registerRoutes(
     } catch (error) {
       logger.error("Error fetching service cities:", error as any);
       res.status(500).json({ message: "Failed to fetch service cities" });
+    }
+  });
+
+  // Allow updating service cities on the non-admin path used by client
+  app.put("/api/branches/:id/service-cities", requireAdminOrSuperAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as User;
+      if (user.role !== "super_admin" && user.branchId !== id) {
+        return res.status(403).json({ message: "Cannot modify other branches" });
+      }
+      const { cityIds } = z.object({ cityIds: z.array(z.string()) }).parse(req.body);
+      const updated = await storage.setBranchServiceCities(id, cityIds);
+      res.json({ cityIds: updated });
+    } catch (error) {
+      logger.error("Error updating service cities:", error as any);
+      res.status(400).json({ message: "Failed to update service cities" });
     }
   });
 

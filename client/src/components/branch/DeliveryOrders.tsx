@@ -200,9 +200,10 @@ function DeliveryMapCell({
   );
 }
 
+// Mirror server transitions: allow branch to move directly to ready/out_for_delivery
 const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   pending: ["accepted", "cancelled"],
-  accepted: ["driver_enroute", "cancelled"],
+  accepted: ["ready", "out_for_delivery", "driver_enroute", "cancelled"],
   driver_enroute: ["picked_up", "cancelled"],
   picked_up: ["processing_started", "cancelled"],
   processing_started: ["ready", "cancelled"],

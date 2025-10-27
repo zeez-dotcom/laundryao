@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthContext } from "@/context/AuthContext";
 import { apiRequest } from "@/lib/queryClient";
@@ -26,7 +27,8 @@ import {
   Minus,
   Save,
   Eye,
-  EyeOff
+  EyeOff,
+  Pencil
 } from "lucide-react";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import type { 
@@ -155,6 +157,86 @@ export function BranchDeliveryManager() {
     enabled: !!branch?.id,
   });
 
+  // Cities management (admin)
+  const [cityDialogOpen, setCityDialogOpen] = useState(false);
+  const [newCityType, setNewCityType] = useState<"governorate" | "area">("area");
+  const [newCityNameEn, setNewCityNameEn] = useState("");
+  const [newCityNameAr, setNewCityNameAr] = useState("");
+  const [newCityParentId, setNewCityParentId] = useState("");
+  const [editingCity, setEditingCity] = useState<City | null>(null);
+  const [editNameEn, setEditNameEn] = useState("");
+  const [editNameAr, setEditNameAr] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const createCityMutation = useMutation({
+    mutationFn: async (payload: { nameEn: string; nameAr: string; type: "governorate" | "area"; parentId?: string }) => {
+      const res = await apiRequest("POST", "/api/admin/cities", payload);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to create city");
+      }
+      return res.json();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/cities"] });
+      setCityDialogOpen(false);
+      setNewCityNameEn("");
+      setNewCityNameAr("");
+      setNewCityParentId("");
+      setNewCityType("area");
+      toast({ title: "City created" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to create city", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const updateCityMutation = useMutation({
+    mutationFn: async ({ id, nameEn, nameAr }: { id: string; nameEn: string; nameAr: string }) => {
+      const res = await apiRequest("PUT", `/api/admin/cities/${id}`, { nameEn, nameAr });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to update city");
+      }
+      return res.json();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/cities"] });
+      setEditingCity(null);
+      toast({ title: "City updated" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to update city", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleCityActiveMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: string; isActive: boolean }) => {
+      if (isActive) {
+        const res = await apiRequest("PUT", `/api/admin/cities/${id}`, { isActive: true });
+        return res.json();
+      }
+      const res = await apiRequest("DELETE", `/api/admin/cities/${id}`);
+      if (res.status !== 204 && !res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to update city status");
+      }
+      return { id, isActive };
+    },
+    onSuccess: async (_data, vars) => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/cities"] });
+      if (!vars.isActive && serviceCities.includes(vars.id)) {
+        const newCities = serviceCities.filter((cid) => cid !== vars.id);
+        updateServiceCitiesMutation.mutate(newCities);
+      }
+      toast({ title: vars.isActive ? "City activated" : "City deactivated" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to toggle city", description: err.message, variant: "destructive" });
+    },
+  });
+
   // Load current settings into form state
   useEffect(() => {
     if (currentSettings) {
@@ -271,15 +353,16 @@ export function BranchDeliveryManager() {
     updateServiceCitiesMutation.mutate(cityIds);
   };
 
-  // Group cities by governorate
-  const groupedCities = cities.reduce((acc, city) => {
+  // Group active cities by governorate
+  const visibleCities = showInactive ? cities : cities.filter(c => c.isActive !== false);
+  const groupedCities = visibleCities.reduce((acc, city) => {
     if (city.type === 'governorate') {
       acc[city.id] = { governorate: city, areas: [] };
     }
     return acc;
   }, {} as Record<string, { governorate: City; areas: City[] }>);
 
-  cities.forEach(city => {
+  visibleCities.forEach(city => {
     if (city.type === 'area' && city.parentId && groupedCities[city.parentId]) {
       groupedCities[city.parentId].areas.push(city);
     }
@@ -574,19 +657,149 @@ export function BranchDeliveryManager() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Manage cities and areas used in customer registration.
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Switch checked={showInactive} onCheckedChange={(v) => setShowInactive(v === true)} />
+                    <span>Show inactive</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/admin/cities/template`, { credentials: "include" });
+                        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "city-template.csv";
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        toast({ title: "Download failed", description: err.message, variant: "destructive" });
+                      }
+                    }}
+                  >
+                    Download Template
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/admin/cities/sample`, { credentials: "include" });
+                        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "city-sample.csv";
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        toast({ title: "Download failed", description: err.message, variant: "destructive" });
+                      }
+                    }}
+                  >
+                    Download Sample
+                  </Button>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    id="city-upload"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setUploading(true);
+                      try {
+                        const form = new FormData();
+                        form.append("file", file);
+                        const res = await fetch(`/api/admin/cities/bulk-upload`, {
+                          method: "POST",
+                          body: form,
+                          credentials: "include",
+                        });
+                        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+                        const summary = await res.json();
+                        await queryClient.invalidateQueries({ queryKey: ["/api/cities"] });
+                        toast({ title: "Upload complete", description: `Inserted ${summary.inserted}, updated ${summary.updated}` });
+                        // remove deactivated from branch coverage if any were deactivated by upload is handled in toggle mutation only, but not critical here
+                      } catch (err: any) {
+                        toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+                      } finally {
+                        setUploading(false);
+                        // reset input value to allow re-uploading same file
+                        (document.getElementById("city-upload") as HTMLInputElement | null)?.value && ((document.getElementById("city-upload") as HTMLInputElement).value = "");
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={uploading}
+                    onClick={() => (document.getElementById("city-upload") as HTMLInputElement | null)?.click()}
+                  >
+                    {uploading ? "Uploading..." : "Upload CSV"}
+                  </Button>
+                  <Button size="sm" onClick={() => setCityDialogOpen(true)}>
+                    <Plus className="w-4 h-4 mr-2" /> Add City/Area
+                  </Button>
+                </div>
+              </div>
+              <Separator />
               {Object.values(groupedCities).map(({ governorate, areas }) => (
                 <div key={governorate.id} className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      {governorate.nameEn} ({governorate.nameAr})
-                    </h3>
-                    <Badge variant="outline">
-                      {areas.filter(area => serviceCities.includes(area.id)).length} / {areas.length} areas
-                    </Badge>
+                    <div className="flex items-center gap-3">
+                      {editingCity?.id === governorate.id ? (
+                        <div className="flex items-center gap-2">
+                          <Input value={editNameEn} onChange={(e) => setEditNameEn(e.target.value)} className="w-48" />
+                          <Input value={editNameAr} onChange={(e) => setEditNameAr(e.target.value)} className="w-48" />
+                          <Button size="sm" onClick={() => updateCityMutation.mutate({ id: governorate.id, nameEn: editNameEn.trim(), nameAr: editNameAr.trim() })} disabled={(updateCityMutation as any).isPending || !editNameEn.trim() || !editNameAr.trim() }>
+                            <Save className="w-4 h-4 mr-1" /> Save
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setEditingCity(null)}>Cancel</Button>
+                        </div>
+                      ) : (
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {governorate.nameEn} ({governorate.nameAr})
+                        </h3>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {editingCity?.id !== governorate.id && (
+                        <Button size="sm" variant="outline" onClick={() => { setEditingCity(governorate); setEditNameEn(governorate.nameEn); setEditNameAr(governorate.nameAr); }}>
+                          <Pencil className="w-4 h-4 mr-1" /> Edit
+                        </Button>
+                      )}
+                      <Badge variant="outline">
+                        {areas.filter(area => serviceCities.includes(area.id)).length} / {areas.length} areas
+                      </Badge>
+                      <Button size="sm" variant="ghost" onClick={() => toggleCityActiveMutation.mutate({ id: governorate.id, isActive: governorate.isActive === false ? true : false })}>
+                        {governorate.isActive === false ? (
+                          <>
+                            <Eye className="w-4 h-4 mr-1" /> Activate
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-4 h-4 mr-1" /> Deactivate
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 pl-4">
                     {areas.map((area) => (
-                      <div key={area.id} className="flex items-center space-x-2">
+                      <div key={area.id} className="flex items-center justify-between gap-2">
                         <Checkbox
                           checked={serviceCities.includes(area.id)}
                           onCheckedChange={(checked) => {
@@ -597,9 +810,30 @@ export function BranchDeliveryManager() {
                           }}
                           data-testid={`checkbox-city-${area.id}`}
                         />
-                        <Label className="text-sm">
-                          {area.nameEn}
-                        </Label>
+                        {editingCity?.id === area.id ? (
+                          <div className="flex items-center gap-2 w-full">
+                            <Input value={editNameEn} onChange={(e) => setEditNameEn(e.target.value)} className="w-40" />
+                            <Input value={editNameAr} onChange={(e) => setEditNameAr(e.target.value)} className="w-40" />
+                            <Button size="sm" onClick={() => updateCityMutation.mutate({ id: area.id, nameEn: editNameEn.trim(), nameAr: editNameAr.trim() })} disabled={(updateCityMutation as any).isPending || !editNameEn.trim() || !editNameAr.trim() }>
+                              <Save className="w-4 h-4 mr-1" />
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => setEditingCity(null)}>Cancel</Button>
+                          </div>
+                        ) : (
+                          <Label className="text-sm flex-1">
+                            {area.nameEn}
+                          </Label>
+                        )}
+                        {editingCity?.id !== area.id && (
+                          <div className="flex items-center gap-1">
+                            <Button size="sm" variant="outline" onClick={() => { setEditingCity(area); setEditNameEn(area.nameEn); setEditNameAr(area.nameAr); }}>
+                              <Pencil className="w-4 h-4" />
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => toggleCityActiveMutation.mutate({ id: area.id, isActive: area.isActive === false ? true : false })}>
+                              {area.isActive === false ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -774,6 +1008,74 @@ export function BranchDeliveryManager() {
           </Card>
         </TabsContent>
       </Tabs>
+      {/* Create City/Area Dialog */}
+      <Dialog open={cityDialogOpen} onOpenChange={setCityDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add City or Area</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Type</Label>
+                <Select value={newCityType} onValueChange={(v) => setNewCityType(v as any)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="governorate">Governorate</SelectItem>
+                    <SelectItem value="area">Area</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {newCityType === "area" && (
+                <div>
+                  <Label>Governorate</Label>
+                  <Select value={newCityParentId} onValueChange={setNewCityParentId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select governorate" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cities.filter(c => c.type === 'governorate').map((g) => (
+                        <SelectItem key={g.id} value={g.id}>{g.nameEn}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+            <div>
+              <Label>English Name</Label>
+              <Input value={newCityNameEn} onChange={(e) => setNewCityNameEn(e.target.value)} />
+            </div>
+            <div>
+              <Label>Arabic Name</Label>
+              <Input value={newCityNameAr} onChange={(e) => setNewCityNameAr(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCityDialogOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() =>
+                  createCityMutation.mutate({
+                    nameEn: newCityNameEn.trim(),
+                    nameAr: newCityNameAr.trim(),
+                    type: newCityType,
+                    parentId: newCityType === 'area' ? newCityParentId || undefined : undefined,
+                  })
+                }
+                disabled={
+                  (createCityMutation as any).isPending ||
+                  !newCityNameEn.trim() ||
+                  !newCityNameAr.trim() ||
+                  (newCityType === 'area' && !newCityParentId)
+                }
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -54,9 +54,13 @@ const statusUpdateSchema = z.object({
   status: z.enum(deliveryStatusValues),
 });
 
+// Allow branch users to progress orders without driver accounts.
+// Keep driver-related paths, but add direct paths to ready/out_for_delivery.
 const DELIVERY_STATUS_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
   pending: ["accepted", "cancelled"],
-  accepted: ["driver_enroute", "cancelled"],
+  // Previously only: ["driver_enroute", "cancelled"]
+  // Now branch can move straight to ready or out_for_delivery as needed.
+  accepted: ["ready", "out_for_delivery", "driver_enroute", "cancelled"],
   driver_enroute: ["picked_up", "cancelled"],
   picked_up: ["processing_started", "cancelled"],
   processing_started: ["ready", "cancelled"],

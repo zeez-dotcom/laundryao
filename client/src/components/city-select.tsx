@@ -33,10 +33,11 @@ export function CitySelect({ value, onChange, cityIds }: CitySelectProps) {
   useEffect(() => {
     getCities()
       .then((list) => {
+        const active = list.filter((c) => c.isActive !== false);
         setCities(
           cityIds && cityIds.length > 0
-            ? list.filter((c) => cityIds.includes(c.id))
-            : list,
+            ? active.filter((c) => cityIds.includes(c.id))
+            : active,
         );
       })
       .catch(() => {});
@@ -91,4 +92,3 @@ export function CitySelect({ value, onChange, cityIds }: CitySelectProps) {
     </Popover>
   );
 }
-
