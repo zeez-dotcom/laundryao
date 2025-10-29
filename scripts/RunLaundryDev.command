@@ -5,7 +5,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP_ROOT="${HERE}/../mobile/flutter_app"
-API_BASE_URL_DEFAULT="http://localhost:5000"
+API_BASE_URL_DEFAULT="http://localhost:5002"
 
 if ! command -v flutter >/dev/null 2>&1; then
   echo "[!] Flutter not found in PATH. Open Terminal and run: brew install --cask flutter or ensure flutter is in PATH." >&2
@@ -28,4 +28,3 @@ echo "Launching with API_BASE_URL=$API_URL"
 
 # Run the macOS desktop app
 exec flutter run -d macos --dart-define=API_BASE_URL="$API_URL"
-

@@ -47,7 +47,10 @@ class _CustomerChatScreenState extends State<CustomerChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Chat with cashier')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Chat with cashier'),
+      ),
       body: Column(
         children: [
           Expanded(

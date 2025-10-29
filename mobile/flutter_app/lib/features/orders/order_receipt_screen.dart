@@ -35,7 +35,10 @@ class _OrderReceiptScreenState extends State<OrderReceiptScreen> {
     if (_error != null) return Scaffold(appBar: AppBar(title: const Text('Receipt')), body: Center(child: Text(_error!)));
     final r = _receipt;
     return Scaffold(
-      appBar: AppBar(title: const Text('Receipt')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Receipt'),
+      ),
       body: r == null
           ? const Center(child: CircularProgressIndicator())
           : Padding(
@@ -67,4 +70,3 @@ class _OrderReceiptScreenState extends State<OrderReceiptScreen> {
     );
   }
 }
-

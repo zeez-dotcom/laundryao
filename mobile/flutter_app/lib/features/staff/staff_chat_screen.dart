@@ -59,7 +59,10 @@ class _StaffChatScreenState extends State<StaffChatScreen> {
     final customers = _threads.keys.toList();
     final messages = _selectedCid != null ? (_threads[_selectedCid] ?? []) : [];
     return Scaffold(
-      appBar: AppBar(title: const Text('Staff Chat')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Staff Chat'),
+      ),
       body: Row(
         children: [
           Container(

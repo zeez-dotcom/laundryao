@@ -6,9 +6,9 @@ import '../config/config.dart';
 class ApiClient {
   static final ApiClient _instance = ApiClient._internal();
   factory ApiClient() => _instance;
-  ApiClient._internal();
 
-  static const _defineBase = String.fromEnvironment('API_BASE_URL', defaultValue: '');
+  // Default to 5002 as requested; can be overridden via dart-define or Settings screen
+  static const _defineBase = String.fromEnvironment('API_BASE_URL', defaultValue: 'http://localhost:5002');
   late final Dio dio = Dio(BaseOptions(
     baseUrl: _defineBase,
     headers: { 'Accept': 'application/json' },

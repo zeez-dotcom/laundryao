@@ -42,7 +42,10 @@ class _StaffRecordPaymentScreenState extends State<StaffRecordPaymentScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Record Payment')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Record Payment'),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -72,4 +75,3 @@ class _StaffRecordPaymentScreenState extends State<StaffRecordPaymentScreen> {
     );
   }
 }
-

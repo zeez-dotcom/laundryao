@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../config/config.dart';
+import 'branch_qr_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -28,7 +29,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Settings'),
+      ),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
           : Padding(

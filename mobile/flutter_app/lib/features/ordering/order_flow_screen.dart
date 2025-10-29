@@ -115,7 +115,10 @@ class _OrderFlowScreenState extends State<OrderFlowScreen> {
     if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
     if (_error != null) return Scaffold(appBar: AppBar(title: const Text('Order')), body: Center(child: Text(_error!)));
     return Scaffold(
-      appBar: AppBar(title: const Text('New Delivery Request')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('New Delivery Request'),
+      ),
       body: Column(children: [
         Expanded(child: ListView.builder(
           itemCount: _items.length,

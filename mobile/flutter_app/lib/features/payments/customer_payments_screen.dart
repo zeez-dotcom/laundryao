@@ -26,7 +26,10 @@ class _CustomerPaymentsScreenState extends State<CustomerPaymentsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Payments History')),
+      appBar: AppBar(
+        leading: Navigator.of(context).canPop() ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.of(context).maybePop()) : null,
+        title: const Text('Payments History'),
+      ),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _payments,
         builder: (context, snap) {
@@ -50,4 +53,3 @@ class _CustomerPaymentsScreenState extends State<CustomerPaymentsScreen> {
     );
   }
 }
-

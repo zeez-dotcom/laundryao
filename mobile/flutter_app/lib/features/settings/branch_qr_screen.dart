@@ -25,7 +25,8 @@ class _BranchQrScreenState extends State<BranchQrScreen> {
         String code = val;
         try {
           final uri = Uri.parse(val);
-          code = uri.queryParameters['branchCode'] ?? uri.pathSegments.isNotEmpty ? uri.pathSegments.last : val;
+          final qp = uri.queryParameters['branchCode'];
+          code = qp ?? (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : val);
         } catch (_) {}
         await AppConfig().setBranchCode(code);
         if (!mounted) return;
@@ -34,4 +35,3 @@ class _BranchQrScreenState extends State<BranchQrScreen> {
     );
   }
 }
-
