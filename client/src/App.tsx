@@ -23,6 +23,7 @@ import LoadingScreen from "@/components/common/LoadingScreen";
 import { ThemeProvider } from "@/theme";
 import CommandCenterPage from "@/pages/customers/CommandCenter";
 import ControlTowerPage from "@/pages/delivery/ControlTower";
+import StaffChatPage from "@/pages/staff-chat";
 import { CommandPaletteProvider } from "@/hooks/useCommandPalette";
 import CommandPalette from "@/components/navigation/CommandPalette";
 import { TourProvider } from "@/components/onboarding/TourProvider";
@@ -64,6 +65,7 @@ function Router() {
         <Route path="/customers/:id/command-center" component={CommandCenterPage} />
       )}
       {isAuthenticated && <Route path="/delivery/control-tower" component={ControlTowerPage} />}
+      {isAuthenticated && <Route path="/staff/chat" component={StaffChatPage} />}
       {isAuthenticated && <Route path="/driver" component={DriverDashboard} />}
       <Route component={NotFound} />
     </Switch>

@@ -481,6 +481,8 @@ export async function registerRoutes(
   const { eventBus } = options;
   const deliveryOrderWss = new WebSocketServer({ noServer: true });
   const driverLocationWss = new WebSocketServer({ noServer: true });
+  const customerChatWss = new WebSocketServer({ noServer: true });
+  type ChatClient = WebSocket & { branchId?: string; customerId?: string | null; isStaff?: boolean };
   const sessionMiddleware = getAdminSession();
   const passportInitialize = passport.initialize();
   const passportSession = passport.session();
@@ -671,8 +673,9 @@ export async function registerRoutes(
 
     const isDeliveryOrders = pathname === "/ws/delivery-orders";
     const isDriverLocation = pathname === "/ws/driver-location";
+    const isCustomerChat = pathname === "/ws/customer-chat";
 
-    if (!isDeliveryOrders && !isDriverLocation) {
+    if (!isDeliveryOrders && !isDriverLocation && !isCustomerChat) {
       if (process.env.NODE_ENV !== "development") {
         socket.destroy();
       }
@@ -710,6 +713,87 @@ export async function registerRoutes(
 
       driverLocationWss.handleUpgrade(req, socket, head, (ws) => {
         driverLocationWss.emit("connection", ws, req);
+      });
+    }
+
+    if (isCustomerChat) {
+      try {
+        await runMiddleware(req, sessionMiddleware);
+        await runMiddleware(req, passportInitialize);
+        await runMiddleware(req, passportSession);
+      } catch {
+        socket.destroy();
+        return;
+      }
+
+      const url = new URL(req.url || "", "http://localhost");
+      const branchCode = url.searchParams.get("branchCode") || undefined;
+
+      let branchId: string | undefined;
+      if (branchCode) {
+        try {
+          const branch = await storage.getBranchByCode(branchCode);
+          branchId = branch?.id;
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const user = (req as any).user as User | undefined;
+      const customerId = (req as any).session?.customerId as string | undefined;
+
+      if (user && ["admin", "super_admin"].includes(user.role)) {
+        if (!user.branchId) {
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        branchId = branchId || user.branchId || undefined;
+      }
+
+      if (!branchId) {
+        socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      customerChatWss.handleUpgrade(req, socket, head, (ws) => {
+        const client = ws as ChatClient;
+        client.branchId = branchId!;
+        client.isStaff = Boolean(user && ["admin", "super_admin"].includes(user.role));
+        client.customerId = client.isStaff ? null : (customerId ?? null);
+        // Notify presence
+        const joinMsg = JSON.stringify({ eventType: "chat:presence", branchId, actorType: client.isStaff ? "staff" : "customer", customerId: client.customerId });
+        for (const peer of customerChatWss.clients as Set<ChatClient>) {
+          if (peer.readyState === peer.OPEN && peer.branchId === branchId) {
+            peer.send(joinMsg);
+          }
+        }
+
+        ws.on("message", (data) => {
+          try {
+            const payload = JSON.parse(data.toString()) as { type?: string; text?: string; customerId?: string };
+            if (!payload || payload.type !== "chat" || !payload.text) return;
+            const targetCustomerId = client.isStaff ? (payload.customerId || null) : client.customerId || null;
+            const message = {
+              eventType: "chat:message",
+              branchId,
+              customerId: targetCustomerId,
+              text: payload.text,
+              sender: client.isStaff ? "staff" : "customer",
+              timestamp: new Date().toISOString(),
+            };
+            for (const peer of customerChatWss.clients as Set<ChatClient>) {
+              if (peer.readyState !== peer.OPEN) continue;
+              if (peer.branchId !== branchId) continue;
+              // Customers only receive their own thread; staff receives all threads
+              if (!peer.isStaff && peer.customerId !== targetCustomerId) continue;
+              peer.send(JSON.stringify(message));
+            }
+          } catch {
+            /* ignore */
+          }
+        });
       });
     }
   });
@@ -946,6 +1030,29 @@ export async function registerRoutes(
     }
   });
 
+  // JSON staff login/logout for mobile and external clients
+  app.post("/auth/login", (req, res, next) => {
+    passport.authenticate("local", (err, user, info) => {
+      if (err) return res.status(500).json({ message: "Login failed" });
+      if (!user) return res.status(401).json({ message: info?.message || "Invalid credentials" });
+      req.logIn(user, (loginErr) => {
+        if (loginErr) return res.status(500).json({ message: "Login failed" });
+        const safe = { ...user } as any;
+        delete safe.passwordHash;
+        return res.json(safe);
+      });
+    })(req, res, next);
+  });
+
+  app.post("/auth/logout", (req, res) => {
+    req.logout(() => {
+      req.session.destroy(() => {
+        res.clearCookie('sid', { path: '/' });
+        res.json({ message: "Logged out" });
+      });
+    });
+  });
+
   app.post("/auth/password/reset", async (req, res) => {
     try {
       const { token, newPassword } = z
@@ -983,7 +1090,8 @@ export async function registerRoutes(
         branchCode: z.string(),
         phoneNumber: z.string(),
         name: z.string(),
-        password: z.string().min(8),
+        // Align with client: allow 4–8 digit PIN/password
+        password: z.string().min(4).max(8),
         city: z.string(),
         addressLabel: z.string().optional(),
         address: z.string().optional(),
@@ -1242,6 +1350,7 @@ export async function registerRoutes(
         id: o.id,
         orderNumber: o.orderNumber,
         createdAt: o.createdAt,
+        status: o.status,
         subtotal: o.subtotal,
         paid: o.paid,
         remaining: o.remaining,
@@ -1249,6 +1358,37 @@ export async function registerRoutes(
       res.json(mapped);
     } catch {
       res.status(500).json({ message: "Failed to fetch orders" });
+    }
+  });
+
+  // Customer deliveries (active and pending), includes requests and accepted deliveries
+  app.get("/customer/deliveries", async (req, res) => {
+    const customerId = req.session.customerId;
+    if (!customerId) return res.status(401).json({ message: "Login required" });
+    try {
+      const rows = await db
+        .select({
+          delivery: deliveryOrders,
+          order: orders,
+        })
+        .from(deliveryOrders)
+        .innerJoin(orders, eq(deliveryOrders.orderId, orders.id))
+        .where(eq(orders.customerId, customerId));
+      const mapped = (rows as any[])
+        .map((r) => ({
+          id: r.delivery.id,
+          orderId: r.order.id,
+          orderNumber: r.order.orderNumber,
+          createdAt: r.order.createdAt,
+          status: r.order.status,
+          deliveryStatus: r.delivery.deliveryStatus,
+          scheduledDeliveryTime: r.delivery.scheduledDeliveryTime ?? null,
+        }))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 10);
+      res.json(mapped);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch deliveries" });
     }
   });
 

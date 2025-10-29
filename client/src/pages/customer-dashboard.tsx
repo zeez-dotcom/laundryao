@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CustomerAuthProvider, useCustomerAuth } from "@/context/CustomerAuthContext";
 import { EnhancedPackageDisplay } from "@/components/EnhancedPackageDisplay";
 import { CustomerOrders } from "@/components/customer-orders";
@@ -9,12 +9,24 @@ import { Card, CardContent } from "@/components/ui/card";
 import { LanguageSelector } from "@/components/language-selector";
 import CardGrid, { type CardGridCard } from "@/components/layout/CardGrid";
 import { GlossaryTooltip, useTour } from "@/components/onboarding/TourProvider";
-import { Package, Users, Activity } from "lucide-react";
+import { Package, Users, Activity, Truck, PlusCircle, MessageSquare } from "lucide-react";
+import { useLocation } from "wouter";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useTranslationContext } from "@/context/TranslationContext";
 
 function DashboardContent() {
   const { isAuthenticated, isLoading: authLoading, customer } = useCustomerAuth() as any;
   const { branch } = useAuthContext();
   const { registerTour, startTour, isTourDismissed, registerGlossaryEntries } = useTour();
+  const [, setLocation] = useLocation();
+  const { t } = useTranslationContext();
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<{ sender: 'staff'|'customer'; text: string; timestamp: string }[]>([]);
+  const [chatText, setChatText] = useState("");
+  const chatWsRef = useRef<WebSocket | null>(null);
 
   const { data: packages = [], isLoading: pkgLoading } = useQuery<any[]>({
     queryKey: ["/customer/packages"],
@@ -40,6 +52,18 @@ function DashboardContent() {
 
   const { data: ads = [] } = useQuery<any[]>({
     queryKey: ["/customer/ads"],
+    enabled: isAuthenticated,
+  });
+
+  // Customer deliveries summary (hook must be top-level before any early returns)
+  const { data: deliveries = [] } = useQuery<any[]>({
+    queryKey: ["/customer/deliveries"],
+    enabled: isAuthenticated,
+  });
+
+  // Quick orders fetch for banner (ready for pickup)
+  const { data: shortOrders = [] } = useQuery<any[]>({
+    queryKey: ["/customer/orders", "banner"],
     enabled: isAuthenticated,
   });
 
@@ -160,6 +184,60 @@ function DashboardContent() {
     <p className="text-[var(--text-sm)] text-muted-foreground">No promotions are active for this customer right now.</p>
   );
 
+  const deliveriesContent = deliveries.length ? (
+    <div className="space-y-2">
+      {deliveries.map((d) => (
+        <div key={d.id} className="flex items-center justify-between rounded border p-2">
+          <div>
+            <div className="font-medium">Delivery #{d.orderNumber}</div>
+            <div className="text-[var(--text-xs)] text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</div>
+            <div className="mt-1 text-[var(--text-xs)]">Status: <span className="rounded bg-gray-100 px-2 py-0.5">{d.deliveryStatus || 'pending'}</span></div>
+          </div>
+          <button
+            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+            onClick={() => setLocation(`/portal/delivery-tracking?deliveryId=${d.id}`)}
+          >
+            <Truck className="h-4 w-4" /> {t.customerDashboard?.track || 'Track'}
+          </button>
+        </div>
+      ))}
+    </div>
+  ) : (
+    <div className="text-[var(--text-sm)] text-muted-foreground">{t.customerDashboardNoDeliveries || 'No delivery jobs yet.'}</div>
+  );
+
+  // Live chat connection
+  useEffect(() => {
+    if (!chatOpen || !branch?.code) return;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws/customer-chat?branchCode=${encodeURIComponent(branch.code)}`);
+      chatWsRef.current = ws;
+      ws.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data);
+          if (data?.eventType === 'chat:message') {
+            setChatMessages((prev) => [...prev, { sender: data.sender, text: data.text, timestamp: data.timestamp }]);
+          }
+        } catch {
+          // ignore
+        }
+      };
+      ws.onclose = () => { chatWsRef.current = null; };
+      return () => { ws.close(); chatWsRef.current = null; };
+    } catch {
+      // ignore
+    }
+  }, [chatOpen, branch?.code]);
+
+  const sendChat = () => {
+    const text = chatText.trim();
+    if (!text || !chatWsRef.current || chatWsRef.current.readyState !== WebSocket.OPEN) return;
+    chatWsRef.current.send(JSON.stringify({ type: 'chat', text }));
+    setChatMessages((prev) => [...prev, { sender: 'customer', text, timestamp: new Date().toISOString() }]);
+    setChatText("");
+  };
+
   const featureMessage =
     dashboardSettings?.featuredMessageEn || customization?.tagline ? (
       <Card>
@@ -174,8 +252,7 @@ function DashboardContent() {
       </Card>
     ) : null;
 
-  const cards: CardGridCard[] = useMemo(() => {
-    return [
+  const cards: CardGridCard[] = [
       {
         id: "insights",
         title: "Customer snapshot",
@@ -225,6 +302,45 @@ function DashboardContent() {
           },
         ],
         persistChecklistKey: `customer-insights-${branch?.id ?? "global"}`,
+      },
+      {
+        id: "deliveries",
+        title: "My deliveries",
+        description: "Track delivery requests and active drop-offs.",
+        icon: <Truck className="size-5" aria-hidden="true" />,
+        accent: "accent",
+        actions: (
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setOrderModalOpen(true)}>
+              <PlusCircle className="h-4 w-4 mr-1" /> {t.customerDashboardNewDelivery || 'New Delivery Request'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setChatOpen(true)}>
+              <MessageSquare className="h-4 w-4 mr-1" /> {t.customerDashboardChatCashier || 'Chat with cashier'}
+            </Button>
+          </div>
+        ),
+        accordionSections: [
+          {
+            id: "deliveries-list",
+            title: t.customerDashboardActiveDeliveries || 'Active deliveries',
+            summary: t.customerDashboard?.deliveriesSummary || 'Status and tracking for your deliveries.',
+            defaultOpen: true,
+            content: deliveriesContent,
+          },
+        ],
+        checklist: [
+          {
+            id: "place-delivery",
+            label: "Place a delivery request",
+            description: "Schedule a pickup for your garments.",
+          },
+        ],
+        cta: {
+          label: "New Delivery Request",
+          icon: <PlusCircle className="size-4" aria-hidden="true" />,
+          onClick: () => branch?.code && setLocation(`/customer-ordering?branchCode=${branch.code}&next=ordering`),
+        } as any,
+        persistChecklistKey: `customer-deliveries-${branch?.id ?? 'global'}`,
       },
       {
         id: "packages",
@@ -305,7 +421,6 @@ function DashboardContent() {
         persistChecklistKey: `customer-orders-${branch?.id ?? "global"}`,
       },
     ];
-  }, [adsContent, branch?.id, featureMessage, heroContent, metrics, packages.length]);
 
   return (
     <div className="full-bleed min-h-screen bg-[var(--background)] text-foreground">
@@ -320,11 +435,64 @@ function DashboardContent() {
           </div>
           <LanguageSelector />
         </div>
+        {Array.isArray(shortOrders) && shortOrders.some((o: any) => o.status === 'ready') && (
+          <div className="px-6 pb-4">
+            <div className="rounded-md border border-green-300 bg-green-50 p-3 text-[var(--text-sm)] text-green-800">
+              {t.readyForPickup || 'Ready for pickup'}
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="flex w-full max-w-none flex-col gap-[var(--space-xl)] px-6 py-8">
         <CardGrid cards={cards} columns={{ base: 1, md: 2 }} />
       </main>
+
+      {/* Create Order Modal */}
+      <Dialog open={orderModalOpen} onOpenChange={setOrderModalOpen}>
+        <DialogContent className="max-w-3xl h-[80vh]">
+          <DialogHeader>
+            <DialogTitle>{t.customerDashboardNewDelivery || 'New Delivery Request'}</DialogTitle>
+          </DialogHeader>
+          {branch?.code ? (
+            <iframe
+              title="Create Order"
+              src={`/customer-ordering?branchCode=${encodeURIComponent(branch.code)}&next=ordering`}
+              className="h-full w-full border-0"
+            />
+          ) : (
+            <div className="p-4 text-sm text-muted-foreground">{t.branchContextMissing || 'Missing branch context.'}</div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Live Chat Modal */}
+      <Dialog open={chatOpen} onOpenChange={setChatOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Chat with cashier</DialogTitle>
+          </DialogHeader>
+          <div className="flex h-80 flex-col gap-2">
+            <div className="flex-1 overflow-auto rounded border p-2">
+              {chatMessages.length === 0 ? (
+                <div className="text-sm text-muted-foreground">{t.customerDashboard?.startConversation || 'Start the conversation…'}</div>
+              ) : (
+                <ul className="space-y-1">
+                  {chatMessages.map((m, idx) => (
+                    <li key={idx} className={m.sender === 'customer' ? 'text-right' : 'text-left'}>
+                      <span className="inline-block rounded bg-gray-100 px-2 py-1 text-sm">{m.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Input value={chatText} onChange={(e) => setChatText(e.target.value)} placeholder={t.customerDashboardTypeMessage || 'Type a message…'} onKeyDown={(e) => e.key === 'Enter' ? sendChat() : undefined} />
+              <Button onClick={sendChat}>{t.customerDashboardSend || 'Send'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -10,6 +10,7 @@ interface OrderSummary {
   id: string;
   orderNumber: string;
   createdAt: string;
+  status?: string;
   subtotal: string;
   paid: string;
   remaining: string;
@@ -60,6 +61,14 @@ export function CustomerOrders() {
                 <div className="text-sm text-gray-500">
                   {new Date(o.createdAt).toLocaleString()}
                 </div>
+                {o.status && (
+                  <div className="mt-1 text-xs">
+                    Status: <span className="inline-block rounded bg-gray-100 px-2 py-0.5">{o.status}</span>
+                    {o.status === 'ready' && (
+                      <span className="ml-2 text-green-700">Ready for pickup</span>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-4">
                 <span>{formatCurrency(Number(o.subtotal))}</span>

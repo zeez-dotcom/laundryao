@@ -1,8 +1,10 @@
-import { ShoppingCart, Package, Settings, Users, Truck, TrendingUp } from "lucide-react";
+import { ShoppingCart, Package, Settings, Users, Truck, TrendingUp, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
 import { useAuthContext } from "@/context/AuthContext";
 import { useTranslation } from "@/lib/i18n";
+import { useStaffChat } from "@/context/StaffChatContext";
 
 interface POSSidebarProps {
   activeView: string;
@@ -12,6 +14,8 @@ interface POSSidebarProps {
 export function POSSidebar({ activeView, onViewChange }: POSSidebarProps) {
   const { isDriver, branch } = useAuthContext();
   const { t } = useTranslation();
+  const { unreadCount, reset } = useStaffChat();
+  (window as any).__resetStaffChat = reset;
   const menuItems = [
     { id: "sales", label: t.sales, icon: ShoppingCart },
     { id: "customers", label: t.customers, icon: Users },
@@ -19,6 +23,7 @@ export function POSSidebar({ activeView, onViewChange }: POSSidebarProps) {
     { id: "order-management", label: t.orderManagement, icon: Package },
     { id: "packages", label: t.packages, icon: Package },
     { id: "reports", label: t.reports, icon: TrendingUp },
+    { id: "chat", label: (t as any).supportChat || "Support Chat", icon: MessageSquare },
     ...(branch?.deliveryEnabled
       ? [
           { id: "delivery-orders", label: t.deliveryOrders, icon: Truck },
@@ -54,7 +59,12 @@ export function POSSidebar({ activeView, onViewChange }: POSSidebarProps) {
                   onClick={() => onViewChange(item.id)}
                 >
                   <Icon className="h-5 w-5" />
-                  <span>{item.label}</span>
+                  <span className="flex items-center gap-2">
+                    {item.label}
+                    {item.id === 'chat' && unreadCount > 0 && (
+                      <Badge variant="default">{unreadCount}</Badge>
+                    )}
+                  </span>
                 </Button>
               </li>
             );

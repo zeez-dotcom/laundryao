@@ -26,7 +26,7 @@ import BranchSelector from "@/components/BranchSelector";
 import { useCurrency } from "@/lib/currency";
 import { SystemSettings } from "@/components/system-settings";
 import { ClothingItem, LaundryService, Customer } from "@shared/schema";
-import { ShoppingCart, Package, BarChart3, Settings, Users, Truck, TrendingUp } from "lucide-react";
+import { ShoppingCart, Package, BarChart3, Settings, Users, Truck, TrendingUp, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -35,6 +35,7 @@ import { useTranslationContext } from "@/context/TranslationContext";
 import { buildReceiptData } from "@/lib/receipt";
 import CardGrid, { type CardGridCard } from "@/components/layout/CardGrid";
 import { GlossaryTooltip, useTour } from "@/components/onboarding/TourProvider";
+import { StaffChatProvider, useStaffChat } from "@/context/StaffChatContext";
 
 const OrderManagementDashboard = React.lazy(() =>
   import(/* webpackPrefetch: true */ "@/components/branch/OrderManagementDashboard").then(
@@ -781,6 +782,33 @@ export default function POS() {
             persistChecklistKey: "pos-reports",
           },
         ];
+      case "chat":
+        return [
+          {
+            id: "chat",
+            title: (t as any).posChatCardTitle || 'Customer Support Chat',
+            description: (t as any).posChatCardDescription || 'Chat with customers in your branch in real time.',
+            icon: <MessageSquare className="size-5" aria-hidden="true" />,
+            accordionSections: [
+              {
+                id: "chat-workspace",
+                title: (t as any).posChatWorkspaceTitle || 'Staff chat',
+                summary: (t as any).posChatWorkspaceSummary || 'Respond to customers from this branch.',
+                defaultOpen: true,
+                content: (
+                  <div className="h-[70vh] w-full overflow-hidden rounded border">
+                    <iframe title="Staff Chat" src="/staff/chat" className="h-full w-full border-0" />
+                  </div>
+                ),
+              },
+            ],
+            checklist: [
+              { id: 'chat-greet', label: (t as any).posChatChecklistGreet || 'Send a greeting', description: (t as any).posChatChecklistGreetDesc || 'Welcome the customer and ask how you can help.' },
+              { id: 'chat-verify', label: (t as any).posChatChecklistVerify || 'Verify identity', description: (t as any).posChatChecklistVerifyDesc || 'Confirm order number or phone if needed.' },
+            ],
+            persistChecklistKey: 'pos-chat',
+          },
+        ];
       case "delivery-order-requests":
         return [
           {
@@ -949,6 +977,7 @@ export default function POS() {
   ];
 
   return (
+    <StaffChatProvider suppress={activeView === 'chat'}>
     <div className="full-bleed flex h-screen flex-col bg-[var(--pos-background)]">
       <POSHeader cartItemCount={cartSummary.itemCount} onToggleCart={toggleCart} />
 
@@ -964,7 +993,12 @@ export default function POS() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <POSSidebar activeView={activeView} onViewChange={setActiveView} />
+        <POSSidebar activeView={activeView} onViewChange={(view) => {
+          if (view === 'chat') {
+            try { (window as any).__resetStaffChat?.(); } catch {}
+          }
+          setActiveView(view);
+        }} />
 
         <main className="flex-1 overflow-y-auto bg-[var(--surface-muted)] flex flex-col min-h-0 min-w-0">
           <div className="px-4 py-6 lg:px-8 flex-1 min-h-0 min-w-0">
@@ -1020,5 +1054,6 @@ export default function POS() {
         </DialogContent>
       </Dialog>
     </div>
+    </StaffChatProvider>
   );
 }

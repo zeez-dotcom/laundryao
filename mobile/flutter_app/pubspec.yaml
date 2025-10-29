@@ -1,0 +1,29 @@
+name: laundry_mobile
+description: Flutter client for Laundry app (customer + staff)
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  dio: ^5.7.0
+  dio_cookie_manager: ^2.1.3
+  cookie_jar: ^4.0.8
+  flutter_riverpod: ^2.5.1
+  web_socket_channel: ^2.4.5
+  go_router: ^14.2.7
+  intl: ^0.19.0
+  shared_preferences: ^2.3.2
+  mobile_scanner: ^6.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
